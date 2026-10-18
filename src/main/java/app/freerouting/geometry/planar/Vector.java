@@ -132,7 +132,7 @@ public abstract class Vector implements Serializable {
 
   /** Returns an approximation of the signed angle between this vector and other. */
   public double angleApprox(Vector other) {
-    double result = Math.acos(cosAngle(other));
+    double result = StrictMath.acos(cosAngle(other));
     if (this.sideOf(other) == Side.ON_THE_LEFT) {
       result = -result;
     }

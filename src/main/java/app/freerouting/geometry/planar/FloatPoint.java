@@ -272,8 +272,8 @@ public class FloatPoint implements Serializable {
 
     double dx = x - pole.x;
     double dy = y - pole.y;
-    double sinAngle = Math.sin(angle);
-    double cosAngle = Math.cos(angle);
+    double sinAngle = StrictMath.sin(angle);
+    double cosAngle = StrictMath.cos(angle);
     double newDx = dx * cosAngle - dy * sinAngle;
     double newDy = dx * sinAngle + dy * cosAngle;
     return new FloatPoint(pole.x + newDx, pole.y + newDy);

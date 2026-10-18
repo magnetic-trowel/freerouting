@@ -292,7 +292,7 @@ public class Pin extends DrillItem implements Serializable {
               .placementTransform(board.components.getFlipStyleRotateFirst())
               .direction(localDirection);
       Direction currentExitDirection =
-          Direction.getInstanceApprox(Math.atan2(worldDirection.y, worldDirection.x));
+          Direction.getInstanceApprox(StrictMath.atan2(worldDirection.y, worldDirection.x));
       // calculate the minimum line length from the pin center into currentExitDirection
       int intersectingBorderLineNo =
           padShape.intersectingBorderLineNo(pinCenter, currentExitDirection);

@@ -93,7 +93,8 @@ public final class RoutingSupervisor {
       for (String kind : applicable) {
         Stats stats = this.attemptStats.get(kind);
         double score =
-            (stats.closed + 0.5) / stats.tries + Math.sqrt(2 * Math.log(totalTries) / stats.tries);
+            (stats.closed + 0.5) / stats.tries
+                + Math.sqrt(2 * StrictMath.log(totalTries) / stats.tries);
         if (score > bestScore) {
           bestScore = score;
           choice = kind;

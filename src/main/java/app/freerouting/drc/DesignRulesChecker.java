@@ -1350,7 +1350,7 @@ public class DesignRulesChecker {
         double p2Ymm = p2.toFloat().y / 10000.0;
         double dx = p1Xmm - p2Xmm;
         double dy = p1Ymm - p2Ymm;
-        if (Math.hypot(dx, dy) <= clusterRadiusMm) {
+        if (StrictMath.hypot(dx, dy) <= clusterRadiusMm) {
           visited[j] = true;
           clusterCount++;
           sumX += p2Xmm;

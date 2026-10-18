@@ -174,8 +174,8 @@ public class Circle implements ConvexShape, Serializable {
         borderDelta = new IntVector(this.radius, 0);
       } else {
         double currentAngle = i * Math.PI / (2.0 * divisions);
-        int currentX = (int) Math.ceil(Math.cos(currentAngle) * this.radius);
-        int currentY = (int) Math.ceil(Math.sin(currentAngle) * this.radius);
+        int currentX = (int) Math.ceil(StrictMath.cos(currentAngle) * this.radius);
+        int currentY = (int) Math.ceil(StrictMath.sin(currentAngle) * this.radius);
         borderDelta = new IntVector(currentX, currentY);
       }
       Point currentA = this.center.translateBy(borderDelta);

@@ -53,8 +53,8 @@ public abstract class Direction implements Comparable<Direction>, Serializable {
   /** Creates a Direction whose angle with the x-axis is nearly equal to angle. */
   public static Direction getInstanceApprox(double angle) {
     final double scaleFactor = 10000;
-    int x = (int) Math.round(Math.cos(angle) * scaleFactor);
-    int y = (int) Math.round(Math.sin(angle) * scaleFactor);
+    int x = (int) Math.round(StrictMath.cos(angle) * scaleFactor);
+    int y = (int) Math.round(StrictMath.sin(angle) * scaleFactor);
     return getInstance(new IntVector(x, y));
   }
 

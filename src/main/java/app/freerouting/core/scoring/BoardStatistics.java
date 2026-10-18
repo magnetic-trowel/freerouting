@@ -252,7 +252,8 @@ public class BoardStatistics implements Serializable {
         for (Line line : polyline.lines) {
           FloatPoint a = line.a.toFloat();
           FloatPoint b = line.b.toFloat();
-          float length = (float) Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+          float length =
+              (float) Math.sqrt(StrictMath.pow(a.x - b.x, 2) + StrictMath.pow(a.y - b.y, 2));
 
           if (a.x == b.x) {
             this.traces.totalVerticalLength += length;
@@ -330,7 +331,8 @@ public class BoardStatistics implements Serializable {
             double dy2 = next.y - current.y;
 
             // Calculate the angle between the two segments
-            double angle = Math.abs(Math.toDegrees(Math.atan2(dy2, dx2) - Math.atan2(dy1, dx1)));
+            double angle =
+                Math.abs(Math.toDegrees(StrictMath.atan2(dy2, dx2) - StrictMath.atan2(dy1, dx1)));
             // Normalize the angle to [0, 180]
             angle = Math.min(angle, 360 - angle);
             angle = angle > 180 ? 360 - angle : angle;

@@ -310,7 +310,8 @@ public final class KiCadJsonReader {
           corners.sort(
               (p1, p2) ->
                   Double.compare(
-                      Math.atan2(p1.y - cy, p1.x - cx), Math.atan2(p2.y - cy, p2.x - cx)));
+                      StrictMath.atan2(p1.y - cy, p1.x - cx),
+                      StrictMath.atan2(p2.y - cy, p2.x - cx)));
         }
         Point[] points = new Point[corners.size()];
         for (int i = 0; i < corners.size(); i++) {
