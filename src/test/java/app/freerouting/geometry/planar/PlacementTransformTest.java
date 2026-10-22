@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class PlacementTransformTest {
@@ -71,5 +73,32 @@ class PlacementTransformTest {
     }
     assertEquals(0.5, point.x);
     assertEquals(-0.5, point.y);
+  }
+
+  @Test
+  void roundedCornersThatTurnBackStillGiveTheBoundedHull() {
+    // A circular courtyard of 72 vertices. Rounding the placed corners of its octagon-clipped
+    // version can leave one-unit steps that turn against the outline, here at the two left
+    // diagonals. Such a corner sequence is not convex; built directly into a tile it became an
+    // unbounded or clipped shape, which overflowed the board bounding box during fanout.
+    int radius = 50000;
+    List<Point> corners = new ArrayList<>();
+    for (int i = 0; i < 72; i++) {
+      double angle = Math.toRadians(5 * i + 2.5);
+      IntPoint corner =
+          (IntPoint) new FloatPoint(radius * Math.cos(angle), radius * Math.sin(angle)).round();
+      corners.add(corner);
+      if (i == 27 || i == 45) {
+        corners.add(new IntPoint(corner.x, corner.y - 1));
+      }
+    }
+    Shape tile = PlacementTransform.tileFromRoundedCorners(corners.toArray(new Point[0]));
+    assertTrue(tile.isBounded());
+    IntBox box = tile.boundingBox();
+    assertTrue(box.ll.x <= -radius + 200 && box.ur.x >= radius - 200, box.toString());
+    assertTrue(box.ll.y <= -radius + 200 && box.ur.y >= radius - 200, box.toString());
+    for (Point corner : corners) {
+      assertTrue(tile.contains(corner), corner.toString());
+    }
   }
 }

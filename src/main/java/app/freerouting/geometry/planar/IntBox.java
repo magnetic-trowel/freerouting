@@ -442,17 +442,24 @@ public final class IntBox extends RegularTileShape implements Serializable {
 
   /**
    * Returns the box offsetted by dist. If dist {@literal >} 0, the offset is to the outside, else
-   * to the inside.
+   * to the inside. Coordinates saturate at the int range instead of overflowing.
    */
   @Override
   public IntBox offset(double dist) {
     if (dist == 0 || isEmpty()) {
       return this;
     }
-    int roundedDistance = (int) Math.round(dist);
-    IntPoint lowerLeft = new IntPoint(ll.x - roundedDistance, ll.y - roundedDistance);
-    IntPoint upperRight = new IntPoint(ur.x + roundedDistance, ur.y + roundedDistance);
+    long roundedDistance = Math.round(dist);
+    IntPoint lowerLeft =
+        new IntPoint(saturatedSum(ll.x, -roundedDistance), saturatedSum(ll.y, -roundedDistance));
+    IntPoint upperRight =
+        new IntPoint(saturatedSum(ur.x, roundedDistance), saturatedSum(ur.y, roundedDistance));
     return new IntBox(lowerLeft, upperRight);
+  }
+
+  private static int saturatedSum(int coordinate, long delta) {
+    long sum = coordinate + delta;
+    return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, sum));
   }
 
   /**
