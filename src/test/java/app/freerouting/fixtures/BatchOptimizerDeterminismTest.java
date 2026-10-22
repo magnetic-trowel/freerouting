@@ -12,6 +12,8 @@ import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.management.HeadlessBoardManager;
 import app.freerouting.settings.sources.TestingSettings;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** Verifies cross-thread determinism and baseline board preservation for BatchOptimizer. */
 class BatchOptimizerDeterminismTest extends RoutingFixtureTest {
@@ -78,8 +80,9 @@ class BatchOptimizerDeterminismTest extends RoutingFixtureTest {
     assertEquals(stats1.clearanceViolations.totalCount, stats2.clearanceViolations.totalCount);
   }
 
-  @Test
-  void multiCommitPassesProduceIdenticalResultsAcrossThreadCounts() {
+  @ParameterizedTest
+  @ValueSource(strings = {"all", "best_prefix", "score_gated", "score_ranked"})
+  void multiCommitPassesProduceIdenticalResultsAcrossThreadCounts(String commitSelection) {
     RoutingJob setupJob = getRoutingJob("Issue508-DAC2020_bm01.dsn", createBaseTestingSettings());
     loadBoard(setupJob);
     setupJob.routerSettings.setMaxThreads(1);
@@ -87,8 +90,8 @@ class BatchOptimizerDeterminismTest extends RoutingFixtureTest {
     setupJob.board.finishAutoroute();
     RoutingBoard preOptimizedBoard = setupJob.board.deepCopy();
 
-    RoutingJob job1 = optimizeWithAllCommits(preOptimizedBoard, 1);
-    RoutingJob job2 = optimizeWithAllCommits(preOptimizedBoard, 4);
+    RoutingJob job1 = optimizeWithAllCommits(preOptimizedBoard, 1, commitSelection);
+    RoutingJob job2 = optimizeWithAllCommits(preOptimizedBoard, 4, commitSelection);
 
     BoardStatistics stats1 = job1.board.getStatistics();
     BoardStatistics stats2 = job2.board.getStatistics();
@@ -98,7 +101,8 @@ class BatchOptimizerDeterminismTest extends RoutingFixtureTest {
     assertEquals(stats1.clearanceViolations.totalCount, stats2.clearanceViolations.totalCount);
   }
 
-  private RoutingJob optimizeWithAllCommits(RoutingBoard preOptimizedBoard, int threads) {
+  private RoutingJob optimizeWithAllCommits(
+      RoutingBoard preOptimizedBoard, int threads, String commitSelection) {
     RoutingJob job = getRoutingJob("Issue508-DAC2020_bm01.dsn", createBaseTestingSettings());
     loadBoard(job);
     job.board = preOptimizedBoard.deepCopy();
@@ -106,6 +110,7 @@ class BatchOptimizerDeterminismTest extends RoutingFixtureTest {
     job.routerSettings.optimizer.maxPasses = 1;
     job.routerSettings.optimizer.maxItems = 30;
     job.routerSettings.optimizer.maxCommitsPerPass = 0;
+    job.routerSettings.optimizer.commitSelection = commitSelection;
     BatchOptimizer.create(job).runBatchLoop();
     return job;
   }

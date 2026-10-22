@@ -5,8 +5,11 @@ import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.structure.Unit;
+import app.freerouting.core.library.Padstack;
+import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.rules.Net;
+import app.freerouting.rules.NetClass;
 import app.freerouting.rules.ViaInfo;
 import app.freerouting.rules.ViaRule;
 import java.util.ArrayList;
@@ -65,7 +68,35 @@ final class BoardStatisticsBoundsCalculator {
     result.minTraceLengthMm = (float) minTraceLength;
     result.minViaCount = minViaCount;
     result.minBendCount = minBendCount;
+    calculateExchangeRates(board, result, boardUnitToMmFactor);
     return result;
+  }
+
+  /**
+   * Sets the trace length that one via and one bend are worth. A via takes its pad plus clearance
+   * out of every layer it spans; a trace takes one trace width plus clearance per unit of length on
+   * one layer. Uses the board's first via and the default net class.
+   */
+  private static void calculateExchangeRates(
+      BasicBoard board, BoardStatisticsBounds result, double boardUnitToMmFactor) {
+    NetClass netClass = board.rules.getDefaultNetClass();
+    int clearanceClass = netClass.getTraceClearanceClass();
+    double clearance =
+        board.rules.clearanceMatrix.getValue(clearanceClass, clearanceClass, 0, false);
+    double pitch = Math.max(1.0, 2.0 * netClass.getTraceHalfWidth(0) + clearance);
+    double viaArea = 0.0;
+    if (board.rules.viaInfos.count() > 0) {
+      Padstack padstack = board.rules.viaInfos.get(0).getPadstack();
+      for (int layer = padstack.fromLayer(); layer <= padstack.toLayer(); layer++) {
+        ConvexShape shape = padstack.getShape(layer);
+        if (shape != null) {
+          double side = shape.maxWidth() + clearance;
+          viaArea += side * side;
+        }
+      }
+    }
+    result.viaEquivalentLengthMm = (float) (viaArea / pitch * boardUnitToMmFactor);
+    result.bendEquivalentLengthMm = (float) (pitch * boardUnitToMmFactor);
   }
 
   private static List<Terminal> getTerminals(BasicBoard board, Net net) {

@@ -13,7 +13,7 @@ class ScoringVersionSettingsTest {
     RouterSettings settings = new DefaultSettings().getSettings();
 
     assertEquals(RouterScoringVersion.V2_CONTINUOUS, settings.routerScoring.version);
-    assertEquals(OptimizerScoringVersion.V2_LOWER_BOUND, settings.optimizerScoring.version);
+    assertEquals(OptimizerScoringVersion.V3_EQUIVALENT_LENGTH, settings.optimizerScoring.version);
   }
 
   @Test

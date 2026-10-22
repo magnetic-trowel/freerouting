@@ -122,7 +122,7 @@ public class DefaultSettings implements SettingsSource {
 
   /** Current default optimizer score formula. */
   public static final OptimizerScoringVersion DEFAULT_OPTIMIZER_SCORING_VERSION =
-      OptimizerScoringVersion.V2_LOWER_BOUND;
+      OptimizerScoringVersion.V3_EQUIVALENT_LENGTH;
 
   public static final float DEFAULT_ROUTER_UNROUTED_CONNECTION_WEIGHT = 1000.0F;
 
@@ -245,6 +245,7 @@ public class DefaultSettings implements SettingsSource {
     settings.optimizer.maxConsecutiveFailures = 50;
     settings.optimizer.maxConsecutiveFailuresPass1 = 12;
     settings.optimizer.maxCommitsPerPass = 0;
+    settings.optimizer.commitSelection = "score_ranked";
 
     // Scalar trace-cost defaults (layer-specific arrays are omitted for the same reason as
     // the layer arrays above – their sizes depend on the board).

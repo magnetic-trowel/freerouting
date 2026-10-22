@@ -9,6 +9,8 @@ import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
+import app.freerouting.board.model.structure.Unit;
+import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.core.ProgressThrottler;
 import app.freerouting.core.RouterCounters;
 import app.freerouting.core.RoutingJob;
@@ -18,6 +20,7 @@ import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.UndoableObjects;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.sources.DefaultSettings;
 import com.sun.management.ThreadMXBean;
 import java.lang.management.ManagementFactory;
@@ -340,6 +343,19 @@ public final class BatchOptimizer extends NamedAlgorithm {
             initialIncomplete,
             initialViolations));
 
+    if (initialStats.bounds != null && initialStats.bounds.viaEquivalentLengthMm != null) {
+      job.logInfo(
+          String.format(
+              Locale.US,
+              "Optimizer score bounds: minimum trace length %.2f mm, minimum vias %d, minimum bends"
+                  + " %d; one via is worth %.3f mm and one bend %.3f mm of trace.",
+              initialStats.bounds.minTraceLengthMm,
+              initialStats.bounds.minViaCount,
+              initialStats.bounds.minBendCount,
+              initialStats.bounds.viaEquivalentLengthMm,
+              initialStats.bounds.bendEquivalentLengthMm));
+    }
+
     // Capture start-of-session resource usage baselines
     long sessionStartMs = System.currentTimeMillis();
     final float cpuSecondsStart = sampleCurrentThreadCpuSeconds();
@@ -488,7 +504,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
               passStats.clearanceViolations.totalCount));
 
       if (this.useIncreasedRipupCosts
-          && passImprovementPercent < this.settings.optimizer.optimizationImprovementThreshold) {
+          && passImprovementPercent <= this.settings.optimizer.optimizationImprovementThreshold) {
         this.useIncreasedRipupCosts = false;
         // Increased ripup costs stopped paying off. Keep the optimizer going to try with normal
         // ripup costs before the threshold may stop it.
@@ -701,6 +717,20 @@ public final class BatchOptimizer extends NamedAlgorithm {
     this.fireBoardUpdatedEvent(boardStatisticsBefore, routerCounters, this.board);
 
     this.minCumulativeTraceLength = boardStatisticsBefore.traces.totalWeightedLength;
+    CommitSelection selection =
+        CommitSelection.of(
+            this.settings.optimizer != null ? this.settings.optimizer.commitSelection : null);
+    ScoreTracker scoreTracker =
+        selection == CommitSelection.ALL
+            ? null
+            : ScoreTracker.of(boardStatisticsBefore, this.board, job.routerSettings);
+    if (scoreTracker == null && selection != CommitSelection.ALL) {
+      job.logWarning(
+          "Optimizer commit selection '"
+              + selection
+              + "' needs the V2 optimizer score; using 'all' instead.");
+      selection = CommitSelection.ALL;
+    }
     List<Integer> candidateItemIds = prepareCandidateItems();
 
     if (this.settings.optimizer != null
@@ -756,7 +786,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
             });
 
     CandidateResult winningCandidate = null;
-    List<ItemRouteResult> improvedResults = new ArrayList<>();
+    List<RankedCandidate> improvedResults = new ArrayList<>();
     BoardImage baselineImage = this.board.image();
     BoardStatistics.OptimizerMetrics baselineMetrics =
         BoardStatistics.OptimizerMetrics.of(this.board);
@@ -803,7 +833,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
                       this.useIncreasedRipupCosts,
                       this.thread,
                       this.deadlineMs,
-                      baselineMetrics)));
+                      baselineMetrics,
+                      selection != CommitSelection.ALL,
+                      selection == CommitSelection.SCORE_RANKED ? scoreTracker : null)));
         }
 
         for (Future<CandidateResult> future : futures) {
@@ -821,8 +853,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
 
               if (res.result.improved()) {
                 consecutiveFailures = 0;
-                improvedResults.add(res.result);
-                if (winningCandidate == null || res.result.improvedOver(winningCandidate.result)) {
+                improvedResults.add(new RankedCandidate(res.result, res.scoreGain));
+                if (winningCandidate == null || res.ranksBefore(winningCandidate, selection)) {
                   winningCandidate = res;
                 }
               } else {
@@ -862,15 +894,32 @@ public final class BatchOptimizer extends NamedAlgorithm {
     if (!stoppedOrTimedOut && winningCandidate != null && winningCandidate.result.improved()) {
       this.board = winningCandidate.board;
       this.job.board = this.board;
+      ScoreTracker liveScore = scoreTracker == null ? null : scoreTracker.copy();
+      if (liveScore != null) {
+        liveScore.apply(winningCandidate.changes);
+      }
       int runnersUp =
-          commitRunnersUp(improvedResults, winningCandidate.result, withPreferredDirections);
+          commitRunnersUp(
+              improvedResults,
+              winningCandidate.result,
+              withPreferredDirections,
+              selection,
+              liveScore);
       job.logInfo(
           String.format(
               Locale.US,
-              "Optimizer pass #%d committed %d of %d improved candidates.",
+              "Optimizer pass #%d committed %d of %d improved candidates (selection %s%s).",
               passNo,
               runnersUp + 1,
-              improvedResults.size()));
+              improvedResults.size(),
+              selection.settingValue(),
+              liveScore == null
+                  ? ""
+                  : String.format(
+                      Locale.US,
+                      ", optimizer score %.2f -> %.2f",
+                      scoreTracker.score(),
+                      liveScore.score())));
       this.minCumulativeTraceLength = this.board.getStatistics().traces.totalWeightedLength;
 
       BoardStatistics boardStatisticsAfter = this.board.getStatistics();
@@ -899,27 +948,58 @@ public final class BatchOptimizer extends NamedAlgorithm {
    * Commits the pass's other improved candidates after its best one, up to {@code
    * optimizer.max_commits_per_pass} in total (a value below 1 means no limit). All candidates were
    * evaluated against the same board, so each one is routed again on the board that the earlier
-   * commits produced and is kept only if it still improves that board. Candidates are committed
-   * best first, so a smaller improvement never takes the space a larger one needs. Returns the
-   * number of candidates committed in addition to the best one.
+   * commits produced and is kept only if it still improves that board in the sense of the commit
+   * selection. Candidates are committed best first, so a smaller improvement never takes the space
+   * a larger one needs. Returns the number of candidates committed in addition to the best one.
    */
   private int commitRunnersUp(
-      List<ItemRouteResult> improvedResults,
+      List<RankedCandidate> improvedResults,
       ItemRouteResult best,
-      boolean withPreferredDirections) {
+      boolean withPreferredDirections,
+      CommitSelection selection,
+      ScoreTracker liveScore) {
     Integer configured =
         this.settings.optimizer != null ? this.settings.optimizer.maxCommitsPerPass : null;
     int maxCommits = configured == null ? 1 : (configured < 1 ? Integer.MAX_VALUE : configured);
-    improvedResults.sort(null);
+    if (selection == CommitSelection.SCORE_RANKED) {
+      improvedResults.sort(RankedCandidate.BY_SCORE_GAIN);
+    } else {
+      improvedResults.sort((a, b) -> a.result().compareTo(b.result()));
+    }
+    List<Float> prefixScores = new ArrayList<>();
+    if (liveScore != null) {
+      prefixScores.add(liveScore.score());
+    }
     int committed = 0;
-    for (ItemRouteResult candidate : improvedResults) {
+    for (RankedCandidate candidate : improvedResults) {
       if (committed + 1 >= maxCommits
           || (this.thread != null && this.thread.isStopRequested())
           || (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs)) {
         break;
       }
-      if (candidate != best && recommit(candidate.itemId(), withPreferredDirections)) {
+      if (candidate.result() != best
+          && recommit(candidate.result().itemId(), withPreferredDirections, selection, liveScore)) {
         committed++;
+        if (liveScore != null) {
+          prefixScores.add(liveScore.score());
+        }
+      }
+    }
+    if (selection == CommitSelection.BEST_PREFIX && committed > 0) {
+      int bestPrefix = 0;
+      for (int i = 1; i < prefixScores.size(); i++) {
+        if (prefixScores.get(i) > prefixScores.get(bestPrefix)) {
+          bestPrefix = i;
+        }
+      }
+      while (committed > bestPrefix) {
+        ChangeSet last = this.passCommits.get(this.passCommits.size() - 1);
+        if (!last.revert(this.board)) {
+          break;
+        }
+        this.passCommits.remove(this.passCommits.size() - 1);
+        liveScore.unapply(last);
+        committed--;
       }
     }
     return committed;
@@ -927,10 +1007,14 @@ public final class BatchOptimizer extends NamedAlgorithm {
 
   /**
    * Routes the connections of the item again on the live board. Keeps the result, and records its
-   * changes for {@link #passCommits}, if it improves the board; undoes it otherwise. Returns false
-   * if an earlier commit removed the item.
+   * changes for {@link #passCommits}, if it improves the board in the sense of the commit
+   * selection; undoes it otherwise. Returns false if an earlier commit removed the item.
    */
-  private boolean recommit(int itemId, boolean withPreferredDirections) {
+  private boolean recommit(
+      int itemId,
+      boolean withPreferredDirections,
+      CommitSelection selection,
+      ScoreTracker liveScore) {
     Item item = this.board.getItem(itemId);
     if (item == null) {
       return false;
@@ -946,14 +1030,146 @@ public final class BatchOptimizer extends NamedAlgorithm {
             this.useIncreasedRipupCosts,
             this.thread,
             this.deadlineMs);
-    if (result.improved()) {
-      this.passCommits.add(ChangeSet.since(this.board));
+    ChangeSet changes = null;
+    boolean keep;
+    if (selection == CommitSelection.SCORE_RANKED) {
+      changes = ChangeSet.since(this.board);
+      keep =
+          isRunning(this.thread, this.deadlineMs)
+              && result.incompleteCount() <= result.incompleteCountBefore()
+              && liveScore.scoreWith(changes) > liveScore.score();
+    } else {
+      keep = result.improved();
+      if (keep) {
+        changes = ChangeSet.since(this.board);
+        keep =
+            selection != CommitSelection.SCORE_GATED
+                || liveScore.scoreWith(changes) > liveScore.score();
+      }
+    }
+    if (keep) {
+      this.passCommits.add(changes);
+      if (liveScore != null) {
+        liveScore.apply(changes);
+      }
       this.board.popSnapshot();
     } else {
       this.board.undo(null);
     }
     this.board.clearTransientAutorouteState();
-    return result.improved();
+    return keep;
+  }
+
+  private static boolean isRunning(StoppableThread thread, Long deadlineMs) {
+    return (thread == null || !thread.isStopRequested())
+        && (deadlineMs == null || System.currentTimeMillis() < deadlineMs);
+  }
+
+  /** How a pass chooses the improvements it commits; see {@code optimizer.commit_selection}. */
+  enum CommitSelection {
+    ALL,
+    BEST_PREFIX,
+    SCORE_GATED,
+    SCORE_RANKED;
+
+    static CommitSelection of(String value) {
+      if (value != null) {
+        for (CommitSelection selection : values()) {
+          if (selection.settingValue().equalsIgnoreCase(value.trim())) {
+            return selection;
+          }
+        }
+      }
+      return ALL;
+    }
+
+    String settingValue() {
+      return name().toLowerCase(Locale.ROOT);
+    }
+  }
+
+  /** An improved candidate of a pass and the optimizer score it gained on the pass's board. */
+  private record RankedCandidate(ItemRouteResult result, double scoreGain) {
+    static final java.util.Comparator<RankedCandidate> BY_SCORE_GAIN =
+        (a, b) -> {
+          int byGain = Double.compare(b.scoreGain, a.scoreGain);
+          return byGain != 0 ? byGain : Integer.compare(a.result.itemId(), b.result.itemId());
+        };
+  }
+
+  /**
+   * The V2 optimizer score of a board, kept up to date from the trace length, via and bend changes
+   * of the commits made on it, so that a commit can be judged without new board statistics.
+   */
+  static final class ScoreTracker {
+    private final BoardStatistics statistics;
+    private final RouterSettings routerSettings;
+    private final double boardUnitToMm;
+    private double traceLengthMm;
+    private int viaCount;
+    private int bendCount;
+
+    private ScoreTracker(
+        BoardStatistics statistics,
+        RouterSettings routerSettings,
+        double boardUnitToMm,
+        double traceLengthMm,
+        int viaCount,
+        int bendCount) {
+      this.statistics = statistics;
+      this.routerSettings = routerSettings;
+      this.boardUnitToMm = boardUnitToMm;
+      this.traceLengthMm = traceLengthMm;
+      this.viaCount = viaCount;
+      this.bendCount = bendCount;
+    }
+
+    /** Returns a tracker for the board the statistics were taken of, or null without V2 scoring. */
+    static ScoreTracker of(
+        BoardStatistics statistics, RoutingBoard board, RouterSettings routerSettings) {
+      if (statistics.getOptimizerScore(routerSettings, 0, 0, 0) == null) {
+        return null;
+      }
+      double boardUnitToMm =
+          Unit.scale(1.0, board.communication.unit, Unit.MM)
+              / (board.communication.resolution > 0 ? board.communication.resolution : 1);
+      return new ScoreTracker(
+          statistics,
+          routerSettings,
+          boardUnitToMm,
+          statistics.traces.totalLengthMm != null ? statistics.traces.totalLengthMm : 0.0,
+          statistics.vias.totalCount != null ? statistics.vias.totalCount : 0,
+          statistics.bends.totalCount != null ? statistics.bends.totalCount : 0);
+    }
+
+    ScoreTracker copy() {
+      return new ScoreTracker(
+          statistics, routerSettings, boardUnitToMm, traceLengthMm, viaCount, bendCount);
+    }
+
+    float score() {
+      return statistics.getOptimizerScore(routerSettings, traceLengthMm, viaCount, bendCount);
+    }
+
+    float scoreWith(ChangeSet changes) {
+      return statistics.getOptimizerScore(
+          routerSettings,
+          traceLengthMm + changes.lengthDelta * boardUnitToMm,
+          viaCount + changes.viaDelta,
+          bendCount + changes.bendDelta);
+    }
+
+    void apply(ChangeSet changes) {
+      traceLengthMm += changes.lengthDelta * boardUnitToMm;
+      viaCount += changes.viaDelta;
+      bendCount += changes.bendDelta;
+    }
+
+    void unapply(ChangeSet changes) {
+      traceLengthMm -= changes.lengthDelta * boardUnitToMm;
+      viaCount -= changes.viaDelta;
+      bendCount -= changes.bendDelta;
+    }
   }
 
   /**
@@ -1112,6 +1328,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
   private static final class CandidateResult {
     final ItemRouteResult result;
     final RoutingBoard board;
+    final ChangeSet changes;
+    final double scoreGain;
     final FloatPoint itemPosition;
     final long cpuUsedNanos;
     final long allocUsedBytes;
@@ -1119,14 +1337,29 @@ public final class BatchOptimizer extends NamedAlgorithm {
     CandidateResult(
         ItemRouteResult result,
         RoutingBoard board,
+        ChangeSet changes,
+        double scoreGain,
         FloatPoint itemPosition,
         long cpuUsedNanos,
         long allocUsedBytes) {
       this.result = result;
       this.board = board;
+      this.changes = changes;
+      this.scoreGain = scoreGain;
       this.itemPosition = itemPosition;
       this.cpuUsedNanos = cpuUsedNanos;
       this.allocUsedBytes = allocUsedBytes;
+    }
+
+    /** True if this candidate is a better pick than the other under the commit selection. */
+    boolean ranksBefore(CandidateResult other, CommitSelection selection) {
+      if (selection == CommitSelection.SCORE_RANKED) {
+        return RankedCandidate.BY_SCORE_GAIN.compare(
+                new RankedCandidate(result, scoreGain),
+                new RankedCandidate(other.result, other.scoreGain))
+            < 0;
+      }
+      return result.improvedOver(other.result);
     }
   }
 
@@ -1144,6 +1377,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
     private final StoppableThread thread;
     private final Long deadlineMs;
     private final BoardStatistics.OptimizerMetrics baselineMetrics;
+    private final boolean recordChanges;
+    private final ScoreTracker scoreRanking;
 
     OptimizeCandidateTask(
         RoutingJob job,
@@ -1154,7 +1389,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
         boolean useIncreasedRipupCosts,
         StoppableThread thread,
         Long deadlineMs,
-        BoardStatistics.OptimizerMetrics baselineMetrics) {
+        BoardStatistics.OptimizerMetrics baselineMetrics,
+        boolean recordChanges,
+        ScoreTracker scoreRanking) {
       this.job = job;
       this.image = image;
       this.itemId = itemId;
@@ -1164,13 +1401,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.thread = thread;
       this.deadlineMs = deadlineMs;
       this.baselineMetrics = baselineMetrics;
+      this.recordChanges = recordChanges;
+      this.scoreRanking = scoreRanking;
     }
 
     @Override
     public CandidateResult call() {
       if ((thread != null && thread.isStopRequested())
           || (deadlineMs != null && System.currentTimeMillis() >= deadlineMs)) {
-        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, 0);
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0);
       }
 
       long cpuStart = -1;
@@ -1186,7 +1425,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       RoutingBoard workerBoard = image == null ? null : image.copy();
       Item item = workerBoard == null ? null : workerBoard.getItem(itemId);
       if (item == null) {
-        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, 0);
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0);
       }
       workerBoard.generateSnapshot();
 
@@ -1228,14 +1467,28 @@ public final class BatchOptimizer extends NamedAlgorithm {
         }
       }
 
+      ChangeSet changes = null;
+      double scoreGain = 0;
+      if (scoreRanking != null) {
+        changes = ChangeSet.since(workerBoard);
+        scoreGain = scoreRanking.scoreWith(changes) - scoreRanking.score();
+        result.updateImproved(
+            isRunning(thread, deadlineMs)
+                && result.incompleteCount() <= result.incompleteCountBefore()
+                && scoreGain > 0);
+      }
       if (!result.improved()) {
-        return new CandidateResult(result, null, position, cpuUsed, allocUsed);
+        return new CandidateResult(result, null, null, 0, position, cpuUsed, allocUsed);
+      }
+      if (changes == null && recordChanges) {
+        changes = ChangeSet.since(workerBoard);
       }
       if (!workerBoard.popSnapshot()) {
         FRLogger.warn("BatchOptimizer: failed to remove the candidate-board snapshot");
       }
       workerBoard.clearTransientAutorouteState();
-      return new CandidateResult(result, workerBoard, position, cpuUsed, allocUsed);
+      return new CandidateResult(
+          result, workerBoard, changes, scoreGain, position, cpuUsed, allocUsed);
     }
   }
 
@@ -1248,10 +1501,25 @@ public final class BatchOptimizer extends NamedAlgorithm {
     private final List<Item> removed;
     private final boolean tracesAndViasOnly;
 
-    private ChangeSet(List<Integer> insertedIds, List<Item> removed, boolean tracesAndViasOnly) {
+    /** Change of the total trace length in board units. */
+    final double lengthDelta;
+
+    final int viaDelta;
+    final int bendDelta;
+
+    private ChangeSet(
+        List<Integer> insertedIds,
+        List<Item> removed,
+        boolean tracesAndViasOnly,
+        double lengthDelta,
+        int viaDelta,
+        int bendDelta) {
       this.insertedIds = insertedIds;
       this.removed = removed;
       this.tracesAndViasOnly = tracesAndViasOnly;
+      this.lengthDelta = lengthDelta;
+      this.viaDelta = viaDelta;
+      this.bendDelta = bendDelta;
     }
 
     /** Returns the changes since the board's last snapshot. */
@@ -1262,10 +1530,16 @@ public final class BatchOptimizer extends NamedAlgorithm {
       List<Integer> insertedIds = new ArrayList<>(after.size());
       List<Item> removed = new ArrayList<>(before.size());
       boolean tracesAndViasOnly = true;
+      double lengthDelta = 0;
+      int viaDelta = 0;
+      int bendDelta = 0;
       for (UndoableObjects.Storable storable : after) {
         Item item = (Item) storable;
         insertedIds.add(item.getId());
         tracesAndViasOnly &= item instanceof Trace || item instanceof Via;
+        lengthDelta += traceLength(item);
+        viaDelta += item instanceof Via ? 1 : 0;
+        bendDelta += bendCount(item);
       }
       for (UndoableObjects.Storable storable : before) {
         Item item = (Item) storable;
@@ -1273,8 +1547,25 @@ public final class BatchOptimizer extends NamedAlgorithm {
         detached.board = null;
         removed.add(detached);
         tracesAndViasOnly &= item instanceof Trace || item instanceof Via;
+        lengthDelta -= traceLength(item);
+        viaDelta -= item instanceof Via ? 1 : 0;
+        bendDelta -= bendCount(item);
       }
-      return new ChangeSet(insertedIds, removed, tracesAndViasOnly);
+      return new ChangeSet(
+          insertedIds, removed, tracesAndViasOnly, lengthDelta, viaDelta, bendDelta);
+    }
+
+    private static double traceLength(Item item) {
+      return item instanceof Trace trace ? trace.getLength() : 0;
+    }
+
+    /** Counts bends as {@link BoardStatistics} does: the inner corners of a polyline trace. */
+    private static int bendCount(Item item) {
+      if (item instanceof PolylineTrace trace) {
+        int cornerCount = trace.polyline().cornerCount();
+        return cornerCount >= 3 ? cornerCount - 2 : 0;
+      }
+      return 0;
     }
 
     /**

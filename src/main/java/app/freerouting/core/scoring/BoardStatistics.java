@@ -810,17 +810,72 @@ public class BoardStatistics implements Serializable {
 
   /** Returns the configured optimizer score normalized to a range from zero to one thousand. */
   public float getOptimizerScore(RouterSettings routerSettings) {
-    if (routerSettings != null
-        && routerSettings.optimizerScoring != null
-        && routerSettings.optimizerScoring.version
-            == app.freerouting.settings.OptimizerScoringVersion.V2_LOWER_BOUND) {
-      return getV2OptimizerScore(routerSettings.optimizerScoring);
-    }
-    return getLegacyNormalizedScore(legacyScoringOrDefault(routerSettings));
+    Float lowerBoundScore =
+        getOptimizerScore(
+            routerSettings,
+            this.traces.totalLengthMm != null ? this.traces.totalLengthMm : 0.0,
+            this.vias.totalCount != null ? this.vias.totalCount : 0,
+            this.bends.totalCount != null ? this.bends.totalCount : 0);
+    return lowerBoundScore != null
+        ? lowerBoundScore
+        : getLegacyNormalizedScore(legacyScoringOrDefault(routerSettings));
   }
 
-  /** Calculates the V2 optimizer score from board-only lower bounds and actual route metrics. */
-  private float getV2OptimizerScore(OptimizerScoreSettings settings) {
+  /**
+   * Returns the lower-bound optimizer score (V2 or V3) this board would have with the given trace
+   * length, via count and bend count, keeping its placement-derived bounds. Returns null when the
+   * router settings select the legacy optimizer score.
+   */
+  public Float getOptimizerScore(
+      RouterSettings routerSettings, double traceLengthMm, int viaCount, int bendCount) {
+    if (routerSettings == null || routerSettings.optimizerScoring == null) {
+      return null;
+    }
+    OptimizerScoreSettings settings = routerSettings.optimizerScoring;
+    if (settings.version == app.freerouting.settings.OptimizerScoringVersion.V2_LOWER_BOUND) {
+      return getV2OptimizerScore(settings, traceLengthMm, viaCount, bendCount);
+    }
+    if (settings.version == app.freerouting.settings.OptimizerScoringVersion.V3_EQUIVALENT_LENGTH) {
+      return getV3OptimizerScore(settings, traceLengthMm, viaCount, bendCount);
+    }
+    return null;
+  }
+
+  /**
+   * Calculates the V3 optimizer score: excess vias and bends are converted to the trace length that
+   * uses the same routing space, and the total excess length is measured against the lower bound.
+   */
+  private float getV3OptimizerScore(
+      OptimizerScoreSettings settings, double traceLengthMm, int viaCount, int bendCount) {
+    double minTraceLength =
+        this.bounds.minTraceLengthMm != null ? Math.max(0.0, this.bounds.minTraceLengthMm) : 0.0;
+    double minViaCount = this.bounds.minViaCount != null ? Math.max(0, this.bounds.minViaCount) : 0;
+    double minBendCount =
+        this.bounds.minBendCount != null ? Math.max(0, this.bounds.minBendCount) : 0;
+    double viaLength =
+        settings.viaEquivalentLengthMm != null
+            ? settings.viaEquivalentLengthMm
+            : valueOrDefault(this.bounds.viaEquivalentLengthMm, 0.0f);
+    double bendLength =
+        settings.bendEquivalentLengthMm != null
+            ? settings.bendEquivalentLengthMm
+            : valueOrDefault(this.bounds.bendEquivalentLengthMm, 0.0f);
+    double lengthFloor = Math.max(0.0, valueOrDefault(settings.lengthFloor, 1.0f));
+    double excessLength =
+        Math.max(0.0, traceLengthMm - minTraceLength)
+            + viaLength * Math.max(0.0, viaCount - minViaCount)
+            + bendLength * Math.max(0.0, bendCount - minBendCount);
+    return (float)
+        Math.max(
+            0.0,
+            1000.0
+                - valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
+                    * excessLength
+                    / Math.max(minTraceLength, lengthFloor));
+  }
+
+  private float getV2OptimizerScore(
+      OptimizerScoreSettings settings, double traceLengthMm, int viaCount, int bendCount) {
     double difficulty =
         this.difficulty.difficultyD != null ? Math.max(1.0, this.difficulty.difficultyD) : 1.0;
     double minTraceLength =
@@ -828,10 +883,9 @@ public class BoardStatistics implements Serializable {
     double minViaCount = this.bounds.minViaCount != null ? Math.max(0, this.bounds.minViaCount) : 0;
     double minBendCount =
         this.bounds.minBendCount != null ? Math.max(0, this.bounds.minBendCount) : 0;
-    double actualTraceLength =
-        this.traces.totalLengthMm != null ? Math.max(0.0, this.traces.totalLengthMm) : 0.0;
-    double actualViaCount = this.vias.totalCount != null ? Math.max(0, this.vias.totalCount) : 0;
-    double actualBendCount = this.bends.totalCount != null ? Math.max(0, this.bends.totalCount) : 0;
+    double actualTraceLength = Math.max(0.0, traceLengthMm);
+    double actualViaCount = Math.max(0, viaCount);
+    double actualBendCount = Math.max(0, bendCount);
     double lengthFloor = Math.max(0.0, valueOrDefault(settings.lengthFloor, 1.0f));
     double difficultyFloor = Math.max(1.0, valueOrDefault(settings.difficultyScaleFloor, 1.0f));
     double lengthPenalty =

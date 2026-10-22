@@ -24,6 +24,17 @@ public class OptimizerScoreSettings implements Serializable, Cloneable {
   @SerializedName("difficulty_scale_floor")
   public Float difficultyScaleFloor;
 
+  /**
+   * V3: trace length in mm that one via is worth. Null derives it from the board: the via pad plus
+   * clearance on every layer the via spans, divided by one trace width plus clearance.
+   */
+  @SerializedName("via_equivalent_length_mm")
+  public Float viaEquivalentLengthMm;
+
+  /** V3: trace length in mm that one bend is worth. Null uses one trace width plus clearance. */
+  @SerializedName("bend_equivalent_length_mm")
+  public Float bendEquivalentLengthMm;
+
   @Override
   public OptimizerScoreSettings clone() {
     try {

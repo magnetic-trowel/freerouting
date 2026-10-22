@@ -69,6 +69,16 @@ public class OptimizerSettings implements Serializable, Cloneable {
   public Integer maxCommitsPerPass;
 
   /**
+   * How a pass chooses the improvements it commits: {@code all} keeps every candidate that still
+   * reduces vias or trace length on the updated board; {@code best_prefix} then reverts the commits
+   * after the point where the optimizer score was highest; {@code score_gated} keeps a candidate
+   * only if it also raises the optimizer score; {@code score_ranked} ranks and accepts candidates
+   * by the change of the optimizer score itself.
+   */
+  @SerializedName("commit_selection")
+  public String commitSelection;
+
+  /**
    * A multiplier applied to the base ripup cost at the start of optimization. Higher values make
    * ripping up existing traces more expensive, prioritizing routing speed.
    */

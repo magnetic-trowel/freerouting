@@ -180,12 +180,15 @@ The primary way to configure Freerouting is through a JSON settings file. This f
   `clearance_violation_depth_scale` (1000 µm) / D. D is max(1, pins × signal layers).
   `unrouted_connection_weight` is unused by V2.
   Equations and a glossary for every symbol are in [docs/scoring.md](scoring.md).
-- **`optimizer_scoring`**: Optimizer board score (`V2_LOWER_BOUND` by default; `V1_LEGACY`
-  remains available). Completeness and DRC count are keep/undo gates, not score terms.
-  The score is 1000 minus excess wire length, vias, and bends versus placement lower
-  bounds. Defaults: `excess_wire_length_weight` (1000), `excess_via_weight` (2000),
-  `excess_bend_weight` (500), `length_floor` (1), `difficulty_scale_floor` (1). Via and
-  bend excess divide by D; length excess divides by Lmin.
+- **`optimizer_scoring`**: Optimizer board score (`V3_EQUIVALENT_LENGTH` by default;
+  `V2_LOWER_BOUND` and `V1_LEGACY` remain available). Completeness and DRC count are keep/undo
+  gates, not score terms. V3: 1000 minus `excess_wire_length_weight` (1000) times the excess
+  equivalent length divided by Lmin, where excess vias and bends are converted to trace length:
+  one via is worth the via pad plus clearance on every layer it spans divided by one trace width
+  plus clearance (`via_equivalent_length_mm` overrides it), one bend is worth one trace width
+  plus clearance (`bend_equivalent_length_mm`). V2: 1000 minus excess wire length, vias, and
+  bends versus placement lower bounds, with `excess_via_weight` (2000) and `excess_bend_weight`
+  (500) divided by D; `length_floor` (1) and `difficulty_scale_floor` (1) apply to both.
   Equations and a glossary for every symbol are in [docs/scoring.md](scoring.md).
 
 The router and optimizer versions are independent. CLI aliases are
@@ -230,6 +233,12 @@ Configures the optional route-optimization stage that runs after autorouting.
   (lowest-ranked) candidates are reverted one at a time until it does; the best candidate alone is
   the last board tried. `1` commits only the best candidate; a value below `1` means no limit. The
   result does not depend on `max_threads`. Default is `0` (no limit).
+- **`commit_selection`**: How a pass chooses the improvements it commits. `score_ranked` (default)
+  ranks candidates by how much they raise the optimizer score and keeps a runner-up only if it
+  still raises the score on the updated board. `score_gated` ranks by vias, then trace length, and
+  keeps a runner-up only if it also raises the optimizer score. `best_prefix` commits in that order
+  and then reverts the commits after the highest-scoring point. `all` keeps every runner-up that
+  still reduces vias or trace length.
 
 ##### **`fanout` Sub-section**
 

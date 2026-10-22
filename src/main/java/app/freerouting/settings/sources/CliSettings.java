@@ -136,11 +136,11 @@ public class CliSettings implements SettingsSource {
   }
 
   /**
-   * Maps the short scoring-version names ({@code v1}, {@code v2}, {@code legacy}, {@code
-   * continuous}, {@code lower_bound}) to their enum constants for a {@code *.version} field path
-   * relative to the router settings; returns any other value unchanged. Shared with {@link
-   * app.freerouting.settings.GlobalSettings#setValue} so both command-line parsers accept the same
-   * values.
+   * Maps the short scoring-version names ({@code v1}, {@code v2}, {@code v3}, {@code legacy},
+   * {@code continuous}, {@code lower_bound}, {@code equivalent_length}) to their enum constants for
+   * a {@code *.version} field path relative to the router settings; returns any other value
+   * unchanged. Shared with {@link app.freerouting.settings.GlobalSettings#setValue} so both
+   * command-line parsers accept the same values.
    */
   public static String normalizeRouterValue(String fieldPath, String value) {
     if (value == null || !fieldPath.endsWith(".version")) {
@@ -151,6 +151,7 @@ public class CliSettings implements SettingsSource {
       case "v2", "continuous" ->
           fieldPath.startsWith("optimizer") ? "V2_LOWER_BOUND" : "V2_CONTINUOUS";
       case "lower_bound", "lower-bound" -> "V2_LOWER_BOUND";
+      case "v3", "equivalent_length", "equivalent-length" -> "V3_EQUIVALENT_LENGTH";
       default -> value;
     };
   }

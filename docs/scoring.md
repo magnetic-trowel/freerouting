@@ -8,7 +8,7 @@ costs that steer A* while a trace is being laid.
 | --- | --- | --- |
 | Maze-search costs | `router.scoring` (`via_costs`, preferred-direction trace costs, rip-up costs). These tell the maze which expansion is cheaper **right now**. | A board quality number. |
 | Router score | “Is the board finished and legal?” Used by the autorouter, board history, GUI, and API `normalized_score`. Default formula: `V2_CONTINUOUS`. | Wire-length / via / bend beauty. |
-| Optimizer score | “How efficient is the copper versus a computable lower bound?” Used by the optimizer keep/undo gate and API `optimizer_score`. Default formula: `V2_LOWER_BOUND`. | A completeness meter. Incomplete nets and extra DRC hits are **vetoes**, not terms in this formula. |
+| Optimizer score | “How efficient is the copper versus a computable lower bound?” Used by the optimizer keep/undo gate and API `optimizer_score`. Default formula: `V3_EQUIVALENT_LENGTH`. | A completeness meter. Incomplete nets and extra DRC hits are **vetoes**, not terms in this formula. |
 
 V1 (`V1_LEGACY`) remains an explicit compatibility override for each score
 independently (`--router-scoring-version`, `--optimizer-scoring-version`, or
@@ -184,6 +184,19 @@ can be replayed later without rerouting.
 | \(W_B\) | `excess_bend_weight` | \(500\) | Points lost per extra bend after dividing by \(D\). | Extra corners are a smaller tax — tidy, but not as important as vias or length. |
 | \(L_{\mathrm{floor}}\) | `length_floor` | \(1\) mm | Denominator floor so a near-zero \(L_{\min}\) cannot explode \(\Delta L\). | Don’t divide by a microscopically short “perfect” length. |
 | \(D_{\mathrm{floor}}\) | `difficulty_scale_floor` | \(1\) | Denominator floor for via/bend terms. | Don’t divide by zero on an empty board. |
+
+### `V3_EQUIVALENT_LENGTH` (default)
+
+V3 uses the same lower bounds but measures every excess in millimetres of trace:
+
+$$\mathrm{score}_{\mathrm{opt}} = \max\Bigl(0,\ 1000 - W_L \cdot rac{\Delta L_{\mathrm{mm}} + \ell_v\,\Delta V + \ell_b\,\Delta B}{\max(L_{\min},\ L_{\mathrm{floor}})}\Bigr)$$
+
+\(\ell_v\) is the trace length that uses as much routing space as one via: the via pad plus
+clearance, squared, on every layer the via spans, divided by one trace width plus clearance.
+\(\ell_b\) is one trace width plus clearance. Both come from the board's first via and default
+net class (typically 2–8 mm per via and under 1 mm per bend) and are logged when the optimizer
+starts. Unlike V2, a via's worth does not shrink on boards with more pins or layers, and the
+optimizer can compare length against vias in one unit.
 
 ### Keep / undo gates (not score terms)
 
