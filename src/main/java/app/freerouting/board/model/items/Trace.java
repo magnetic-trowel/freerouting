@@ -334,26 +334,7 @@ public abstract class Trace extends Item implements Connectable, Serializable {
 
   /** Checks, if this trace can be reached by other items via more than one path. */
   public boolean isCycle() {
-    boolean debugNet49 =
-        this.netNumbers != null && this.netNumbers.length > 0 && this.netNumbers[0] == 49;
     if (this.isOverlap()) {
-      if (debugNet49) {
-        FRLogger.trace(
-            "compare_trace_is_cycle_overlap net=49, id="
-                + this.getId()
-                + ", first="
-                + this.firstCorner()
-                + ", last="
-                + this.lastCorner()
-                + ", startContacts="
-                + this.getStartContacts().stream()
-                    .map(i -> i.getId() + "")
-                    .collect(java.util.stream.Collectors.joining(","))
-                + ", endContacts="
-                + this.getEndContacts().stream()
-                    .map(i -> i.getId() + "")
-                    .collect(java.util.stream.Collectors.joining(",")));
-      }
       return true;
     }
     Collection<Item> startContacts = this.getStartContacts();
@@ -363,31 +344,24 @@ public abstract class Trace extends Item implements Connectable, Serializable {
     // expanded from here, to block coming back to
     // this trace via a start contact.
     Set<Item> visitedItems = new TreeSet<>(startContacts);
-    boolean ignoreAreas = false;
+    boolean ignoreAreas = this.ignoresCyclesWithAreas();
+    for (Item currentContact : startContacts) {
+      if (currentContact.isCycleRecu(visitedItems, this, this, ignoreAreas)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Returns true, if {@link #isCycle()} ignores cycles through conduction areas, as set in the net
+   * class of the first net of this trace.
+   */
+  public boolean ignoresCyclesWithAreas() {
     if (this.netNumbers.length > 0) {
       Net currentNet = this.board.rules.nets.get(this.netNumbers[0]);
       if (currentNet != null && currentNet.getNetClass() != null) {
-        ignoreAreas = currentNet.getNetClass().getIgnoreCyclesWithAreas();
-      }
-    }
-    for (Item currentContact : startContacts) {
-      if (currentContact.isCycleRecu(visitedItems, this, this, ignoreAreas)) {
-        if (debugNet49) {
-          FRLogger.trace(
-              "compare_trace_is_cycle_dfs net=49, id="
-                  + this.getId()
-                  + ", first="
-                  + this.firstCorner()
-                  + ", last="
-                  + this.lastCorner()
-                  + ", startContacts="
-                  + startContacts.stream()
-                      .map(i -> i.getId() + "")
-                      .collect(java.util.stream.Collectors.joining(","))
-                  + ", found_via="
-                  + currentContact.getId());
-        }
-        return true;
+        return currentNet.getNetClass().getIgnoreCyclesWithAreas();
       }
     }
     return false;

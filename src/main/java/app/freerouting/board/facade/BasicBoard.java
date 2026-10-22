@@ -848,6 +848,9 @@ public class BasicBoard implements Serializable {
     boolean result = false;
     boolean somethingChanged = true;
     int iterationCount = 0;
+    // Skips the per-trace cycle search for traces that cannot be on a cycle; rebuilt lazily
+    // whenever the board changes.
+    TraceCycleIndex cycleIndex = new TraceCycleIndex(this);
     while (somethingChanged) {
       if (++iterationCount > MAX_NORMALIZE_ITERATIONS) {
         // Safety valve: after this many passes the outer loop has not converged.
@@ -908,7 +911,9 @@ public class BasicBoard implements Serializable {
           if (currentTrace.normalize(null)) {
             somethingChanged = true;
             result = true;
-          } else if (!currentTrace.isUserFixed() && this.removeIfCycle(currentTrace)) {
+          } else if (!currentTrace.isUserFixed()
+              && cycleIndex.mayBeCycle(currentTrace)
+              && this.removeIfCycle(currentTrace)) {
             somethingChanged = true;
             result = true;
           }
@@ -946,6 +951,7 @@ public class BasicBoard implements Serializable {
       }
     }
 
+    TraceCycleIndex cycleIndex = new TraceCycleIndex(this);
     for (java.util.Map.Entry<Integer, java.util.List<PolylineTrace>> entry :
         tracesByNet.entrySet()) {
       int netNumber = entry.getKey();
@@ -973,7 +979,9 @@ public class BasicBoard implements Serializable {
             if (currentTrace.normalize(null)) {
               somethingChanged = true;
               result = true;
-            } else if (!currentTrace.isUserFixed() && this.removeIfCycle(currentTrace)) {
+            } else if (!currentTrace.isUserFixed()
+                && cycleIndex.mayBeCycle(currentTrace)
+                && this.removeIfCycle(currentTrace)) {
               somethingChanged = true;
               result = true;
             }
