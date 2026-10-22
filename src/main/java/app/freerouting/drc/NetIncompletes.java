@@ -298,7 +298,8 @@ public class NetIncompletes {
    */
   private NetItem[] calculateNetItems(Collection<Item> itemList) {
     ArrayList<NetItem> result = new ArrayList<>();
-    Set<Item> uniqueItems = new HashSet<>(itemList);
+    // Ordered by id: identity hash order would make the airlines differ between runs.
+    Set<Item> uniqueItems = new TreeSet<>(itemList);
     int uniqueItemsCount = uniqueItems.size();
 
     while (!uniqueItems.isEmpty()) {
