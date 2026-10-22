@@ -71,6 +71,14 @@ public final class RoutingResultManifest {
   @SerializedName("output_written")
   public boolean outputWritten;
 
+  /**
+   * True when the written output is the last routing result the job published before it terminated
+   * abnormally, rather than the result of a completed or timed-out job. The board statistics then
+   * describe the board at termination, not necessarily the written output.
+   */
+  @SerializedName("output_partial")
+  public boolean outputPartial;
+
   @SerializedName("cpu_score")
   public Integer cpuScore;
 
@@ -225,6 +233,10 @@ public final class RoutingResultManifest {
     manifest.finalState = job.state != null ? job.state.name() : RoutingJobState.INVALID.name();
     manifest.exitCode = exitCode;
     manifest.outputWritten = outputWritten;
+    manifest.outputPartial =
+        outputWritten
+            && job.state != RoutingJobState.COMPLETED
+            && job.state != RoutingJobState.TIMED_OUT;
     manifest.resourceUsage = job.resourceUsage;
     manifest.cpuScore = cpuScore;
 

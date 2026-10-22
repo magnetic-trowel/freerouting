@@ -2,10 +2,12 @@ package app.freerouting.cli;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.core.BoardFileDetails;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
+import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.settings.GlobalSettings;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,5 +39,46 @@ class CliOutputLifecycleTest {
     job.output = new BoardFileDetails();
     assertFalse(CliRunner.writeCliOutputIfAvailable(settings, job));
     assertEquals("previous-user-file", Files.readString(destination));
+  }
+
+  @Test
+  void terminatedJobWritesItsLastPublishedOutputAsPartialFailure(@TempDir Path directory)
+      throws Exception {
+    Path destination = directory.resolve("result.ses");
+    GlobalSettings settings = new GlobalSettings();
+    settings.initialOutputFile = destination.toString();
+    RoutingJob job = new RoutingJob();
+    job.state = RoutingJobState.TERMINATED;
+    job.output = new BoardFileDetails();
+    job.output.setData("(session published)".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+    boolean written = CliRunner.writeCliOutputIfAvailable(settings, job);
+
+    assertTrue(written);
+    assertEquals("(session published)", Files.readString(destination));
+    assertEquals(1, CliRunner.computeCliExitCode(job, written));
+    RoutingResultManifest manifest = RoutingResultManifest.fromJob(job, null, written, 1);
+    assertTrue(manifest.outputWritten);
+    assertTrue(manifest.outputPartial);
+  }
+
+  @Test
+  void completedOutputIsNotPartial() {
+    RoutingJob job = new RoutingJob();
+    job.state = RoutingJobState.COMPLETED;
+    assertFalse(RoutingResultManifest.fromJob(job, null, true, 0).outputPartial);
+  }
+
+  @Test
+  void cancelledJobDoesNotWriteOutput(@TempDir Path directory) throws Exception {
+    GlobalSettings settings = new GlobalSettings();
+    settings.initialOutputFile = directory.resolve("result.ses").toString();
+    RoutingJob job = new RoutingJob();
+    job.state = RoutingJobState.CANCELLED;
+    job.output = new BoardFileDetails();
+    job.output.setData("(session published)".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+    assertFalse(CliRunner.writeCliOutputIfAvailable(settings, job));
+    assertFalse(Files.exists(directory.resolve("result.ses")));
   }
 }

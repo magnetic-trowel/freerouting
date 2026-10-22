@@ -412,7 +412,25 @@ public final class BatchOptimizer extends NamedAlgorithm {
           new TaskStateChangedEvent(this, TaskState.RUNNING, currentPass, currentBoardHash));
 
       boolean withPreferredDirections = currentPass % 2 != 0; // to create more variations
-      optRoutePass(currentPass, withPreferredDirections);
+      try {
+        optRoutePass(currentPass, withPreferredDirections);
+      } catch (OutOfMemoryError outOfMemory) {
+        // The pass's candidate boards are unreachable once it unwinds, which frees the heap. The
+        // live board may be half-way through a commit, so continue from the best accepted board
+        // and stop optimizing instead of letting the error end the routing job.
+        this.passCommits.clear();
+        this.board = this.bestBoard;
+        this.job.board = this.board;
+        job.logWarning(
+            String.format(
+                Locale.US,
+                "Optimizer pass #%d ran out of memory; stopping the optimizer and keeping the best"
+                    + " accepted board (optimizer score %.2f).",
+                currentPass,
+                this.bestScore));
+        this.fireBoardUpdatedEvent(new BoardStatistics(this.board), null, this.board);
+        break;
+      }
       peakHeapMb = Math.max(peakHeapMb, sampleHeapUsageMb());
 
       if (this.isTimedOut) {
@@ -877,6 +895,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
             Thread.currentThread().interrupt();
             break;
           } catch (ExecutionException e) {
+            if (e.getCause() instanceof OutOfMemoryError outOfMemory) {
+              throw outOfMemory;
+            }
             job.logError("Error in candidate optimization task", e.getCause());
           }
         }

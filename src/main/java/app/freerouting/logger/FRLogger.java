@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -430,6 +431,42 @@ public final class FRLogger {
     if (wasInterestingTraceEvent) {
       publishTraceEvent(
           new TraceEvent(method, operation, message, impactedItems, impactedPoints, Instant.now()));
+    }
+
+    return wasInterestingTraceEvent;
+  }
+
+  /**
+   * Logs a granular TRACE message like {@link #trace(String, String, String, String, Point[])}, but
+   * builds the message only when it is logged or published to the debug control. Use this on hot
+   * paths, where building the message on every call costs more than the work being traced.
+   */
+  public static boolean trace(
+      String method,
+      String operation,
+      Supplier<String> message,
+      String impactedItems,
+      Point[] impactedPoints) {
+    String text = null;
+    if (enabled) {
+      if (logger == null) {
+        logger = LogManager.getLogger(LOGGER_NAME);
+      }
+
+      if (granularTraceEnabled
+          && (impactedItems.isEmpty() || DebugControl.getInstance().isInterested(impactedItems))) {
+        text = message.get();
+        logger.trace("[%s] [%s] %s: %s".formatted(method, operation, text, impactedItems));
+      }
+    }
+
+    boolean wasInterestingTraceEvent = DebugControl.getInstance().check(operation, impactedItems);
+    if (wasInterestingTraceEvent) {
+      if (text == null) {
+        text = message.get();
+      }
+      publishTraceEvent(
+          new TraceEvent(method, operation, text, impactedItems, impactedPoints, Instant.now()));
     }
 
     return wasInterestingTraceEvent;
