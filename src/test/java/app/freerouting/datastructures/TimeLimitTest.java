@@ -11,7 +11,7 @@ class TimeLimitTest {
   void limitCountsStepsInsteadOfClockTime() throws InterruptedException {
     TimeLimit limit = new TimeLimit(1);
     Thread.sleep(20);
-    for (int i = 0; i < 250; ++i) {
+    for (int i = 0; i < 250_000; ++i) {
       assertFalse(limit.limitExceeded());
     }
     assertTrue(limit.limitExceeded());

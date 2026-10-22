@@ -9,8 +9,12 @@ package app.freerouting.datastructures;
  */
 public class TimeLimit {
 
-  /** Steps per nominal millisecond, about twice the highest poll rate measured on large boards. */
-  private static final long STEPS_PER_MILLISECOND = 250;
+  /**
+   * Steps per nominal millisecond. The integration build uses 1000 times the upstream value (250)
+   * so that search budgets do not bind on real boards; job timeouts and cancellation still stop
+   * work.
+   */
+  private static final long STEPS_PER_MILLISECOND = 250_000;
 
   private final long maxSteps;
   private long steps;
