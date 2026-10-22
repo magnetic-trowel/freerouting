@@ -1,32 +1,27 @@
 package app.freerouting.datastructures;
 
-import java.util.Date;
-
-/** Class used to cancel a performance critical algorithm after a time limit is exceeded. */
+/**
+ * Class used to cancel a performance critical algorithm after a limit is exceeded.
+ *
+ * <p>The limit is a deterministic work budget, not wall-clock time: every call of {@link
+ * #limitExceeded()} counts as one step, so an algorithm stops at the same point on every machine
+ * and under any load. The budget is given in nominal milliseconds.
+ */
 public class TimeLimit {
 
-  private final long timeStamp;
-  private int timeLimit;
+  /** Steps per nominal millisecond, about twice the highest poll rate measured on large boards. */
+  private static final long STEPS_PER_MILLISECOND = 250;
 
-  /** Creates a new instance with a time limit of milliSeconds milliseconds. */
+  private final long maxSteps;
+  private long steps;
+
+  /** Creates a new instance with a budget of milliSeconds nominal milliseconds. */
   public TimeLimit(int milliSeconds) {
-    this.timeLimit = milliSeconds;
-    this.timeStamp = new Date().getTime();
+    this.maxSteps = milliSeconds * STEPS_PER_MILLISECOND;
   }
 
-  /** Returns true, if the time limit provided in the constructor of this class is exceeded. */
+  /** Counts one step and returns true, if the budget provided in the constructor is exceeded. */
   public boolean limitExceeded() {
-    long currentTime = new Date().getTime();
-    return currentTime - this.timeStamp > this.timeLimit;
-  }
-
-  /** Multiplies this TimeLimit by factor. */
-  public void multiply(double factor) {
-    if (factor <= 0) {
-      return;
-    }
-    double newLimit = factor * this.timeLimit;
-    newLimit = Math.min(newLimit, Integer.MAX_VALUE);
-    this.timeLimit = (int) newLimit;
+    return ++steps > maxSteps;
   }
 }
