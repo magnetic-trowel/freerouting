@@ -5,6 +5,7 @@ import app.freerouting.analytics.model.JobLifecycleStatus;
 import app.freerouting.autoroute.pipeline.BatchAutorouter;
 import app.freerouting.autoroute.pipeline.BatchOptimizer;
 import app.freerouting.autoroute.pipeline.RoutingPipeline;
+import app.freerouting.core.ProgressThrottler;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.StoppableThread;
@@ -20,6 +21,7 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
 
   private static final long MAX_TIMEOUT = 24 * 60 * 60; // 24 hours
   private static final int GRACE_PERIOD = 30; // 30 seconds
+  private static final long UNREAD_OUTPUT_INTERVAL_MS = 10_000;
   private final Object terminalStateLock = new Object();
   RoutingJob job;
 
@@ -128,7 +130,14 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
           inputFormat);
 
       RoutingPipeline pipeline = RoutingPipeline.createForHeadless(job);
-      pipeline.addBoardUpdatedEventListener(event -> RoutingJobOutputWriter.write(job));
+      ProgressThrottler outputThrottler =
+          new ProgressThrottler(isOutputReadableWhileRunning() ? 0 : UNREAD_OUTPUT_INTERVAL_MS);
+      pipeline.addBoardUpdatedEventListener(
+          event -> {
+            if (outputThrottler.shouldUpdate()) {
+              RoutingJobOutputWriter.write(job);
+            }
+          });
       pipeline.addStageListener(
           new RoutingPipeline.StageListener() {
             @Override
@@ -377,6 +386,19 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
         settings.statistics.incrementJobsCompleted();
       }
     }
+  }
+
+  /**
+   * Whether an API or MCP server can read or stream the output while the job runs. Without one, the
+   * intermediate output is only a fallback for a timed-out job whose routing thread does not stop
+   * within the grace period, so it is refreshed every {@link #UNREAD_OUTPUT_INTERVAL_MS} instead of
+   * on every board update.
+   */
+  private static boolean isOutputReadableWhileRunning() {
+    GlobalSettings settings = GlobalSettings.current();
+    return settings == null
+        || Boolean.TRUE.equals(settings.apiServerSettings.isRunning)
+        || Boolean.TRUE.equals(settings.mcpServerSettings.isRunning);
   }
 
   private boolean jobClockExpired() {
