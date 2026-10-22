@@ -462,12 +462,14 @@ public final class BatchOptimizer extends NamedAlgorithm {
         scoreImprovement = passImprovementPercent;
       }
 
+      // At or below: a threshold of 0 stops at the first pass that gains nothing instead of
+      // repeating unchanged passes until max_passes.
       if (scoreImprovement != -1
-          && scoreImprovement < this.settings.optimizer.optimizationImprovementThreshold) {
+          && scoreImprovement <= this.settings.optimizer.optimizationImprovementThreshold) {
         job.logInfo(
             String.format(
                 Locale.US,
-                "Stopping optimizer because the improvement in this pass (%.4f%%) is below "
+                "Stopping optimizer because the improvement in this pass (%.4f%%) is at or below "
                     + "the threshold (%.2f%%).",
                 scoreImprovement,
                 this.settings.optimizer.optimizationImprovementThreshold));

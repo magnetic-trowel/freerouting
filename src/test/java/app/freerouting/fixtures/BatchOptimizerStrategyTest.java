@@ -18,6 +18,7 @@ import java.io.InputStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Named;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -142,6 +143,27 @@ class BatchOptimizerStrategyTest extends RoutingFixtureTest {
         String.format(
             "[%s x %d threads] Optimizer must not degrade score. Before: %.4f, After: %.4f",
             selectionStrategy, maxThreads, scoreBeforeOptimization, scoreAfterOptimization));
+  }
+
+  /**
+   * A threshold of 0 must stop at the first pass that gains nothing, as documented, instead of
+   * repeating unchanged passes until max_passes. bm08 is already routed so that passes find no
+   * improvement.
+   */
+  @Test
+  void zeroImprovementThresholdStopsWhenNothingImproves() {
+    RoutingJob job = getRoutingJob(DSN_FIXTURE, createOptimizerTestingSettings());
+    job.board = preOptimizedBoard.deepCopy();
+    job.thread = new NoOpStoppableThread();
+    job.routerSettings.optimizer.maxThreads = 1;
+    job.routerSettings.optimizer.maxPasses = 20;
+    job.routerSettings.optimizer.optimizationImprovementThreshold = 0.0f;
+    job.routerSettings.optimizer.enabled = true;
+
+    BatchOptimizer.create(job).runBatchLoop();
+
+    int passes = job.resultPhaseMetrics.optimizer.passesCompleted;
+    assertTrue(passes < 20, "Optimizer ran all " + passes + " passes without any improvement");
   }
 
   // ---------------------------------------------------------------------------

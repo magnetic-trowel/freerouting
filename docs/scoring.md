@@ -205,7 +205,8 @@ $$
 100 \cdot \frac{\mathrm{score}_{\mathrm{after}} - \mathrm{score}_{\mathrm{before}}}{\mathrm{score}_{\mathrm{before}}}
 $$
 
-Stop when that percentage is below the threshold. The value is always a percentage: `0.5`
+Stop when that percentage is at or below the threshold, so `0` stops at the first pass
+that gains nothing. The value is always a percentage: `0.5`
 means 0.5 %, not 50 %. There is no “already close to 1000”
 stop. On a typical finished board (~800–1000), 1% is about 8–10 points.
 
