@@ -121,10 +121,25 @@ public abstract class Rule {
     }
   }
 
+  /**
+   * Reads a "(width" rule. A width that is not finite and positive (KiCad exports "(width -0.001)"
+   * for unset track widths) is ignored with a warning, so the enclosing scope's or the default
+   * width applies instead of producing zero-width wires.
+   */
   public static WidthRule readWidthRule(IJFlexScanner scanner) {
     double value = scanner.nextDouble();
 
     if (!scanner.nextClosingBracket()) {
+      return null;
+    }
+
+    if (!Double.isFinite(value) || value <= 0) {
+      FRLogger.warn(
+          "Rule.readWidthRule: ignoring non-positive width "
+              + value
+              + " at '"
+              + scanner.getScopeIdentifier()
+              + "'");
       return null;
     }
 

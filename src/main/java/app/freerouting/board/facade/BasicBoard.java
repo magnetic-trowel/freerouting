@@ -31,6 +31,7 @@ import app.freerouting.geometry.planar.Area;
 import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntOctagon;
+import app.freerouting.geometry.planar.Limits;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.Polyline;
 import app.freerouting.geometry.planar.PolylineShape;
@@ -650,13 +651,27 @@ public class BasicBoard implements Serializable {
 
   /**
    * Expands the board's bounding box so that all placed items (pins, obstacles, conduction areas)
-   * are fully contained within the routable bounding box, with a minimum margin.
+   * are fully contained within the routable bounding box, with a minimum margin. Component outlines
+   * are drawings that never obstruct routing and are not taken into account; items whose bounding
+   * box exceeds the planar coordinate limit are skipped with a warning, because their shape is
+   * degenerate and the expanded box would overflow the autorouter's integer arithmetic.
    */
   public void expandBoundingBoxToIncludeAllItems() {
     IntBox bounds = this.boundingBox;
     boolean changed = false;
     for (Item item : getItems()) {
+      if (item instanceof ComponentOutline) {
+        continue;
+      }
       IntBox itemBox = item.boundingBox();
+      if (itemBox != null && !itemBox.isEmpty() && !isWithinCoordinateLimit(itemBox)) {
+        FRLogger.warn(
+            "BasicBoard.expandBoundingBoxToIncludeAllItems: skipping "
+                + item.getClass().getSimpleName()
+                + " with out-of-range bounding box "
+                + itemBox);
+        continue;
+      }
       if (itemBox != null && !itemBox.isEmpty() && !bounds.contains(itemBox)) {
         bounds = bounds.union(itemBox);
         changed = true;
@@ -669,6 +684,13 @@ public class BasicBoard implements Serializable {
         outline.invalidateEdgePinNets();
       }
     }
+  }
+
+  private static boolean isWithinCoordinateLimit(IntBox box) {
+    return box.ll.x >= -Limits.CRIT_INT
+        && box.ll.y >= -Limits.CRIT_INT
+        && box.ur.x <= Limits.CRIT_INT
+        && box.ur.y <= Limits.CRIT_INT;
   }
 
   /** Returns the outline of the board. */

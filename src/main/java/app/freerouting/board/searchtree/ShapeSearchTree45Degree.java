@@ -315,6 +315,10 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
         }
       }
     }
+    // The walk can stop before the stack is drained. Nodes left on this thread-local stack would
+    // keep this tree, its board and the autoroute engine reachable from the thread for its whole
+    // life, because the stack is the value of a ThreadLocal that the tree itself holds.
+    stack.reset();
 
     result = divideLargeRoom(result, board.getBoundingBox());
     // remove rooms with shapes equal to the contained shape to prevent endless loop.

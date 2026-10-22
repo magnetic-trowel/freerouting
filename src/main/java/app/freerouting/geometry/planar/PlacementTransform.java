@@ -58,16 +58,26 @@ public final class PlacementTransform {
           padPoint(corners[i], offset, pinRotation).round();
     }
     if (shape instanceof TileShape) {
-      Point[] unique = java.util.Arrays.stream(placed).distinct().toArray(Point[]::new);
-      Point[] normalized = unique.length < 3 ? unique : new PolygonShape(unique).corners;
-      return switch (normalized.length) {
-        case 0 -> IntBox.EMPTY;
-        case 1 -> TileShape.getInstance(normalized[0]);
-        case 2 -> new LineSegment(new Polyline(normalized), 1).toSimplex();
-        default -> TileShape.getInstance(normalized);
-      };
+      return tileFromRoundedCorners(placed);
     }
     return new PolygonShape(placed);
+  }
+
+  /**
+   * Builds the tile spanned by the rounded corners of a placed convex shape. Rounding rotated
+   * corners that lie less than a unit apart can make the corner sequence turn back on itself, so
+   * the tile is built from the convex hull of the corners: {@link TileShape#getInstance(Point[])}
+   * requires a convex polygon and turns a concave one into a clipped or unbounded simplex.
+   */
+  static TileShape tileFromRoundedCorners(Point[] placed) {
+    Point[] unique = java.util.Arrays.stream(placed).distinct().toArray(Point[]::new);
+    Point[] normalized = unique.length < 3 ? unique : new PolygonShape(unique).convexHull().corners;
+    return switch (normalized.length) {
+      case 0 -> IntBox.EMPTY;
+      case 1 -> TileShape.getInstance(normalized[0]);
+      case 2 -> new LineSegment(new Polyline(normalized), 1).toSimplex();
+      default -> TileShape.getInstance(normalized);
+    };
   }
 
   private FloatPoint padPoint(FloatPoint point, FloatPoint offset, double pinRotation) {

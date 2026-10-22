@@ -168,33 +168,34 @@ public class ClearanceMatrix implements Serializable {
     FRLogger.trace(
         "ClearanceMatrix.get_value",
         "clearance_retrieved",
-        "Clearance value: class_i="
-            + classI
-            + " ("
-            + (classI < row.length ? row[classI].name : "?")
-            + ")"
-            + ", class_j="
-            + classJ
-            + " ("
-            + (classJ < row.length ? row[classJ].name : "?")
-            + ")"
-            + ", layer="
-            + layer
-            + " ("
-            + (layer < layerStructure.layers.length ? layerStructure.layers[layer].name : "?")
-            + ")"
-            + ", base_value="
-            + valueFromTheMatrix
-            + " ("
-            + (valueFromTheMatrix / 10000.0)
-            + "mm)"
-            + ", safety_margin="
-            + (addSafetyMargin ? clearance_safety_margin : 0)
-            + ", finalValue="
-            + finalValue
-            + " ("
-            + (finalValue / 10000.0)
-            + "mm)",
+        () ->
+            "Clearance value: class_i="
+                + classI
+                + " ("
+                + (classI < row.length ? row[classI].name : "?")
+                + ")"
+                + ", class_j="
+                + classJ
+                + " ("
+                + (classJ < row.length ? row[classJ].name : "?")
+                + ")"
+                + ", layer="
+                + layer
+                + " ("
+                + (layer < layerStructure.layers.length ? layerStructure.layers[layer].name : "?")
+                + ")"
+                + ", base_value="
+                + valueFromTheMatrix
+                + " ("
+                + (valueFromTheMatrix / 10000.0)
+                + "mm)"
+                + ", safety_margin="
+                + (addSafetyMargin ? clearance_safety_margin : 0)
+                + ", finalValue="
+                + finalValue
+                + " ("
+                + (finalValue / 10000.0)
+                + "mm)",
         "Clearance Check",
         new Point[0]);
 

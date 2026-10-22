@@ -203,14 +203,23 @@ public final class CliRunner {
     return state != null && state.isTerminal();
   }
 
-  /** Writes nonempty output for completed or timed-out jobs without overwriting with empty data. */
+  /**
+   * Writes nonempty output for completed or timed-out jobs without overwriting with empty data. A
+   * job that terminated with an error after it had published a routing result still writes that
+   * last published result, which is a complete export of an earlier board state; the result
+   * manifest marks it as partial and the exit code still reports the failure.
+   */
   public static boolean writeCliOutputIfAvailable(
       GlobalSettings globalSettings, RoutingJob routingJob) {
     var outputData = routingJob.output != null ? routingJob.output.getData() : null;
     if (outputData == null || outputData.available() == 0) {
       return false;
     }
-    if (routingJob.state != RoutingJobState.COMPLETED
+    if (routingJob.state == RoutingJobState.TERMINATED) {
+      FRLogger.warn(
+          "The routing job terminated abnormally; writing the last published routing result,"
+              + " which may be partial.");
+    } else if (routingJob.state != RoutingJobState.COMPLETED
         && routingJob.state != RoutingJobState.TIMED_OUT) {
       return false;
     }

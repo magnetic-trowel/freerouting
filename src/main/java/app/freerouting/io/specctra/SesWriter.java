@@ -367,6 +367,18 @@ public final class SesWriter {
       throws IOException {
     String layer = board.layerStructure.layers[wire.getLayer()].name;
     double width = coordinateTransform.boardToDsn(2 * wire.getHalfWidth());
+    if (!Double.isFinite(width) || width <= 0) {
+      // One invalid wire must not abort the export of the whole routing result.
+      FRLogger.warn(
+          "SesWriter.writeWire: skipping wire with non-positive width "
+              + width
+              + " on layer "
+              + layer
+              + " (net "
+              + (wire.netCount() > 0 ? wire.getNetNumber(0) : -1)
+              + ")");
+      return;
+    }
     SesTracePath path = SesTracePath.from(wire, coordinateTransform);
     file.startScope();
     file.write("wire");
