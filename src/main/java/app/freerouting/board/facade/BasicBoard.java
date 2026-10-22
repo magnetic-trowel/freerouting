@@ -851,6 +851,7 @@ public class BasicBoard implements Serializable {
     // Skips the per-trace cycle search for traces that cannot be on a cycle; rebuilt lazily
     // whenever the board changes.
     TraceCycleIndex cycleIndex = new TraceCycleIndex(this);
+    java.util.Map<TraceShape, Integer> previousShapes = null;
     while (somethingChanged) {
       if (++iterationCount > MAX_NORMALIZE_ITERATIONS) {
         // Safety valve: after this many passes the outer loop has not converged.
@@ -906,6 +907,16 @@ public class BasicBoard implements Serializable {
         continue;
       }
 
+      // A split that combine() undoes reports a change but leaves the same copper behind. Once an
+      // iteration starts with exactly the copper of the previous one, the net has converged.
+      if (iterationCount > 1) {
+        java.util.Map<TraceShape, Integer> shapes = TraceShape.countAll(netTraces);
+        if (shapes.equals(previousShapes)) {
+          break;
+        }
+        previousShapes = shapes;
+      }
+
       for (PolylineTrace currentTrace : netTraces) {
         if (currentTrace.isOnTheBoard()) {
           if (currentTrace.normalize(null)) {
@@ -921,6 +932,34 @@ public class BasicBoard implements Serializable {
       }
     }
     return result;
+  }
+
+  /** The copper of a trace, independent of its item id. */
+  private record TraceShape(
+      int layer,
+      int halfWidth,
+      int clearanceClass,
+      FixedState fixedState,
+      java.util.List<Point> corners) {
+
+    static java.util.Map<TraceShape, Integer> countAll(java.util.List<PolylineTrace> traces) {
+      java.util.Map<TraceShape, Integer> result = new java.util.HashMap<>();
+      for (PolylineTrace trace : traces) {
+        java.util.List<Point> corners = new java.util.ArrayList<>(trace.cornerCount());
+        for (int i = 0; i < trace.cornerCount(); i++) {
+          corners.add(trace.polyline().corner(i));
+        }
+        TraceShape shape =
+            new TraceShape(
+                trace.getLayer(),
+                trace.getHalfWidth(),
+                trace.clearanceClassIndex(),
+                trace.getFixedState(),
+                corners);
+        result.merge(shape, 1, Integer::sum);
+      }
+      return result;
+    }
   }
 
   /** Normalizes the traces of all nets on the board in a single optimized pass. */
