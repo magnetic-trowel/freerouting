@@ -59,14 +59,16 @@ public class BoardHistory {
 
   /** Adds a routing board to history if it improves overall score or space permits. */
   public synchronized void add(RoutingBoard board) {
+    add(board, new BoardStatistics(board).getRouterScore(routerSettings));
+  }
+
+  /** Same as {@link #add(RoutingBoard)} for a board whose router score is already known. */
+  public synchronized void add(RoutingBoard board, float newScore) {
     if (contains(board)) {
       return;
     }
 
     if (boards.size() >= maxHistorySize) {
-      // Compute the new board's score before the expensive serialisation so we can
-      // skip adding boards that would not improve the history.
-      float newScore = new BoardStatistics(board).getRouterScore(routerSettings);
 
       // Find the worst-scoring entry via a linear scan (O(n), n ≤ MAX_HISTORY_SIZE).
       // Thread safety: this method is `synchronized`, so no other thread can modify
@@ -89,7 +91,7 @@ public class BoardHistory {
       boards.remove(worstIndex);
     }
 
-    boards.add(new BoardHistoryEntry(board, routerSettings));
+    boards.add(new BoardHistoryEntry(board, newScore));
   }
 
   private static RouterSettings createLegacyRouterSettings(RoutingCostSettings scoringSettings) {
@@ -211,10 +213,10 @@ public class BoardHistory {
     public final float score;
     public int restoreCount;
 
-    public BoardHistoryEntry(RoutingBoard board, RouterSettings routerSettings) {
+    public BoardHistoryEntry(RoutingBoard board, float score) {
       this.board = board.serialize(false);
       this.hash = board.getHash();
-      this.score = new BoardStatistics(board).getRouterScore(routerSettings);
+      this.score = score;
       this.restoreCount = 0;
     }
   }

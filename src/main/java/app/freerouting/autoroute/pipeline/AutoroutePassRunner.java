@@ -207,7 +207,7 @@ final class AutoroutePassRunner {
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
       long finalBoardStatisticsStart =
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
-      final BoardStatistics boardStatistics = router.board.getStatistics();
+      final BoardStatistics boardStatistics = router.boardStatistics();
       if (BatchAutorouter.isBenchmarkProfileEnabled()) {
         router.profileBoardStatisticsNanos += System.nanoTime() - finalBoardStatisticsStart;
         router.profileIntermediateStatisticsNanos += System.nanoTime() - finalStatisticsStart;

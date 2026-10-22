@@ -252,7 +252,7 @@ final class AutorouteBatchLoop {
     }
 
     if (fanoutBeforeStats != null) {
-      BoardStatistics fanoutAfterStats = new BoardStatistics(router.board);
+      BoardStatistics fanoutAfterStats = router.boardStatistics();
       RoutingResultManifest.PhaseDetail phase = job.resultPhaseMetrics.fanout;
       phase.before = new RoutingResultManifest.PhaseSnapshot();
       phase.before.boardStatistics = fanoutBeforeStats;
@@ -281,9 +281,8 @@ final class AutorouteBatchLoop {
       autorouterStageStart = Instant.now();
       autorouterCpuStart = AutorouteRuntimeMetrics.currentThreadCpuSeconds();
       autorouterAllocatedStart = AutorouteRuntimeMetrics.currentThreadAllocatedMb();
-      autorouterBeforeStats = new BoardStatistics(router.board);
-      float routerScoreBefore =
-          new BoardStatistics(router.board).getRouterScore(job.routerSettings);
+      autorouterBeforeStats = router.boardStatistics();
+      float routerScoreBefore = autorouterBeforeStats.getRouterScore(job.routerSettings);
       job.logInfo(
           String.format(
               java.util.Locale.US,
@@ -350,7 +349,7 @@ final class AutorouteBatchLoop {
       router.fireTaskStateChangedEvent(
           new TaskStateChangedEvent(router, TaskState.RUNNING, currentPass, currentBoardHash));
 
-      bh.add(router.board);
+      bh.add(router.board, router.boardStatistics().getRouterScore(job.routerSettings));
 
       FRLogger.traceEntry(
           "BatchAutorouter.autoroute_pass #"
@@ -361,7 +360,7 @@ final class AutorouteBatchLoop {
 
       continueAutorouting = autoroutePass(currentPass);
 
-      BoardStatistics boardStatisticsAfter = new BoardStatistics(router.board);
+      BoardStatistics boardStatisticsAfter = router.boardStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
 
       if ((bh.size() >= STOP_AT_PASS_MINIMUM) || (router.thread.isStopAutoRouterRequested())) {
@@ -391,7 +390,7 @@ final class AutorouteBatchLoop {
             router.board = boardToRestore;
             board = router.board;
             router.resetAntiOscillationState();
-            var boardStatistics = router.board.getStatistics();
+            var boardStatistics = router.boardStatistics();
             // Reset pass-local stagnation counter when restoring a previous board state
             consecutiveNoImprovementPasses = 0;
             boardStatisticsAfter = boardStatistics;
@@ -480,7 +479,7 @@ final class AutorouteBatchLoop {
               && consecutiveNoImprovementPasses >= FANOUT_RECOVERY_STAGNATION_PASSES) {
             final int incompletesBeforeRecovery = boardStatisticsAfter.connections.incompleteCount;
             removeTails(Item.StopConnectionOption.NONE);
-            boardStatisticsAfter = new BoardStatistics(router.board);
+            boardStatisticsAfter = router.boardStatistics();
             boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
             lastBestScore = boardScoreAfter;
             consecutiveNoImprovementPasses = 0;
@@ -503,7 +502,7 @@ final class AutorouteBatchLoop {
             int removed = LastMileBlockerRipup.ripBlockers(router.board);
             lastMileAttempts++;
             if (removed > 0) {
-              boardStatisticsAfter = new BoardStatistics(router.board);
+              boardStatisticsAfter = router.boardStatistics();
               boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
               lastBestScore = boardScoreAfter;
               consecutiveNoImprovementPasses = 0;
@@ -589,14 +588,14 @@ final class AutorouteBatchLoop {
     // Ensure we finish with the best board ever seen during this routing session.
     // When stagnation or the max-pass limit fires, the loop exits with the board from the last
     // completed pass, which may be worse than an earlier pass that was recorded in the history.
-    float currentFinalScore = new BoardStatistics(router.board).getRouterScore(job.routerSettings);
+    BoardStatistics currentStats = router.boardStatistics();
+    float currentFinalScore = currentStats.getRouterScore(job.routerSettings);
     float bestHistoryScore = bh.getMaxScore();
     if (bestHistoryScore > currentFinalScore) {
       RoutingBoard bestBoard = bh.restoreBestBoard();
       if (bestBoard != null) {
-        BoardStatistics currentStats = new BoardStatistics(router.board);
         router.board = bestBoard;
-        BoardStatistics bestStats = new BoardStatistics(router.board);
+        BoardStatistics bestStats = router.boardStatistics();
         job.logDebug(
             "The final board state (score "
                 + FRLogger.formatScore(
@@ -638,7 +637,7 @@ final class AutorouteBatchLoop {
     }
 
     if (isRouterEnabled && autorouterBeforeStats != null) {
-      BoardStatistics autorouterAfterStats = new BoardStatistics(router.board);
+      BoardStatistics autorouterAfterStats = router.boardStatistics();
       RoutingResultManifest.PhaseDetail phase = job.resultPhaseMetrics.autorouter;
       phase.before =
           RoutingResultManifest.PhaseSnapshot.fromBoardStatistics(
