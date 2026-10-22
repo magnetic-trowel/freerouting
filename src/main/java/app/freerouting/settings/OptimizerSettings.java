@@ -61,6 +61,14 @@ public class OptimizerSettings implements Serializable, Cloneable {
   public Integer maxConsecutiveFailuresPass1;
 
   /**
+   * The maximum number of improvements committed per pass. Every candidate of a pass is evaluated
+   * against the same board; the improved ones are committed best first, each re-validated on the
+   * board the previous commits produced. {@code 1} keeps only the best candidate of each pass.
+   */
+  @SerializedName("max_commits_per_pass")
+  public Integer maxCommitsPerPass;
+
+  /**
    * A multiplier applied to the base ripup cost at the start of optimization. Higher values make
    * ripping up existing traces more expensive, prioritizing routing speed.
    */

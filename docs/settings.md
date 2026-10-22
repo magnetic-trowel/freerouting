@@ -223,6 +223,13 @@ Configures the optional route-optimization stage that runs after autorouting.
   current pass. Default is `50`.
 - **`max_consecutive_failures_pass1`**: Maximum consecutive candidate failures allowed in pass 1 before
   early-terminating the pass (canary probe). Default is `12`.
+- **`max_commits_per_pass`**: Maximum number of improvements committed per optimizer pass. Every
+  candidate of a pass is evaluated against the same board. The improved ones are committed best
+  first, and each one after the best is routed again on the updated board and kept only if it still
+  improves it. If the pass as a whole does not beat the previous board, the most recently committed
+  (lowest-ranked) candidates are reverted one at a time until it does; the best candidate alone is
+  the last board tried. `1` commits only the best candidate; a value below `1` means no limit. The
+  result does not depend on `max_threads`. Default is `0` (no limit).
 
 ##### **`fanout` Sub-section**
 

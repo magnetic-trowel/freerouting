@@ -1679,6 +1679,15 @@ public class RoutingBoard extends BasicBoard implements Serializable {
     return getUndoFacade().deepCopy();
   }
 
+  /**
+   * Serializes the board once, so that threads can make copies equal to {@link #deepCopy()} without
+   * taking this board's lock for each copy. Returns null if serialization fails.
+   */
+  public synchronized BoardImage image() {
+    byte[] bytes = getUndoFacade().serialize();
+    return bytes == null ? null : new BoardImage(bytes);
+  }
+
   private RoutingBoardOperations getOperations() {
     if (operations == null) {
       operations = new RoutingBoardOperations(this);

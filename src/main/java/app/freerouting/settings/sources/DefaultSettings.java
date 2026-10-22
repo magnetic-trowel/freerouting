@@ -244,6 +244,7 @@ public class DefaultSettings implements SettingsSource {
     settings.optimizer.enablePreflightGuards = true;
     settings.optimizer.maxConsecutiveFailures = 50;
     settings.optimizer.maxConsecutiveFailuresPass1 = 12;
+    settings.optimizer.maxCommitsPerPass = 0;
 
     // Scalar trace-cost defaults (layer-specific arrays are omitted for the same reason as
     // the layer arrays above – their sizes depend on the board).

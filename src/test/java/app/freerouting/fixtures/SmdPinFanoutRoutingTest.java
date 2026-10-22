@@ -45,7 +45,9 @@ class SmdPinFanoutRoutingTest extends RoutingFixtureTest {
   void issue508Bm06() {
     TestingSettings testSettingsSource = new TestingSettings();
     testSettingsSource.setMaxPasses(10);
-    testSettingsSource.setJobTimeoutString("00:02:00");
+    // The optimizer commits every improvement per pass and takes about 70 s alone here, close to
+    // two minutes when the suite runs test JVMs in parallel.
+    testSettingsSource.setJobTimeoutString("00:05:00");
 
     RoutingJob job = getRoutingJob("Issue508-DAC2020_bm06.dsn", testSettingsSource);
     runRoutingJob(job);

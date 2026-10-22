@@ -3,6 +3,7 @@ package app.freerouting.autoroute.pipeline;
 import app.freerouting.autoroute.ItemRouteResult;
 import app.freerouting.autoroute.ItemSelectionStrategy;
 import app.freerouting.autoroute.events.TaskStateChangedEvent;
+import app.freerouting.board.facade.BoardImage;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
@@ -61,8 +62,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
   protected final AtomicLong workerCpuNanos = new AtomicLong(0);
   protected final AtomicLong workerAllocBytes = new AtomicLong(0);
   protected volatile FloatPoint currentPosition = null;
-  private final ThreadLocal<WorkerBoardState> workerBoardStates =
-      ThreadLocal.withInitial(WorkerBoardState::new);
+
+  /** The commits after the best one in the last pass, in the order they were made. */
+  private final List<ChangeSet> passCommits = new ArrayList<>();
 
   /**
    * Creates a new instance of BatchOptimizer, which is used to optimize the board.
@@ -410,6 +412,34 @@ public final class BatchOptimizer extends NamedAlgorithm {
               this.bestScore,
               passStats,
               scoreAfterPass);
+      // Commits were made best first, so the last one is the least valuable. Drop commits from the
+      // end until the board beats the incumbent; the best commit alone is the last board tried.
+      int droppedCommits = 0;
+      while (rejectionReason != null && !this.passCommits.isEmpty()) {
+        ChangeSet last = this.passCommits.remove(this.passCommits.size() - 1);
+        if (!last.revert(this.board)) {
+          break;
+        }
+        droppedCommits++;
+        passStats = board.getStatistics();
+        scoreAfterPass = passStats.getOptimizerScore(job.routerSettings);
+        rejectionReason =
+            optimizerCandidateRejectionReason(
+                this.bestIncompleteCount,
+                this.bestClearanceViolationCount,
+                this.bestScore,
+                passStats,
+                scoreAfterPass);
+      }
+      if (droppedCommits > 0) {
+        job.logInfo(
+            String.format(
+                Locale.US,
+                "Optimizer pass #%d dropped its %d lowest-ranked commits: %s.",
+                currentPass,
+                droppedCommits,
+                rejectionReason == null ? "accepted" : "still " + rejectionReason));
+      }
       if (rejectionReason == null) {
         this.bestScore = scoreAfterPass;
         this.bestIncompleteCount = passStats.connections.incompleteCount;
@@ -427,6 +457,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 this.bestIncompleteCount,
                 this.bestClearanceViolationCount));
         restoreIncumbentBoard();
+        // The pass made no progress. Measuring it by the rejected candidate would repeat the
+        // same rejected pass until max_passes.
+        scoreAfterPass = this.bestScore;
       }
 
       double passImprovementFraction =
@@ -454,9 +487,11 @@ public final class BatchOptimizer extends NamedAlgorithm {
               passStats.connections.incompleteCount,
               passStats.clearanceViolations.totalCount));
 
-      if (this.useIncreasedRipupCosts && scoreAfterPass <= scoreBeforePass) {
+      if (this.useIncreasedRipupCosts
+          && passImprovementPercent < this.settings.optimizer.optimizationImprovementThreshold) {
         this.useIncreasedRipupCosts = false;
-        // Keep the optimizer going to try with normal ripup costs
+        // Increased ripup costs stopped paying off. Keep the optimizer going to try with normal
+        // ripup costs before the threshold may stop it.
         scoreImprovement = -1;
       } else {
         scoreImprovement = passImprovementPercent;
@@ -658,6 +693,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
    * routing must go on no matter how much it improved.
    */
   protected float optRoutePass(int passNo, boolean withPreferredDirections) {
+    this.passCommits.clear();
     BoardStatistics boardStatisticsBefore = board.getStatistics();
     RouterCounters routerCounters = new RouterCounters();
     routerCounters.passCount = passNo;
@@ -720,6 +756,10 @@ public final class BatchOptimizer extends NamedAlgorithm {
             });
 
     CandidateResult winningCandidate = null;
+    List<ItemRouteResult> improvedResults = new ArrayList<>();
+    BoardImage baselineImage = this.board.image();
+    BoardStatistics.OptimizerMetrics baselineMetrics =
+        BoardStatistics.OptimizerMetrics.of(this.board);
     int chunkSize = Math.max(threadPoolSize * 4, 8);
     boolean stoppedOrTimedOut = false;
     boolean earlyStopDueToFailures = false;
@@ -751,23 +791,19 @@ public final class BatchOptimizer extends NamedAlgorithm {
         int end = Math.min(i + chunkSize, candidateItemIds.size());
         List<Integer> chunk = candidateItemIds.subList(i, end);
         List<Future<CandidateResult>> futures = new ArrayList<>(chunk.size());
-
-        BoardStatistics.OptimizerMetrics chunkBaselineMetrics =
-            BoardStatistics.OptimizerMetrics.of(this.board);
         for (int itemId : chunk) {
           futures.add(
               pool.submit(
                   new OptimizeCandidateTask(
                       job,
-                      this.board,
+                      baselineImage,
                       itemId,
                       this.minCumulativeTraceLength,
                       withPreferredDirections,
                       this.useIncreasedRipupCosts,
                       this.thread,
                       this.deadlineMs,
-                      this.workerBoardStates,
-                      chunkBaselineMetrics)));
+                      baselineMetrics)));
         }
 
         for (Future<CandidateResult> future : futures) {
@@ -785,6 +821,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
 
               if (res.result.improved()) {
                 consecutiveFailures = 0;
+                improvedResults.add(res.result);
                 if (winningCandidate == null || res.result.improvedOver(winningCandidate.result)) {
                   winningCandidate = res;
                 }
@@ -825,6 +862,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
     if (!stoppedOrTimedOut && winningCandidate != null && winningCandidate.result.improved()) {
       this.board = winningCandidate.board;
       this.job.board = this.board;
+      int runnersUp =
+          commitRunnersUp(improvedResults, winningCandidate.result, withPreferredDirections);
+      job.logInfo(
+          String.format(
+              Locale.US,
+              "Optimizer pass #%d committed %d of %d improved candidates.",
+              passNo,
+              runnersUp + 1,
+              improvedResults.size()));
       this.minCumulativeTraceLength = this.board.getStatistics().traces.totalWeightedLength;
 
       BoardStatistics boardStatisticsAfter = this.board.getStatistics();
@@ -847,6 +893,67 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 boardStatisticsAfter.connections.incompleteCount,
                 boardStatisticsAfter.clearanceViolations.totalCount)));
     return routeImproved;
+  }
+
+  /**
+   * Commits the pass's other improved candidates after its best one, up to {@code
+   * optimizer.max_commits_per_pass} in total (a value below 1 means no limit). All candidates were
+   * evaluated against the same board, so each one is routed again on the board that the earlier
+   * commits produced and is kept only if it still improves that board. Candidates are committed
+   * best first, so a smaller improvement never takes the space a larger one needs. Returns the
+   * number of candidates committed in addition to the best one.
+   */
+  private int commitRunnersUp(
+      List<ItemRouteResult> improvedResults,
+      ItemRouteResult best,
+      boolean withPreferredDirections) {
+    Integer configured =
+        this.settings.optimizer != null ? this.settings.optimizer.maxCommitsPerPass : null;
+    int maxCommits = configured == null ? 1 : (configured < 1 ? Integer.MAX_VALUE : configured);
+    improvedResults.sort(null);
+    int committed = 0;
+    for (ItemRouteResult candidate : improvedResults) {
+      if (committed + 1 >= maxCommits
+          || (this.thread != null && this.thread.isStopRequested())
+          || (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs)) {
+        break;
+      }
+      if (candidate != best && recommit(candidate.itemId(), withPreferredDirections)) {
+        committed++;
+      }
+    }
+    return committed;
+  }
+
+  /**
+   * Routes the connections of the item again on the live board. Keeps the result, and records its
+   * changes for {@link #passCommits}, if it improves the board; undoes it otherwise. Returns false
+   * if an earlier commit removed the item.
+   */
+  private boolean recommit(int itemId, boolean withPreferredDirections) {
+    Item item = this.board.getItem(itemId);
+    if (item == null) {
+      return false;
+    }
+    this.board.generateSnapshot();
+    ItemRouteResult result =
+        optRouteItemOnBoard(
+            job,
+            this.board,
+            item,
+            0,
+            withPreferredDirections,
+            this.useIncreasedRipupCosts,
+            this.thread,
+            this.deadlineMs);
+    if (result.improved()) {
+      this.passCommits.add(ChangeSet.since(this.board));
+      this.board.popSnapshot();
+    } else {
+      this.board.undo(null);
+    }
+    this.board.clearTransientAutorouteState();
+    return result.improved();
   }
 
   /**
@@ -1024,101 +1131,39 @@ public final class BatchOptimizer extends NamedAlgorithm {
   }
 
   /**
-   * Reuses one candidate board on each executor thread while the baseline board remains unchanged.
-   * A candidate that is not selected is undone in place; an improved candidate transfers ownership
-   * of the worker board to the result and removes the snapshot without undoing its changes.
+   * Routes the connections of one item again on a private copy of the pass's board image. An
+   * improved candidate keeps its board; any other candidate board is dropped.
    */
-  private static final class WorkerBoardState {
-    private RoutingBoard baselineBoard;
-    private RoutingBoard workerBoard;
-
-    RoutingBoard acquire(RoutingBoard baselineBoard) {
-      if (this.workerBoard == null || this.baselineBoard != baselineBoard) {
-        this.baselineBoard = baselineBoard;
-        this.workerBoard = baselineBoard.deepCopy();
-      }
-      this.workerBoard.generateSnapshot();
-      return this.workerBoard;
-    }
-
-    void finish(boolean transferOwnership) {
-      if (this.workerBoard == null) {
-        return;
-      }
-      if (!transferOwnership) {
-        // Discard the private candidate wholesale. Undoing its items cannot make it a
-        // pristine baseline (leaves incremented item ids and failure history) and is
-        // wasted work when the candidate will not be reused.
-        this.workerBoard = null;
-        this.baselineBoard = null;
-        return;
-      }
-      boolean restored = this.workerBoard.popSnapshot();
-      this.workerBoard.clearTransientAutorouteState();
-      if (!restored) {
-        FRLogger.warn("BatchOptimizer: failed to restore the worker-board snapshot");
-      }
-      this.workerBoard = null;
-      this.baselineBoard = null;
-    }
-  }
-
   private static final class OptimizeCandidateTask implements Callable<CandidateResult> {
     private final RoutingJob job;
-    private final RoutingBoard baselineBoard;
+    private final BoardImage image;
     private final int itemId;
     private final double baselineTraceLength;
     private final boolean withPreferredDirections;
     private final boolean useIncreasedRipupCosts;
     private final StoppableThread thread;
     private final Long deadlineMs;
-    private final ThreadLocal<WorkerBoardState> workerBoardStates;
     private final BoardStatistics.OptimizerMetrics baselineMetrics;
 
     OptimizeCandidateTask(
         RoutingJob job,
-        RoutingBoard baselineBoard,
+        BoardImage image,
         int itemId,
         double baselineTraceLength,
         boolean withPreferredDirections,
         boolean useIncreasedRipupCosts,
         StoppableThread thread,
         Long deadlineMs,
-        ThreadLocal<WorkerBoardState> workerBoardStates,
         BoardStatistics.OptimizerMetrics baselineMetrics) {
       this.job = job;
-      this.baselineBoard = baselineBoard;
+      this.image = image;
       this.itemId = itemId;
       this.baselineTraceLength = baselineTraceLength;
       this.withPreferredDirections = withPreferredDirections;
       this.useIncreasedRipupCosts = useIncreasedRipupCosts;
       this.thread = thread;
       this.deadlineMs = deadlineMs;
-      this.workerBoardStates = workerBoardStates;
       this.baselineMetrics = baselineMetrics;
-    }
-
-    OptimizeCandidateTask(
-        RoutingJob job,
-        RoutingBoard baselineBoard,
-        int itemId,
-        double baselineTraceLength,
-        boolean withPreferredDirections,
-        boolean useIncreasedRipupCosts,
-        StoppableThread thread,
-        Long deadlineMs,
-        ThreadLocal<WorkerBoardState> workerBoardStates) {
-      this(
-          job,
-          baselineBoard,
-          itemId,
-          baselineTraceLength,
-          withPreferredDirections,
-          useIncreasedRipupCosts,
-          thread,
-          deadlineMs,
-          workerBoardStates,
-          null);
     }
 
     @Override
@@ -1138,67 +1183,128 @@ public final class BatchOptimizer extends NamedAlgorithm {
       } catch (Throwable ignored) {
       }
 
-      WorkerBoardState workerBoardState = workerBoardStates.get();
-      RoutingBoard workerBoard = workerBoardState.acquire(baselineBoard);
-      boolean snapshotFinished = false;
-      try {
-        Item item = workerBoard.getItem(itemId);
-        if (item == null) {
-          workerBoardState.finish(false);
-          snapshotFinished = true;
-          return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, 0);
-        }
+      RoutingBoard workerBoard = image == null ? null : image.copy();
+      Item item = workerBoard == null ? null : workerBoard.getItem(itemId);
+      if (item == null) {
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, 0);
+      }
+      workerBoard.generateSnapshot();
 
-        FloatPoint position = getItemPosition(item);
+      FloatPoint position = getItemPosition(item);
 
-        RoutingJob candidateJob = new RoutingJob();
-        candidateJob.name = job.name;
-        candidateJob.shortName = job.shortName;
-        candidateJob.routerSettings = job.routerSettings.clone();
-        candidateJob.thread = thread;
-        candidateJob.board = workerBoard;
-        candidateJob.timeoutAt = job.timeoutAt;
+      RoutingJob candidateJob = new RoutingJob();
+      candidateJob.name = job.name;
+      candidateJob.shortName = job.shortName;
+      candidateJob.routerSettings = job.routerSettings.clone();
+      candidateJob.thread = thread;
+      candidateJob.board = workerBoard;
+      candidateJob.timeoutAt = job.timeoutAt;
 
-        ItemRouteResult result =
-            optRouteItemOnBoard(
-                candidateJob,
-                workerBoard,
-                item,
-                baselineTraceLength,
-                withPreferredDirections,
-                useIncreasedRipupCosts,
-                thread,
-                deadlineMs,
-                baselineMetrics);
+      ItemRouteResult result =
+          optRouteItemOnBoard(
+              candidateJob,
+              workerBoard,
+              item,
+              baselineTraceLength,
+              withPreferredDirections,
+              useIncreasedRipupCosts,
+              thread,
+              deadlineMs,
+              baselineMetrics);
 
-        long cpuUsed = 0;
-        long allocUsed = 0;
-        if (mxBean != null) {
-          try {
-            long cpuEnd = mxBean.getThreadCpuTime(Thread.currentThread().threadId());
-            if (cpuStart >= 0 && cpuEnd >= cpuStart) {
-              cpuUsed = cpuEnd - cpuStart;
-            }
-            long allocEnd = mxBean.getThreadAllocatedBytes(Thread.currentThread().threadId());
-            if (allocStart >= 0 && allocEnd >= allocStart) {
-              allocUsed = allocEnd - allocStart;
-            }
-          } catch (Throwable ignored) {
+      long cpuUsed = 0;
+      long allocUsed = 0;
+      if (mxBean != null) {
+        try {
+          long cpuEnd = mxBean.getThreadCpuTime(Thread.currentThread().threadId());
+          if (cpuStart >= 0 && cpuEnd >= cpuStart) {
+            cpuUsed = cpuEnd - cpuStart;
           }
-        }
-
-        boolean improved = result.improved();
-        workerBoardState.finish(improved);
-        snapshotFinished = true;
-        if (improved) {
-          return new CandidateResult(result, workerBoard, position, cpuUsed, allocUsed);
-        }
-        return new CandidateResult(result, null, position, cpuUsed, allocUsed);
-      } finally {
-        if (!snapshotFinished) {
-          workerBoardState.finish(false);
+          long allocEnd = mxBean.getThreadAllocatedBytes(Thread.currentThread().threadId());
+          if (allocStart >= 0 && allocEnd >= allocStart) {
+            allocUsed = allocEnd - allocStart;
+          }
+        } catch (Throwable ignored) {
         }
       }
+
+      if (!result.improved()) {
+        return new CandidateResult(result, null, position, cpuUsed, allocUsed);
+      }
+      if (!workerBoard.popSnapshot()) {
+        FRLogger.warn("BatchOptimizer: failed to remove the candidate-board snapshot");
+      }
+      workerBoard.clearTransientAutorouteState();
+      return new CandidateResult(result, workerBoard, position, cpuUsed, allocUsed);
+    }
+  }
+
+  /**
+   * The traces and vias one commit changed on the live board: the ids of the items it inserted or
+   * changed and detached copies of what they replaced, so that the commit can be reverted.
+   */
+  static final class ChangeSet {
+    private final List<Integer> insertedIds;
+    private final List<Item> removed;
+    private final boolean tracesAndViasOnly;
+
+    private ChangeSet(List<Integer> insertedIds, List<Item> removed, boolean tracesAndViasOnly) {
+      this.insertedIds = insertedIds;
+      this.removed = removed;
+      this.tracesAndViasOnly = tracesAndViasOnly;
+    }
+
+    /** Returns the changes since the board's last snapshot. */
+    static ChangeSet since(RoutingBoard board) {
+      List<UndoableObjects.Storable> before = new ArrayList<>();
+      List<UndoableObjects.Storable> after = new ArrayList<>();
+      board.itemList.changesSinceSnapshot(before, after);
+      List<Integer> insertedIds = new ArrayList<>(after.size());
+      List<Item> removed = new ArrayList<>(before.size());
+      boolean tracesAndViasOnly = true;
+      for (UndoableObjects.Storable storable : after) {
+        Item item = (Item) storable;
+        insertedIds.add(item.getId());
+        tracesAndViasOnly &= item instanceof Trace || item instanceof Via;
+      }
+      for (UndoableObjects.Storable storable : before) {
+        Item item = (Item) storable;
+        Item detached = item.copy(item.getId());
+        detached.board = null;
+        removed.add(detached);
+        tracesAndViasOnly &= item instanceof Trace || item instanceof Via;
+      }
+      return new ChangeSet(insertedIds, removed, tracesAndViasOnly);
+    }
+
+    /**
+     * Reverts the change: removes the inserted items and inserts copies of the replaced ones.
+     * Returns false, without changing the board, if an inserted item is missing or the change
+     * involved other items than traces and vias.
+     */
+    boolean revert(RoutingBoard board) {
+      if (!tracesAndViasOnly) {
+        return false;
+      }
+      List<Item> current = new ArrayList<>(insertedIds.size());
+      for (int id : insertedIds) {
+        Item item = board.getItem(id);
+        if (item == null) {
+          return false;
+        }
+        current.add(item);
+      }
+      for (Item item : current) {
+        board.removeItem(item);
+      }
+      for (Item item : removed) {
+        Item copy = item.copy(item.getId());
+        if (copy instanceof Via via) {
+          via.setPadstack(board.library.padstacks.get(via.getPadstack().id));
+        }
+        board.insertItem(copy);
+      }
+      return true;
     }
   }
 

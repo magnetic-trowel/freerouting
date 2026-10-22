@@ -79,6 +79,38 @@ class BatchOptimizerDeterminismTest extends RoutingFixtureTest {
   }
 
   @Test
+  void multiCommitPassesProduceIdenticalResultsAcrossThreadCounts() {
+    RoutingJob setupJob = getRoutingJob("Issue508-DAC2020_bm01.dsn", createBaseTestingSettings());
+    loadBoard(setupJob);
+    setupJob.routerSettings.setMaxThreads(1);
+    new BatchAutorouter(setupJob).runBatchLoop();
+    setupJob.board.finishAutoroute();
+    RoutingBoard preOptimizedBoard = setupJob.board.deepCopy();
+
+    RoutingJob job1 = optimizeWithAllCommits(preOptimizedBoard, 1);
+    RoutingJob job2 = optimizeWithAllCommits(preOptimizedBoard, 4);
+
+    BoardStatistics stats1 = job1.board.getStatistics();
+    BoardStatistics stats2 = job2.board.getStatistics();
+    assertEquals(job1.board.getHash(), job2.board.getHash());
+    assertEquals(stats1.items.viaCount, stats2.items.viaCount);
+    assertEquals(stats1.traces.totalLength, stats2.traces.totalLength, 0.001);
+    assertEquals(stats1.clearanceViolations.totalCount, stats2.clearanceViolations.totalCount);
+  }
+
+  private RoutingJob optimizeWithAllCommits(RoutingBoard preOptimizedBoard, int threads) {
+    RoutingJob job = getRoutingJob("Issue508-DAC2020_bm01.dsn", createBaseTestingSettings());
+    loadBoard(job);
+    job.board = preOptimizedBoard.deepCopy();
+    job.routerSettings.optimizer.maxThreads = threads;
+    job.routerSettings.optimizer.maxPasses = 1;
+    job.routerSettings.optimizer.maxItems = 30;
+    job.routerSettings.optimizer.maxCommitsPerPass = 0;
+    BatchOptimizer.create(job).runBatchLoop();
+    return job;
+  }
+
+  @Test
   void initialBoardStatePreservedWhenOptimizationDoesNotImprove() {
     RoutingJob job = getRoutingJob("Issue508-DAC2020_bm01.dsn", createBaseTestingSettings());
     loadBoard(job);

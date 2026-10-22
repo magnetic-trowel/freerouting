@@ -39,17 +39,27 @@ public final class RoutingBoardUndoFacade {
   }
 
   synchronized RoutingBoard deepCopy() {
-    ObjectOutputStream outputStream = null;
-    ObjectInputStream inputStream = null;
-    try {
-      ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-      outputStream = new ObjectOutputStream(byteArrayOutputStream);
+    byte[] image = serialize();
+    return image == null ? null : copyOf(image);
+  }
+
+  /** Serializes the board for {@link #copyOf}. Returns null if serialization fails. */
+  synchronized byte[] serialize() {
+    try (ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        ObjectOutputStream outputStream = new ObjectOutputStream(byteArrayOutputStream)) {
       outputStream.writeObject(board);
       outputStream.flush();
+      return byteArrayOutputStream.toByteArray();
+    } catch (Exception exception) {
+      FRLogger.error("Exception in deep_copy_routing_board" + exception, exception);
+      return null;
+    }
+  }
 
-      ByteArrayInputStream byteArrayInputStream =
-          new ByteArrayInputStream(byteArrayOutputStream.toByteArray());
-      inputStream = new app.freerouting.util.SafeObjectInputStream(byteArrayInputStream);
+  /** Creates the board that {@link #deepCopy} would return from serialized board bytes. */
+  static RoutingBoard copyOf(byte[] image) {
+    try (ObjectInputStream inputStream =
+        new app.freerouting.util.SafeObjectInputStream(new ByteArrayInputStream(image))) {
       RoutingBoard boardCopy = (RoutingBoard) inputStream.readObject();
       boardCopy.clearAllItemTemporaryAutorouteData();
       boardCopy.finishAutoroute();
@@ -57,17 +67,6 @@ public final class RoutingBoardUndoFacade {
     } catch (Exception exception) {
       FRLogger.error("Exception in deep_copy_routing_board" + exception, exception);
       return null;
-    } finally {
-      try {
-        if (outputStream != null) {
-          outputStream.close();
-        }
-        if (inputStream != null) {
-          inputStream.close();
-        }
-      } catch (Exception exception) {
-        FRLogger.error("Exception closing deep-copy streams" + exception, exception);
-      }
     }
   }
 
@@ -78,6 +77,7 @@ public final class RoutingBoardUndoFacade {
     for (UndoableObjects.Storable storable : cancelledObjects) {
       Item currentItem = (Item) storable;
       board.searchTreeManager.remove(currentItem);
+      board.routingLedger().noteRemoved(currentItem);
       if (board.communication != null && board.communication.observers != null) {
         board.communication.observers.notifyDeleted(currentItem);
       }
@@ -91,6 +91,7 @@ public final class RoutingBoardUndoFacade {
       Item currentItem = (Item) storable;
       currentItem.board = board;
       board.searchTreeManager.insert(currentItem);
+      board.routingLedger().noteInserted(currentItem);
       currentItem.clearAutorouteInfo();
       if (board.communication != null && board.communication.observers != null) {
         board.communication.observers.notifyNew(currentItem);
@@ -101,5 +102,6 @@ public final class RoutingBoardUndoFacade {
         }
       }
     }
+    board.incrementRevision();
   }
 }

@@ -59,6 +59,39 @@ class NetRoutingLedgerTest {
     assertEquals(1, board.routingLedger().incompleteCount());
   }
 
+  @Test
+  void incompleteCountMatchesFullScanAcrossUndoAndRedo() {
+    BoardReadResult result =
+        DsnReader.readBoard(
+            DsnTestFixtures.openResource("scoring-perfect-two-pin.dsn"), null, null);
+    assertInstanceOf(BoardReadResult.Success.class, result);
+    RoutingBoard board = (RoutingBoard) ((BoardReadResult.Success) result).board();
+
+    List<Pin> pins = new ArrayList<>(board.getPins());
+    int netNumber = pins.get(0).getNetNumber(0);
+    NetClass netClass = board.rules.nets.get(netNumber).getNetClass();
+    board.insertTraceWithoutCleaning(
+        new Polyline(pins.get(0).getCenter(), pins.get(1).getCenter()),
+        0,
+        netClass.getTraceHalfWidth(0),
+        new int[] {netNumber},
+        netClass.getTraceClearanceClass(),
+        FixedState.UNFIXED);
+    assertEquals(0, board.routingLedger().incompleteCount());
+
+    board.generateSnapshot();
+    board.removeItem(board.getTraces().iterator().next());
+    assertEquals(1, board.routingLedger().incompleteCount());
+
+    board.undo(null);
+    assertMatchesFullScan(board);
+    assertEquals(0, board.routingLedger().incompleteCount());
+
+    board.redo(null);
+    assertMatchesFullScan(board);
+    assertEquals(1, board.routingLedger().incompleteCount());
+  }
+
   private static void assertMatchesFullScan(RoutingBoard board) {
     DesignRulesChecker checker = new DesignRulesChecker(board, null);
     checker.calculateAllIncompletes();
