@@ -299,6 +299,7 @@ public final class BatchFanout {
             new app.freerouting.geometry.planar.Point[] {currentPin.boardPin.getCenter()});
 
         int maxItemIdBeforeFanout = this.routingBoard.communication.idGenerator.maxGeneratedId();
+        SortedSet<Integer> netItemsBeforeFanout = netItemIds(netNumber);
         this.routingBoard.startMarkingChangedArea();
         long pinStartNanos = System.nanoTime();
         AutorouteAttemptResult currentResult =
@@ -323,6 +324,14 @@ public final class BatchFanout {
                 new app.freerouting.geometry.planar.Point[] {currentPin.boardPin.getCenter()});
             currentResult = fanoutDrcRejection;
           }
+        }
+        if (currentResult.state == app.freerouting.autoroute.AutorouteAttemptState.ROUTED
+            && netItemIds(netNumber).equals(netItemsBeforeFanout)) {
+          // The search ended on copper the net already had, so this is not progress and the pin is
+          // not retried until its component changes.
+          currentResult =
+              new AutorouteAttemptResult(
+                  app.freerouting.autoroute.AutorouteAttemptState.FAILED, "fanout added no copper");
         }
 
         switch (currentResult.state) {
@@ -552,6 +561,14 @@ public final class BatchFanout {
         passStats);
 
     return routedCount;
+  }
+
+  private SortedSet<Integer> netItemIds(int netNumber) {
+    SortedSet<Integer> ids = new TreeSet<>();
+    for (var item : this.routingBoard.getConnectableItems(netNumber)) {
+      ids.add(item.getId());
+    }
+    return ids;
   }
 
   /**
