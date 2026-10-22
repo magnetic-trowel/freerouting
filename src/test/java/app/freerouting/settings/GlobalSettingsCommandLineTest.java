@@ -351,4 +351,28 @@ class GlobalSettingsCommandLineTest {
 
     assertEquals(8, settings.apiServerSettings.maxParallelJobs);
   }
+
+  @Test
+  @SuppressWarnings("deprecation") // CLI flags write into the JSON/CLI routerSettings bridge.
+  void optimizerScoringVersionAcceptsShortNames() {
+    assertTrue(settings.setValue("router.optimizer_scoring.version", "v1"));
+    assertEquals(
+        OptimizerScoringVersion.V1_LEGACY, settings.routerSettings.optimizerScoring.version);
+
+    assertTrue(settings.setValue("router.optimizer_scoring.version", "v2"));
+    assertEquals(
+        OptimizerScoringVersion.V2_LOWER_BOUND, settings.routerSettings.optimizerScoring.version);
+  }
+
+  @Test
+  @SuppressWarnings("deprecation") // CLI flags write into the JSON/CLI routerSettings bridge.
+  void optimizerImprovementThresholdIsAlwaysPercent() {
+    settings.applyCommandLineArguments(
+        new String[] {"--router.optimizer.improvement_threshold=0.5"});
+    assertEquals(0.5f, settings.routerSettings.optimizer.optimizationImprovementThreshold, 0.0001f);
+
+    settings.applyCommandLineArguments(new String[] {"-oit", "0.035"});
+    assertEquals(
+        0.035f, settings.routerSettings.optimizer.optimizationImprovementThreshold, 0.0001f);
+  }
 }

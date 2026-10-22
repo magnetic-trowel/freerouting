@@ -135,6 +135,26 @@ public class CliSettings implements SettingsSource {
     return settings;
   }
 
+  /**
+   * Maps the short scoring-version names ({@code v1}, {@code v2}, {@code legacy}, {@code
+   * continuous}, {@code lower_bound}) to their enum constants for a {@code *.version} field path
+   * relative to the router settings; returns any other value unchanged. Shared with {@link
+   * app.freerouting.settings.GlobalSettings#setValue} so both command-line parsers accept the same
+   * values.
+   */
+  public static String normalizeRouterValue(String fieldPath, String value) {
+    if (value == null || !fieldPath.endsWith(".version")) {
+      return value;
+    }
+    return switch (value.trim().toLowerCase()) {
+      case "v1", "legacy" -> "V1_LEGACY";
+      case "v2", "continuous" ->
+          fieldPath.startsWith("optimizer") ? "V2_LOWER_BOUND" : "V2_CONTINUOUS";
+      case "lower_bound", "lower-bound" -> "V2_LOWER_BOUND";
+      default -> value;
+    };
+  }
+
   private void applyRouterSetting(RouterSettings settings, String propertyName, String value) {
     try {
       if ("scoring-version".equals(propertyName)) {
@@ -158,28 +178,7 @@ public class CliSettings implements SettingsSource {
         }
         fieldPath = canonical;
       }
-      if (fieldPath.endsWith(".version")) {
-        value =
-            switch (value.trim().toLowerCase()) {
-              case "v1", "legacy" -> "V1_LEGACY";
-              case "v2", "continuous" ->
-                  fieldPath.startsWith("optimizer") ? "V2_LOWER_BOUND" : "V2_CONTINUOUS";
-              case "lower_bound", "lower-bound" -> "V2_LOWER_BOUND";
-              default -> value;
-            };
-      }
-      if ("router.optimizer.improvement_threshold".equals(propertyName)
-          || fieldPath.endsWith("improvement_threshold")
-          || fieldPath.endsWith("optimizationImprovementThreshold")) {
-        try {
-          float parsed = Float.parseFloat(value.trim());
-          if (parsed > 0.0f && parsed < 1.0f) {
-            value = String.valueOf(parsed * 100.0f);
-          }
-        } catch (NumberFormatException ignored) {
-          // Fall back to raw string value if parsing as float fails
-        }
-      }
+      value = normalizeRouterValue(fieldPath, value);
 
       ReflectionUtil.setFieldValue(settings, fieldPath, value);
       parsedArguments.put(propertyName, value);

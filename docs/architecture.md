@@ -525,7 +525,7 @@ Optimizer V2:
 $$\mathrm{score}_{\mathrm{opt}} = \max\bigl(0,\ 1000 - \Delta L - \Delta V - \Delta B\bigr)$$
 
 The optimizer stops a pass series when relative score gain falls below
-`optimizer.improvement_threshold` (default 0.01 of the incumbent optimizer score), not when
+`optimizer.improvement_threshold` (a percentage of the incumbent optimizer score, default 2.5), not when
 the score is merely close to 1000.
 
 Difficulty \(D = \max(1,\ P \times N_L)\) (pins × signal layers) scales DRC, via, and bend penalties. Unrouted fraction and length excess do **not** divide by \(D\).

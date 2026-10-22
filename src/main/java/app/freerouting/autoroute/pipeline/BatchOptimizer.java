@@ -367,16 +367,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 DefaultSettings.DEFAULT_OPTIMIZER_IMPROVEMENT_THRESHOLD));
         this.settings.optimizer.optimizationImprovementThreshold =
             DefaultSettings.DEFAULT_OPTIMIZER_IMPROVEMENT_THRESHOLD;
-      } else if (threshold > 0.0f && threshold < 0.1f) {
-        float scaled = threshold * 100.0f;
-        job.logInfo(
-            String.format(
-                Locale.US,
-                "Optimizer improvement threshold appears to be specified as a fraction (%.4f). "
-                    + "Auto-scaling to percentage (%.2f%%).",
-                threshold,
-                scaled));
-        this.settings.optimizer.optimizationImprovementThreshold = scaled;
       }
     }
 

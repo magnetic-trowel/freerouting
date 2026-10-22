@@ -199,13 +199,14 @@ if it made the board less complete or dirtier:
 
 ### When the optimizer stops
 
-`optimizer.improvement_threshold` (default **0.01**) is a **relative** gain:
+`optimizer.improvement_threshold` (default **2.5**) is a **relative** gain in percent:
 
 $$
-\frac{\mathrm{score}_{\mathrm{after}} - \mathrm{score}_{\mathrm{before}}}{\mathrm{score}_{\mathrm{before}}}
+100 \cdot \frac{\mathrm{score}_{\mathrm{after}} - \mathrm{score}_{\mathrm{before}}}{\mathrm{score}_{\mathrm{before}}}
 $$
 
-Stop when that ratio is below the threshold. There is no “already close to 1000”
+Stop when that percentage is below the threshold. The value is always a percentage: `0.5`
+means 0.5 %, not 50 %. There is no “already close to 1000”
 stop. On a typical finished board (~800–1000), 1% is about 8–10 points.
 
 ---

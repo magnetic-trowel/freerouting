@@ -7,6 +7,7 @@ import app.freerouting.autoroute.ItemSelectionStrategy;
 import app.freerouting.core.BoardFileDetails;
 import app.freerouting.io.FileFormat;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.settings.sources.CliSettings;
 import app.freerouting.settings.sources.DefaultSettings;
 import app.freerouting.util.ReflectionUtil;
 import app.freerouting.util.gson.GsonProvider;
@@ -554,6 +555,7 @@ public class GlobalSettings implements Serializable {
               "router." + relative, "router." + canonical);
         }
         propertyName = "router." + canonical;
+        newValue = CliSettings.normalizeRouterValue(canonical, newValue);
       }
       ReflectionUtil.setFieldValue(this, propertyName, newValue);
       return true;
@@ -809,9 +811,8 @@ public class GlobalSettings implements Serializable {
         } else if (args[i].startsWith("-oit")) {
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
             try {
-              float val = Float.parseFloat(args[i + 1]);
               routerSettings.optimizer.optimizationImprovementThreshold =
-                  (val > 0.0f && val < 1.0f) ? val * 100.0f : val;
+                  Float.parseFloat(args[i + 1]);
             } catch (NumberFormatException ignored) {
               // Fall back to existing settings if parsing fails
             }

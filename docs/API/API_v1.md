@@ -429,7 +429,7 @@ If `Freerouting-Environment-Host` is absent or does not match the `<ToolName>/<V
             "max_passes": 20
         },
         "max_threads": 1,
-        "improvement_threshold": 0.01,
+        "improvement_threshold": 2.5,
         "trace_pull_tight_accuracy": 500,
         "allowed_via_types": true,
         "via_costs": 42,
