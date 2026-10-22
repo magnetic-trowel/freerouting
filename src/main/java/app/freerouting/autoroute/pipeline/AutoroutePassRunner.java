@@ -15,6 +15,7 @@ import app.freerouting.board.model.structure.Unit;
 import app.freerouting.core.RouterCounters;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.drc.DesignRulesChecker;
+import app.freerouting.drc.NetRoutingLedger;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.logger.FRLogger;
@@ -85,15 +86,8 @@ final class AutoroutePassRunner {
       routerCounters.failedToBeRoutedCount = 0;
       routerCounters.routedCount = 0;
 
-      long statisticsStart = BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
-      DesignRulesChecker tempDrc = new DesignRulesChecker(router.board, null);
-      tempDrc.calculateAllIncompletes();
-      routerCounters.incompleteCount = tempDrc.getIncompleteCount();
-      if (BatchAutorouter.isBenchmarkProfileEnabled()) {
-        router.profileIntermediateStatisticsNanos += System.nanoTime() - statisticsStart;
-      }
-
-      logIncompleteDetails(passNo, itemsToGoCount, routerCounters, tempDrc);
+      routerCounters.incompleteCount = router.calculateIncompleteCount(router.board);
+      logIncompleteDetails(passNo, itemsToGoCount, routerCounters);
       router.fireBoardUpdatedEvent(stats, routerCounters, router.board);
 
       int rippedItemCount = 0;
@@ -126,7 +120,9 @@ final class AutoroutePassRunner {
           SortedSet<Item> rippedItemList = new TreeSet<>();
           Map<Item, Integer> rippedItemCosts = new LinkedHashMap<>();
           final int netItemsBefore =
-              router.board.getConnectableItems(currentItem.getNetNumber(i)).size();
+              FRLogger.isTraceEnabled()
+                  ? router.board.getConnectableItems(currentItem.getNetNumber(i)).size()
+                  : 0;
           if (BatchAutorouter.isBenchmarkProfileEnabled()) {
             router.profileRouteItemCount++;
             Net routeNet = router.board.rules.nets.get(currentItem.getNetNumber(i));
@@ -149,13 +145,10 @@ final class AutoroutePassRunner {
             router.profileAutorouteItemNanos += System.nanoTime() - routeItemStart;
           }
 
-          logRippedItems(currentItem, i, rippedItemList, rippedItemCosts);
           if (FRLogger.isTraceEnabled()) {
+            logRippedItems(currentItem, i, rippedItemList, rippedItemCosts);
             logTraceRouteComparison(
                 currentItem, i, autorouterResult, rippedItemList, netItemsBefore);
-          }
-          if (currentItem.getNetNumber(i) == 94) {
-            logNet94Items();
           }
 
           if (autorouterResult.state == AutorouteAttemptState.ROUTED) {
@@ -202,13 +195,13 @@ final class AutoroutePassRunner {
         }
       }
 
-      logTailRemoval(passNo, router.calculateIncompleteCount(router.board), true);
+      logTailRemoval(passNo, true);
       if (router.removeUnconnectedVias) {
         router.removeTails(Item.StopConnectionOption.NONE);
       } else {
         router.removeTails(Item.StopConnectionOption.FANOUT_VIA);
       }
-      logTailRemoval(passNo, router.calculateIncompleteCount(router.board), false);
+      logTailRemoval(passNo, false);
 
       long finalStatisticsStart =
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
@@ -327,8 +320,7 @@ final class AutoroutePassRunner {
     this.stagnationCount = 0;
   }
 
-  private void logIncompleteDetails(
-      int passNo, int itemsToGoCount, RouterCounters counters, DesignRulesChecker drc) {
+  private void logIncompleteDetails(int passNo, int itemsToGoCount, RouterCounters counters) {
     if (counters.incompleteCount <= 0) {
       return;
     }
@@ -340,13 +332,12 @@ final class AutoroutePassRunner {
             + " incompletes across "
             + itemsToGoCount
             + " items to route");
-    for (int netNumber = 1; netNumber <= router.board.rules.nets.maxNetNumber(); netNumber++) {
-      int netIncompletes = drc.getIncompleteCount(netNumber);
-      if (netIncompletes > 0) {
-        Net net = router.board.rules.nets.get(netNumber);
-        String netName = net != null ? net.name : "net#" + netNumber;
-        router.job.logDebug("  Net '" + netName + "' has " + netIncompletes + " incomplete(s)");
-      }
+    NetRoutingLedger ledger = router.board.routingLedger();
+    for (int netNumber : ledger.incompleteNetNumbers()) {
+      Net net = router.board.rules.nets.get(netNumber);
+      String netName = net != null ? net.name : "net#" + netNumber;
+      router.job.logDebug(
+          "  Net '" + netName + "' has " + ledger.incompleteCount(netNumber) + " incomplete(s)");
     }
   }
 
@@ -428,56 +419,6 @@ final class AutoroutePassRunner {
         router.getImpactedPoints(currentItem));
   }
 
-  private void logNet94Items() {
-    FRLogger.trace(
-        "BatchAutorouter.autoroute_pass",
-        "compare_trace_dump_net_items",
-        "Dump net 94 items",
-        "Net #94",
-        new Point[0]);
-    for (Item netItem : router.board.getConnectableItems(94)) {
-      if (netItem instanceof Trace trace) {
-        FRLogger.trace(
-            "BatchAutorouter.autoroute_pass",
-            "compare_trace_dump_net_item",
-            "Trace layer="
-                + trace.getLayer()
-                + " corners="
-                + trace.firstCorner()
-                + " to "
-                + trace.lastCorner(),
-            "Net #94,Item #" + trace.getId() + ",Type=Trace",
-            new Point[] {trace.firstCorner(), trace.lastCorner()});
-      } else if (netItem instanceof Via via) {
-        FRLogger.trace(
-            "BatchAutorouter.autoroute_pass",
-            "compare_trace_dump_net_item",
-            "Via center=" + via.getCenter(),
-            "Net #94,Item #" + via.getId() + ",Type=Via",
-            new Point[] {via.getCenter()});
-      } else if (netItem instanceof Pin pin) {
-        FRLogger.trace(
-            "BatchAutorouter.autoroute_pass",
-            "compare_trace_dump_net_item",
-            "Pin center="
-                + pin.getCenter()
-                + " name="
-                + pin.name()
-                + " comp="
-                + pin.componentName(),
-            "Net #94,Item #" + pin.getId() + ",Type=Pin",
-            new Point[] {pin.getCenter()});
-      } else {
-        FRLogger.trace(
-            "BatchAutorouter.autoroute_pass",
-            "compare_trace_dump_net_item",
-            "Item " + netItem.getClass().getSimpleName(),
-            "Net #94,Item #" + netItem.getId() + ",Type=" + netItem.getClass().getSimpleName(),
-            router.getImpactedPoints(netItem));
-      }
-    }
-  }
-
   private void updateProgress(
       RouterCounters counters,
       int itemsToGoCount,
@@ -486,17 +427,17 @@ final class AutoroutePassRunner {
       int routed,
       int skipped) {
     router.progressItemsSinceStatistics++;
-    if (router.progressItemsSinceStatistics >= BatchAutorouter.PROGRESS_STATISTICS_ITEM_INTERVAL) {
-      long progressStatisticsStart =
-          BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
-      router.progressStatistics = new BoardStatistics(router.board, null, false);
-      router.progressItemsSinceStatistics = 0;
-      if (BatchAutorouter.isBenchmarkProfileEnabled()) {
-        router.profileBoardStatisticsNanos += System.nanoTime() - progressStatisticsStart;
-      }
-    }
-
     if (router.shouldFireBoardUpdate()) {
+      if (router.progressItemsSinceStatistics
+          >= BatchAutorouter.PROGRESS_STATISTICS_ITEM_INTERVAL) {
+        long progressStatisticsStart =
+            BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
+        router.progressStatistics = new BoardStatistics(router.board, null, false);
+        router.progressItemsSinceStatistics = 0;
+        if (BatchAutorouter.isBenchmarkProfileEnabled()) {
+          router.profileBoardStatisticsNanos += System.nanoTime() - progressStatisticsStart;
+        }
+      }
       counters.queuedToBeRoutedCount = itemsToGoCount;
       counters.skippedCount = skipped;
       counters.rippedCount = rippedItemCount;
@@ -564,7 +505,11 @@ final class AutoroutePassRunner {
     return result;
   }
 
-  private void logTailRemoval(int passNo, int incompleteCount, boolean before) {
+  private void logTailRemoval(int passNo, boolean before) {
+    if (!FRLogger.isTraceEnabled()) {
+      return;
+    }
+    int incompleteCount = router.calculateIncompleteCount(router.board);
     FRLogger.trace(
         "BatchAutorouter.autoroute_pass",
         "compare_trace_remove_tails",

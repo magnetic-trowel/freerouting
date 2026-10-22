@@ -328,29 +328,6 @@ class FoundConnectionLocatorAnyAngle extends FoundConnectionLocator {
     if (resultCorner != null && resultCorner != this.currentFromPoint) {
       result.add(resultCorner);
     }
-    if (this.ctrl.netNumber == 33 || this.ctrl.netNumber == 66 || this.ctrl.netNumber == 67) {
-      FRLogger.trace(
-          "compare_trace_next_corners_raw net="
-              + this.ctrl.netNumber
-              + ", layer="
-              + this.currentTraceLayer
-              + ", from_door="
-              + this.currentFromDoorIndex
-              + ", to_door="
-              + this.currentToDoorIndex
-              + ", target_door="
-              + this.currentTargetDoorIndex
-              + ", endOfTrace="
-              + endOfTrace
-              + ", corrected="
-              + (correctedResult != null)
-              + ", result_size="
-              + result.size()
-              + ", resultCorner="
-              + resultCorner
-              + ", current_from="
-              + this.currentFromPoint);
-    }
     return result;
   }
 

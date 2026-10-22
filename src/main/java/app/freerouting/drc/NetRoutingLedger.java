@@ -63,6 +63,13 @@ public final class NetRoutingLedger {
     return incompleteTotal;
   }
 
+  /** Returns the incomplete-connection count of one net, recomputing dirty nets first. */
+  public synchronized int incompleteCount(int netNumber) {
+    ensureBuilt();
+    flushDirty();
+    return netNumber >= 1 && netNumber < incompleteByNet.length ? incompleteByNet[netNumber] : 0;
+  }
+
   /** Returns the stable maximum connection count from pins and conduction areas. */
   public synchronized int maximumConnections() {
     ensureBuilt();

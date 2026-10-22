@@ -22,7 +22,7 @@ import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
-import app.freerouting.drc.DesignRulesChecker;
+import app.freerouting.drc.NetRoutingLedger;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.RouterSettings;
@@ -445,35 +445,7 @@ final class AutorouteBatchLoop {
         job.logInfo(passCompletedMessage);
       }
 
-      DesignRulesChecker tempDrc = new DesignRulesChecker(router.board, null);
-      tempDrc.calculateAllIncompletes();
-      StringBuilder perNetBreakdown = new StringBuilder();
-      for (int netNumber = 1; netNumber <= router.board.rules.nets.maxNetNumber(); netNumber++) {
-        int netIncomplete = tempDrc.getIncompleteCount(netNumber);
-        if (netIncomplete > 0) {
-          FRLogger.trace(
-              "BatchAutorouter.autoroute_pass",
-              "compare_unrouted_net",
-              "pass=" + currentPass + ", net=" + netNumber + ", incomplete=" + netIncomplete,
-              "Net #" + netNumber,
-              new Point[0]);
-          if (!perNetBreakdown.isEmpty()) {
-            perNetBreakdown.append(',');
-          }
-          perNetBreakdown.append(netNumber).append('=').append(netIncomplete);
-        }
-      }
-      FRLogger.trace(
-          "BatchAutorouter.autoroute_pass",
-          "compare_unrouted_breakdown",
-          "pass="
-              + currentPass
-              + ", total="
-              + tempDrc.getIncompleteCount()
-              + ", breakdown="
-              + perNetBreakdown,
-          "",
-          new Point[0]);
+      logUnroutedBreakdown(currentPass);
 
       if (Boolean.TRUE.equals(router.settings.autorouter.saveIntermediateStages)) {
         fireBoardSnapshotEvent(router.board);
@@ -722,6 +694,38 @@ final class AutorouteBatchLoop {
     }
 
     return !router.thread.isStopAutoRouterRequested();
+  }
+
+  private void logUnroutedBreakdown(int currentPass) {
+    if (!FRLogger.isTraceEnabled()) {
+      return;
+    }
+    NetRoutingLedger ledger = router.board.routingLedger();
+    StringBuilder perNetBreakdown = new StringBuilder();
+    for (int netNumber : ledger.incompleteNetNumbers()) {
+      int netIncomplete = ledger.incompleteCount(netNumber);
+      FRLogger.trace(
+          "BatchAutorouter.autoroute_pass",
+          "compare_unrouted_net",
+          "pass=" + currentPass + ", net=" + netNumber + ", incomplete=" + netIncomplete,
+          "Net #" + netNumber,
+          new Point[0]);
+      if (!perNetBreakdown.isEmpty()) {
+        perNetBreakdown.append(',');
+      }
+      perNetBreakdown.append(netNumber).append('=').append(netIncomplete);
+    }
+    FRLogger.trace(
+        "BatchAutorouter.autoroute_pass",
+        "compare_unrouted_breakdown",
+        "pass="
+            + currentPass
+            + ", total="
+            + ledger.incompleteCount()
+            + ", breakdown="
+            + perNetBreakdown,
+        "",
+        new Point[0]);
   }
 
   private int calculateIncompleteCount(RoutingBoard board) {

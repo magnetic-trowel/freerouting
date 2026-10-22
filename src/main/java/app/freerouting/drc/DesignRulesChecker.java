@@ -8,7 +8,6 @@ import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.Component;
 import app.freerouting.board.model.structure.Unit;
-import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.constants.Constants;
 import app.freerouting.core.library.Package;
 import app.freerouting.geometry.planar.Point;
@@ -881,29 +880,6 @@ public class DesignRulesChecker {
             + " (formula: total_items - netCount)",
         "Incomplete Count",
         new Point[0]);
-
-    int[] focusNets = new int[] {98, 99};
-    for (int netNumber : focusNets) {
-      if (netNumber >= 1 && netNumber <= netItemLists.size()) {
-        int netItemsCount = netItemLists.get(netNumber - 1).size();
-        Net net = board.rules.nets.get(netNumber);
-        String netName = net != null ? net.name : "unknown";
-        FRLogger.trace(
-            "DesignRulesChecker.calculateAllIncompletes",
-            "netItemCount",
-            "Net item count: net=" + netNumber + ", name=" + netName + ", items=" + netItemsCount,
-            "Net #" + netNumber + " (" + netName + ")",
-            new Point[0]);
-
-        // Let's validate all the polyline traces for this net
-        var netItems = netItemLists.get(netNumber - 1);
-        for (Item item : netItems) {
-          if (item instanceof PolylineTrace trace) {
-            // trace.validateAndLogPolylineIntegrity();
-          }
-        }
-      }
-    }
 
     this.netIncompletes = new NetIncompletes[maxNetNo];
     for (int i = 0; i < netIncompletes.length; i++) {
