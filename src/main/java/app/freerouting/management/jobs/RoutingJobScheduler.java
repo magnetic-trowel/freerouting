@@ -97,6 +97,7 @@ public final class RoutingJobScheduler {
                               RouterSettings callerSettings =
                                   job.routerSettings != null ? job.routerSettings.clone() : null;
                               HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
+                              boardManager.holdPostLoadProcessing();
                               if (isDsn) {
                                 boardManager.loadFromSpecctraDsn(
                                     job.input.getData(), null, new ItemIdGenerator());
@@ -263,6 +264,9 @@ public final class RoutingJobScheduler {
                                   FRLogger.error("Failed to load session data", e);
                                 }
                               }
+
+                              // The rules and the session are on the board: scan it now.
+                              boardManager.releasePostLoadProcessing();
 
                               // All pre-checks look fine, start the routing process on a new thread
                               StoppableThread routerThread =

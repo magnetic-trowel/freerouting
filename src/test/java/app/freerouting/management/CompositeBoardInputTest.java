@@ -85,4 +85,44 @@ class CompositeBoardInputTest extends RoutingFixtureTest {
         "F.Cu prefers vertical in the DSN");
     assertTrue(job.routerSettings.getLayerActive(1), "B.Cu stays active");
   }
+
+  /**
+   * The deferred post-load scan used to compute the optimizer's score bounds while the rules file
+   * was still being applied, and cached them on the board for good. The optimizer then compared the
+   * live board (old rules) with candidate copies (new rules) on different scales.
+   */
+  @Test
+  void scoreBoundsReflectTheRulesFile() throws Exception {
+    RoutingJob sampleJob = getRoutingJob("Issue508-DAC2020_bm08.dsn");
+    byte[] dsnBytes = sampleJob.input.getData().readAllBytes();
+    String rules = "(rules PCB bm08\n  (rule\n    (width 150.0)\n    (clear 150.0)\n  )\n)\n";
+
+    CompositeBoardInput input = new CompositeBoardInput();
+    input.setDesign(dsnBytes, "bm08.dsn");
+    input.setRules(rules.getBytes(StandardCharsets.UTF_8), "bm08.rules");
+    RoutingJob job = new RoutingJob(UUID.randomUUID());
+    input.assembleBoard(job);
+    job.board.awaitPostLoad();
+
+    var live = new app.freerouting.core.scoring.BoardStatistics(job.board).bounds;
+    var fresh = new app.freerouting.core.scoring.BoardStatistics(job.board.deepCopy()).bounds;
+    assertEquals(fresh.viaEquivalentLengthMm, live.viaEquivalentLengthMm, 1e-6);
+    assertEquals(fresh.bendEquivalentLengthMm, live.bendEquivalentLengthMm, 1e-6);
+  }
+
+  /** The scheduler reloads the job's input; the session used to be dropped on the way. */
+  @Test
+  void sessionIsHandedToTheScheduler() throws Exception {
+    byte[] dsnBytes = Files.readAllBytes(Path.of("fixtures/Issue508-DAC2020_bm05.dsn"));
+    byte[] sesBytes = Files.readAllBytes(Path.of("fixtures/Issue508-DAC2020_bm05.ses"));
+
+    CompositeBoardInput input = new CompositeBoardInput();
+    input.setDesign(dsnBytes, "bm05.dsn");
+    input.setSession(sesBytes, "bm05.ses");
+    RoutingJob job = new RoutingJob(UUID.randomUUID());
+    input.assembleBoard(job);
+
+    assertNotNull(job.initialSession, "session must reach the scheduler");
+    assertEquals(sesBytes.length, job.initialSession.getData().readAllBytes().length);
+  }
 }

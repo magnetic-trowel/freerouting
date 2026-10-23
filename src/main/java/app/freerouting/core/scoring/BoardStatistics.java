@@ -89,6 +89,14 @@ public class BoardStatistics implements Serializable {
   @SerializedName("fanout")
   public BoardStatisticsFanout fanout = new BoardStatisticsFanout();
 
+  /**
+   * Forgets the cached optimizer score bounds of the board. Call it after changing the rules the
+   * bounds depend on (default trace width, clearance, vias), such as after reading a rules file.
+   */
+  public static void forgetBounds(BasicBoard board) {
+    BoardStatisticsBoundsCalculator.invalidate(board);
+  }
+
   /** Creates empty board statistics. */
   public BoardStatistics() {}
 

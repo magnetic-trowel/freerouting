@@ -112,6 +112,9 @@ public class BasicBoard implements Serializable {
   public transient app.freerouting.drc.ClearanceBaseline clearanceBaseline;
   public transient CompletableFuture<Void> postLoadFuture;
 
+  /** Starts held post-load processing; set while a loader holds it, see awaitPostLoad. */
+  public transient Runnable postLoadStarter;
+
   /** The rectangle, where the graphics may be not up-to-date. */
   private transient IntBox updateBox = IntBox.EMPTY;
 
@@ -1684,6 +1687,11 @@ public class BasicBoard implements Serializable {
    * accessing or mutating board data.
    */
   public void awaitPostLoad() {
+    Runnable starter = this.postLoadStarter;
+    if (starter != null) {
+      this.postLoadStarter = null;
+      starter.run();
+    }
     if (this.postLoadFuture != null) {
       try {
         this.postLoadFuture.join();

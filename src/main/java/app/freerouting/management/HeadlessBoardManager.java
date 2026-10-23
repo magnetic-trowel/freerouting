@@ -180,6 +180,11 @@ public class HeadlessBoardManager implements BoardManager {
    */
   protected long originalBoardChecksum;
 
+  /** Set by {@link #holdPostLoadProcessing()}; the held scan waits in heldPostLoadStart. */
+  private boolean holdPostLoadProcessing;
+
+  private Runnable heldPostLoadStart;
+
   /**
    * Creates a new headless board manager for the specified routing job.
    *
@@ -993,6 +998,26 @@ public class HeadlessBoardManager implements BoardManager {
     // load (including GUI loads) on large designs.
   }
 
+  /**
+   * Makes the next load hold its deferred post-load scan (statistics, score bounds and the
+   * pre-existing clearance baseline) until {@link #releasePostLoadProcessing()}. Callers that apply
+   * a rules file or import a session after the load use it, so the scan neither races with those
+   * changes nor records the board as it was before them.
+   */
+  public void holdPostLoadProcessing() {
+    this.holdPostLoadProcessing = true;
+  }
+
+  /** Starts a post-load scan held by {@link #holdPostLoadProcessing()}. */
+  public void releasePostLoadProcessing() {
+    this.holdPostLoadProcessing = false;
+    Runnable start = this.heldPostLoadStart;
+    this.heldPostLoadStart = null;
+    if (start != null) {
+      start.run();
+    }
+  }
+
   private void scheduleDeferredPostLoadProcessing(String inputFilename, String analyticsFormat) {
     if (this.board == null) {
       return;
@@ -1002,6 +1027,30 @@ public class HeadlessBoardManager implements BoardManager {
         new java.util.concurrent.CompletableFuture<>();
     loadedBoard.postLoadFuture = future;
     HeadlessBoardManager manager = this;
+    java.util.concurrent.atomic.AtomicBoolean started =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    Runnable start =
+        () -> {
+          if (started.compareAndSet(false, true)) {
+            startDeferredPostLoadThread(
+                loadedBoard, future, manager, inputFilename, analyticsFormat);
+          }
+        };
+    if (this.holdPostLoadProcessing) {
+      this.heldPostLoadStart = start;
+      // A caller that waits for the scan before the release starts it instead of waiting forever.
+      loadedBoard.postLoadStarter = start;
+    } else {
+      start.run();
+    }
+  }
+
+  private void startDeferredPostLoadThread(
+      RoutingBoard loadedBoard,
+      java.util.concurrent.CompletableFuture<Void> future,
+      HeadlessBoardManager manager,
+      String inputFilename,
+      String analyticsFormat) {
     Thread.ofVirtual()
         .name("board-post-load")
         .start(

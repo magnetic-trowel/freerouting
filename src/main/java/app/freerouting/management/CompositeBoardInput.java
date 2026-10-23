@@ -171,6 +171,7 @@ public class CompositeBoardInput {
     // override the DSN's layer rules and the CLI at API priority.
     RouterSettings callerSettings = job.routerSettings != null ? job.routerSettings.clone() : null;
     HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
+    boardManager.holdPostLoadProcessing();
     if (isDsn) {
       boardManager.loadFromSpecctraDsn(
           new ByteArrayInputStream(designData), null, new ItemIdGenerator());
@@ -307,6 +308,11 @@ public class CompositeBoardInput {
       } catch (Exception e) {
         FRLogger.error("Failed to import session data onto board", e);
       }
+      // The scheduler loads the job's input again; without this it would start without the session.
+      if (job.initialSession == null) {
+        job.setInitialSession(effectiveSessionData, effectiveSessionFilename);
+      }
     }
+    boardManager.releasePostLoadProcessing();
   }
 }
