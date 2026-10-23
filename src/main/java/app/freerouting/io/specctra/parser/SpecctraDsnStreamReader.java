@@ -539,8 +539,16 @@ public class SpecctraDsnStreamReader implements IJFlexScanner {
   /** ZZ_ATTRIBUTE[aState] contains the attributes of state <code>aState</code> */
   private static final int[] ZZ_ATTRIBUTE = zzUnpackAttribute();
 
-  public static String scopeIdentifier = "";
-  public static NumberFormat nf;
+  /** Identifier of the scope being read; per reader so concurrent loads do not mix messages. */
+  private String scopeIdentifier = "";
+
+  /**
+   * Number format for plain decimals. {@link NumberFormat} is not thread-safe, and jobs, API
+   * requests and post-load checks parse concurrently, so each thread gets its own instance.
+   */
+  private static final ThreadLocal<NumberFormat> NUMBER_FORMAT =
+      ThreadLocal.withInitial(() -> NumberFormat.getInstance(Locale.US));
+
   /* user code: */ StringBuffer stringBuffer = new StringBuffer();
 
   /** the input device */
@@ -1882,11 +1890,8 @@ public class SpecctraDsnStreamReader implements IJFlexScanner {
       }
     }
 
-    if (nf == null) {
-      nf = NumberFormat.getInstance(Locale.US);
-    }
     try {
-      return nf.parse(s).doubleValue();
+      return NUMBER_FORMAT.get().parse(s).doubleValue();
     } catch (ParseException _) {
       return null;
     }
