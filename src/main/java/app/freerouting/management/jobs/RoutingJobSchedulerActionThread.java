@@ -281,6 +281,13 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
           job.apiKeyHash,
           inputFormat);
     } catch (VirtualMachineError fatal) {
+      // The scheduler counts RUNNING jobs against max_parallel_jobs; a job left RUNNING by a dead
+      // thread would hold its slot for good.
+      synchronized (terminalStateLock) {
+        if (job.state == RoutingJobState.RUNNING || job.state == RoutingJobState.STOPPING) {
+          job.state = RoutingJobState.TERMINATED;
+        }
+      }
       throw fatal;
     } catch (Throwable t) {
       FRLogger.error("Uncaught exception in routing job '" + job.shortName + "'", t);

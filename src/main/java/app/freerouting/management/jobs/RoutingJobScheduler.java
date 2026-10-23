@@ -271,10 +271,27 @@ public final class RoutingJobScheduler {
                               // All pre-checks look fine, start the routing process on a new thread
                               StoppableThread routerThread =
                                   new RoutingJobSchedulerActionThread(job);
-                              job.thread = routerThread;
-                              job.state = RoutingJobState.RUNNING;
-                              job.thread.start();
-                              startedAny = true;
+                              // Loading took a while; a cancel or timeout in the meantime wins
+                              // (cancelJob changes the state under the same lock).
+                              boolean stillReady;
+                              synchronized (jobs) {
+                                stillReady = job.state == RoutingJobState.READY_TO_START;
+                                if (stillReady) {
+                                  job.thread = routerThread;
+                                  job.state = RoutingJobState.RUNNING;
+                                }
+                              }
+                              if (stillReady) {
+                                routerThread.start();
+                                startedAny = true;
+                              } else {
+                                FRLogger.info(
+                                    "Routing job '"
+                                        + job.shortName
+                                        + "' left the ready state ("
+                                        + job.state
+                                        + ") while it was being set up; not started.");
+                              }
                             } catch (Exception e) {
                               FRLogger.error(
                                   "Failed to set up routing job '"
