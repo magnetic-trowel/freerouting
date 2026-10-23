@@ -13,6 +13,7 @@ import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.datastructures.ArrayStack;
 import app.freerouting.datastructures.MinAreaTree;
+import app.freerouting.datastructures.QueryRegionRecorder;
 import app.freerouting.datastructures.ShapeTree;
 import app.freerouting.datastructures.Signum;
 import app.freerouting.geometry.planar.Circle;
@@ -149,6 +150,51 @@ public class ShapeSearchTree extends MinAreaTree {
             - clearanceCompensationValue(secondClass, layer));
   }
 
+  @Override
+  public void insert(ShapeTree.Storable obj) {
+    super.insert(obj);
+    if (obj instanceof Item item) {
+      noteEntriesChanged(item.getSearchTreeEntries(this));
+    }
+  }
+
+  @Override
+  public void remove(Leaf[] entries) {
+    noteEntriesChanged(entries);
+    super.remove(entries);
+  }
+
+  /**
+   * Stamps the entries in the board's change grid, if the board has one. Every item is in the
+   * default tree, so its entries there locate each change; the other trees hold the same items with
+   * other clearance compensation and are rebuilt without the board changing.
+   */
+  private void noteEntriesChanged(Leaf[] entries) {
+    SearchTreeChangeGrid grid = board != null ? board.attachedChangeGrid() : null;
+    if (grid != null && isDefaultTree()) {
+      grid.entriesChanged(entries);
+    }
+  }
+
+  private boolean isDefaultTree() {
+    return board != null
+        && board.searchTreeManager != null
+        && board.searchTreeManager.getDefaultTree() == this;
+  }
+
+  /**
+   * Changes are located by their default-tree entries ({@link #noteEntriesChanged}), so a query of
+   * another tree counts as a read of the whole board.
+   */
+  @Override
+  protected void recordQuery(RegularTileShape shape, long layerBits) {
+    if (isDefaultTree()) {
+      QueryRegionRecorder.recordQuery(shape, layerBits);
+    } else {
+      QueryRegionRecorder.recordEverything();
+    }
+  }
+
   /**
    * Changes the tree entries from keepAtStartCount + 1 to newShapeCount - 1 - keepAtEndCount to
    * changedEntries. Special implementation for change_trace for performance reasons
@@ -182,6 +228,7 @@ public class ShapeSearchTree extends MinAreaTree {
     Leaf[] newLeafArr = new Leaf[newShapeCount];
     TileShape[] newPrecalculatedTreeShapes = new TileShape[newShapeCount];
     Leaf[] oldEntries = obj.getSearchTreeEntries(this);
+    noteEntriesChanged(oldEntries);
     for (int i = 0; i < keepAtStartCount; i++) {
       newLeafArr[i] = oldEntries[i];
       newPrecalculatedTreeShapes[i] = obj.getTreeShape(this, i);
@@ -208,6 +255,7 @@ public class ShapeSearchTree extends MinAreaTree {
       newLeafArr[i] = insert(obj, i);
     }
     obj.setSearchTreeEntries(newLeafArr, this);
+    noteEntriesChanged(newLeafArr);
   }
 
   /**
@@ -248,6 +296,8 @@ public class ShapeSearchTree extends MinAreaTree {
     }
     Leaf[] fromTraceEntries = fromTrace.getSearchTreeEntries(this);
     Leaf[] toTraceEntries = toTrace.getSearchTreeEntries(this);
+    noteEntriesChanged(fromTraceEntries);
+    noteEntriesChanged(toTraceEntries);
     removeLeaf(fromTraceEntries[removeNo]);
     removeLeaf(toTraceEntries[0]);
     TileShape[] linkShapes =
@@ -298,6 +348,7 @@ public class ShapeSearchTree extends MinAreaTree {
     }
 
     toTrace.setSearchTreeEntries(newLeafArr, this);
+    noteEntriesChanged(newLeafArr);
   }
 
   /**
@@ -328,6 +379,8 @@ public class ShapeSearchTree extends MinAreaTree {
     boolean changeOrder = fromTrace.lastCorner().equals(toTrace.lastCorner());
     Leaf[] fromTraceEntries = fromTrace.getSearchTreeEntries(this);
     Leaf[] toTraceEntries = toTrace.getSearchTreeEntries(this);
+    noteEntriesChanged(fromTraceEntries);
+    noteEntriesChanged(toTraceEntries);
     // remove the last or first tree entry from fromTrace and the
     // last tree entry from toTrace, because they will be replaced by
     // the new link entries.
@@ -386,6 +439,7 @@ public class ShapeSearchTree extends MinAreaTree {
       newLeafArr[currentInd] = insert(toTrace, currentInd);
     }
     toTrace.setSearchTreeEntries(newLeafArr, this);
+    noteEntriesChanged(newLeafArr);
   }
 
   /**
@@ -407,6 +461,7 @@ public class ShapeSearchTree extends MinAreaTree {
       PolylineTrace fromTrace, PolylineTrace startPiece, PolylineTrace endPiece) {
     Leaf[] startPieceLeafArr = new Leaf[startPiece.polyline().lines.length - 2];
     Leaf[] fromTraceEntries = fromTrace.getSearchTreeEntries(this);
+    noteEntriesChanged(fromTraceEntries);
     // transfer the entries at the start of fromTrace to startPiece.
     for (int i = 0; i < startPieceLeafArr.length - 1; i++) {
       startPieceLeafArr[i] = fromTraceEntries[i];
@@ -434,6 +489,8 @@ public class ShapeSearchTree extends MinAreaTree {
 
     startPiece.setSearchTreeEntries(startPieceLeafArr, this);
     endPiece.setSearchTreeEntries(endPieceLeafArr, this);
+    noteEntriesChanged(startPieceLeafArr);
+    noteEntriesChanged(endPieceLeafArr);
   }
 
   /**
@@ -841,6 +898,7 @@ public class ShapeSearchTree extends MinAreaTree {
       startShape = startShape.intersection(room.getShape());
     }
     RegularTileShape boundingShape = startShape.boundingShape(this.boundingDirections);
+    recordQuery(boundingShape, -1L);
     Collection<IncompleteFreeSpaceExpansionRoom> result = new ArrayList<>();
     if (startShape.dimension() == 2) {
       IncompleteFreeSpaceExpansionRoom newRoom =

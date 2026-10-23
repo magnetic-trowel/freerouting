@@ -114,6 +114,7 @@ public abstract class ShapeTree {
 
   /** Inserts the leaves of this tree into an array while the read lock is already held. */
   private Leaf[] toArrayUnlocked() {
+    QueryRegionRecorder.recordEverything();
     Leaf[] result = new Leaf[this.leafCount];
     if (result.length == 0) {
       return result;

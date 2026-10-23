@@ -156,6 +156,7 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
     }
 
     IntOctagon boundingShape = startShape;
+    recordQuery(boundingShape, -1L);
     int roomLayer = room.getLayer();
     boolean debugAnchor = isCompleteShapeDebugAnchor(netNumber, roomLayer, startShape);
     int debugStep = 0;

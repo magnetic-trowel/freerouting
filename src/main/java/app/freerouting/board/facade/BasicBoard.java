@@ -16,6 +16,7 @@ import app.freerouting.board.model.structure.BoardOutline;
 import app.freerouting.board.model.structure.Components;
 import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.LayerStructure;
+import app.freerouting.board.searchtree.SearchTreeChangeGrid;
 import app.freerouting.board.searchtree.SearchTreeManager;
 import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.board.searchtree.ShapeSearchTree;
@@ -97,6 +98,9 @@ public class BasicBoard implements Serializable {
 
   /** Handles the search trees pointing into the items of this board. */
   public transient SearchTreeManager searchTreeManager;
+
+  /** Where the items changed, for caches of board queries; created on first use. */
+  private transient volatile SearchTreeChangeGrid changeGrid;
 
   private transient NetRoutingLedger routingLedger;
 
@@ -1269,6 +1273,27 @@ public class BasicBoard implements Serializable {
       }
     }
     return true;
+  }
+
+  /** The change grid of this board, created and attached to the item list on first use. */
+  public SearchTreeChangeGrid changeGrid() {
+    SearchTreeChangeGrid grid = changeGrid;
+    if (grid == null) {
+      synchronized (SearchTreeChangeGrid.class) {
+        grid = changeGrid;
+        if (grid == null) {
+          grid = new SearchTreeChangeGrid(this);
+          itemList.setContentListener(grid);
+          changeGrid = grid;
+        }
+      }
+    }
+    return grid;
+  }
+
+  /** The change grid of this board, or null while no cache uses one. */
+  public SearchTreeChangeGrid attachedChangeGrid() {
+    return changeGrid;
   }
 
   /** Returns the layer count of this board. */

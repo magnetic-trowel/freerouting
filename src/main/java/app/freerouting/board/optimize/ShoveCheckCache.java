@@ -2,7 +2,11 @@ package app.freerouting.board.optimize;
 
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
+import app.freerouting.board.model.structure.AngleRestriction;
 import app.freerouting.board.model.structure.ShapeEntrySide;
+import app.freerouting.board.searchtree.SearchTreeChangeGrid;
+import app.freerouting.datastructures.QueryRegionRecorder;
+import app.freerouting.datastructures.QueryRegionRecorder.Region;
 import app.freerouting.geometry.planar.Direction;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntBox;
@@ -12,17 +16,22 @@ import app.freerouting.geometry.planar.IntPoint;
 import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Simplex;
 import app.freerouting.geometry.planar.TileShape;
+import app.freerouting.rules.ClearanceMatrix;
 import java.lang.ref.WeakReference;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Exact memo of the trace shove check in {@link TraceShover}.
  *
- * <p>The maze search and optimizer ask the same shove question many times on an unchanged board.
- * Entries hold while the board's content version is unchanged. A hit replays the answer and all
+ * <p>The maze search and optimizer ask the same shove question many times, on an unchanged board
+ * and again after the board changed somewhere else. Each entry keeps the region its check read from
+ * the search trees ({@link QueryRegionRecorder}); it stays valid while the board's {@link
+ * SearchTreeChangeGrid} records no change in that region, no change that cannot be located, and no
+ * change of the clearance matrix or the trace angle restriction. A hit replays the answer and all
  * shared-state mutations: temporary trace IDs from the ID generator, and writes to the board's
  * shove-failure record.
  */
@@ -31,17 +40,86 @@ public final class ShoveCheckCache {
   /** The entry count at which the cache starts over, bounding its memory. */
   public static final int MAX_ENTRIES = 1 << 16;
 
+  /** The obstacle count at which the board's obstacle table starts over. */
+  static final int MAX_OBSTACLES = 1 << 16;
+
   /** The most border lines a simplex key holds; a trace segment's tile has at most eight. */
   public static final int MAX_LINES = 8;
+
+  /**
+   * Whether entries outlive changes elsewhere on the board; {@code
+   * -Dfreerouting.shove_cache.retain=false} restores a cache that any board change clears.
+   */
+  static final boolean RETAIN =
+      !"false".equalsIgnoreCase(System.getProperty("freerouting.shove_cache.retain"));
+
+  /**
+   * Diagnostic: {@code -Dfreerouting.shove_cache.verify=true} recomputes every hit that was kept
+   * across a board change and logs answers that differ.
+   */
+  static final boolean VERIFY = Boolean.getBoolean("freerouting.shove_cache.verify");
+
+  /**
+   * Diagnostic: with {@code -Dfreerouting.shove_cache.stats=true} (or verify) the process prints
+   * the hit counts of all threads to standard error when it exits.
+   */
+  private static final boolean STATS =
+      VERIFY || Boolean.getBoolean("freerouting.shove_cache.stats");
+
+  private static final LongAdder[] TOTALS = new LongAdder[8];
+
+  static {
+    for (int i = 0; i < TOTALS.length; i++) {
+      TOTALS[i] = new LongAdder();
+    }
+    if (STATS) {
+      Runtime.getRuntime()
+          .addShutdownHook(
+              new Thread(
+                  () ->
+                      System.err.println(
+                          "Shove check cache: hits="
+                              + TOTALS[0].sum()
+                              + " retained_hits="
+                              + TOTALS[1].sum()
+                              + " misses="
+                              + TOTALS[2].sum()
+                              + " verified="
+                              + TOTALS[3].sum()
+                              + " verify_mismatches="
+                              + TOTALS[4].sum()
+                              + " dropped_changed="
+                              + TOTALS[5].sum()
+                              + " resets="
+                              + TOTALS[6].sum()
+                              + " overflow_clears="
+                              + TOTALS[7].sum())));
+    }
+  }
 
   private static final ThreadLocal<ShoveCheckCache> CURRENT =
       ThreadLocal.withInitial(ShoveCheckCache::new);
 
-  private final Map<Key, Entry> entries = new HashMap<>();
+  /** Least recently used entries go first once the cache is full. */
+  private final Map<Key, Entry> entries =
+      new LinkedHashMap<>(1024, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Key, Entry> eldest) {
+          return size() > MAX_ENTRIES;
+        }
+      };
+
   private WeakReference<RoutingBoard> owner;
-  private long stamp = Long.MIN_VALUE;
+  private int generation;
+  private ClearanceMatrix clearanceMatrix;
+  private int clearanceMatrixModifications;
+  private AngleRestriction angleRestriction;
+  private boolean lastHitRetained;
   private long hits;
   private long misses;
+  private long retainedHits;
+  private long verifiedHits;
+  private long verifyMismatches;
 
   /** Returns this thread's shove check cache instance. */
   public static ShoveCheckCache forThread() {
@@ -56,52 +134,138 @@ public final class ShoveCheckCache {
     return misses;
   }
 
+  /** Hits whose entry was computed before a board change elsewhere. */
+  public long getRetainedHits() {
+    return retainedHits;
+  }
+
+  /** Retained hits that the verify diagnostic recomputed. */
+  public long getVerifiedHits() {
+    return verifiedHits;
+  }
+
+  /** Recomputed retained hits whose answer differed. */
+  public long getVerifyMismatches() {
+    return verifyMismatches;
+  }
+
   void countHit() {
     hits++;
+    if (lastHitRetained) {
+      retainedHits++;
+    }
+    if (STATS) {
+      TOTALS[0].increment();
+      if (lastHitRetained) {
+        TOTALS[1].increment();
+      }
+    }
   }
 
   void countMiss() {
     misses++;
-  }
-
-  /** Looks up an entry for {@code key} on {@code board} at content version {@code contentStamp}. */
-  public Entry tryGet(RoutingBoard board, long contentStamp, Key key) {
-    reset(board, contentStamp);
-    return entries.get(key);
-  }
-
-  /** Puts an entry for {@code key} on {@code board} at content version {@code contentStamp}. */
-  public void put(RoutingBoard board, long contentStamp, Key key, Entry entry) {
-    reset(board, contentStamp);
-    if (entries.size() >= MAX_ENTRIES) {
-      entries.clear();
-      board.getShoveCacheObstacles().clear();
-      return;
+    if (STATS) {
+      TOTALS[2].increment();
     }
+  }
+
+  void countVerified(boolean same) {
+    verifiedHits++;
+    if (!same) {
+      verifyMismatches++;
+    }
+    TOTALS[3].increment();
+    if (!same) {
+      TOTALS[4].increment();
+    }
+  }
+
+  /** Whether the entry returned by the last {@link #tryGet} was kept across a board change. */
+  boolean lastHitRetained() {
+    return lastHitRetained;
+  }
+
+  /** Looks up a valid entry for {@code key} on {@code board}. */
+  public Entry tryGet(RoutingBoard board, Key key) {
+    SearchTreeChangeGrid grid = attach(board);
+    lastHitRetained = false;
+    Entry entry = entries.get(key);
+    if (entry == null) {
+      return null;
+    }
+    int now = grid.sequence();
+    if (entry.sequence == now) {
+      return entry;
+    }
+    if (RETAIN && grid.unchangedSince(entry.region, entry.sequence)) {
+      // Valid at the current sequence too; later lookups before the next change are direct.
+      entry.sequence = now;
+      lastHitRetained = true;
+      return entry;
+    }
+    entries.remove(key);
+    if (STATS) {
+      TOTALS[5].increment();
+    }
+    return null;
+  }
+
+  /** Puts an entry for {@code key} on {@code board}. */
+  public void put(RoutingBoard board, Key key, Entry entry) {
+    attach(board);
     entries.put(key, entry);
   }
 
-  /** The index of {@code obstacle} in the board's obstacle table, adding it when new. */
-  public static int obstacleIndex(RoutingBoard board, Item obstacle) {
+  /**
+   * The index of {@code obstacle} in the board's obstacle table, adding it when new. A table that
+   * outgrows the cache starts over together with the entries that index it.
+   */
+  public int obstacleIndex(RoutingBoard board, Item obstacle) {
     List<Item> table = board.getShoveCacheObstacles();
-    int index = table.size() - 1;
-    if (index >= 0 && table.get(index) == obstacle) {
-      return index;
+    Map<Item, Integer> index = board.getShoveCacheObstacleIndex();
+    Integer known = index.get(obstacle);
+    if (known != null) {
+      return known;
+    }
+    if (table.size() >= MAX_OBSTACLES) {
+      entries.clear();
+      board.clearShoveCacheObstacles();
+      if (STATS) {
+        TOTALS[7].increment();
+      }
     }
     table.add(obstacle);
+    index.put(obstacle, table.size() - 1);
     return table.size() - 1;
   }
 
-  private void reset(RoutingBoard board, long contentStamp) {
-    if (contentStamp == stamp && owner != null && owner.get() == board) {
-      return;
+  /**
+   * Binds the cache to {@code board}, dropping entries that no longer hold, and returns its grid.
+   */
+  private SearchTreeChangeGrid attach(RoutingBoard board) {
+    SearchTreeChangeGrid grid = board.changeGrid();
+    ClearanceMatrix matrix = board.rules.clearanceMatrix;
+    AngleRestriction angles = board.rules.getTraceAngleRestriction();
+    if (owner == null
+        || owner.get() != board
+        || grid.generation() != generation
+        || matrix != clearanceMatrix
+        || matrix.getModificationCount() != clearanceMatrixModifications
+        || angles != angleRestriction) {
+      if (!entries.isEmpty()) {
+        entries.clear();
+        if (STATS) {
+          TOTALS[6].increment();
+        }
+      }
+      board.clearShoveCacheObstacles();
+      owner = new WeakReference<>(board);
+      generation = grid.generation();
+      clearanceMatrix = matrix;
+      clearanceMatrixModifications = matrix.getModificationCount();
+      angleRestriction = angles;
     }
-    if (!entries.isEmpty()) {
-      entries.clear();
-    }
-    board.getShoveCacheObstacles().clear();
-    stamp = contentStamp;
-    owner = new WeakReference<>(board);
+    return grid;
   }
 
   /** True for a check whose key can be held strictly by value. */
@@ -298,7 +462,10 @@ public final class ShoveCheckCache {
     }
   }
 
-  /** A check's outcome and recorded side-effects on shared board state. */
+  /**
+   * A check's outcome, its recorded side-effects on shared board state, the region it read and the
+   * change sequence of the board at which the outcome is known to hold.
+   */
   public static final class Entry {
     public final boolean result;
     public final int ids;
@@ -306,6 +473,8 @@ public final class ShoveCheckCache {
     public final int obstacle;
     public final boolean wroteLayer;
     public final int layer;
+    public final Region region;
+    int sequence;
 
     public Entry(
         boolean result,
@@ -313,13 +482,17 @@ public final class ShoveCheckCache {
         boolean wroteObstacle,
         int obstacle,
         boolean wroteLayer,
-        int layer) {
+        int layer,
+        Region region,
+        int sequence) {
       this.result = result;
       this.ids = ids;
       this.wroteObstacle = wroteObstacle;
       this.obstacle = obstacle;
       this.wroteLayer = wroteLayer;
       this.layer = layer;
+      this.region = region;
+      this.sequence = sequence;
     }
   }
 }

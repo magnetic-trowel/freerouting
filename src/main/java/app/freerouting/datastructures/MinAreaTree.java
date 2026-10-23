@@ -59,6 +59,7 @@ public class MinAreaTree extends ShapeTree {
 
   /** Appends overlapping leaves into {@code result} while read lock is held. */
   protected final void overlapsUnlocked(RegularTileShape shape, List<Leaf> result) {
+    recordQuery(shape, -1L);
     if (this.root == null) {
       return;
     }
@@ -92,6 +93,7 @@ public class MinAreaTree extends ShapeTree {
    */
   protected final void overlapsUnsortedUnlocked(
       RegularTileShape shape, long layerBits, List<Leaf> result) {
+    recordQuery(shape, layerBits);
     if (this.root == null) {
       return;
     }
@@ -114,6 +116,11 @@ public class MinAreaTree extends ShapeTree {
 
   /** Extension hook for testing and instrumentation during tree traversal. */
   protected void onNodeVisited() {}
+
+  /** Reports a query to this thread's {@link QueryRegionRecorder}. */
+  protected void recordQuery(RegularTileShape shape, long layerBits) {
+    QueryRegionRecorder.recordQuery(shape, layerBits);
+  }
 
   @Override
   void insert(Leaf leaf) {

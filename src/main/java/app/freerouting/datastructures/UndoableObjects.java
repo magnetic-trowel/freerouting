@@ -15,6 +15,9 @@ import java.util.concurrent.ConcurrentSkipListMap;
  */
 public class UndoableObjects implements Serializable {
 
+  // Pinned to the value before ContentListener was added; board hashes serialize this class.
+  @java.io.Serial private static final long serialVersionUID = -2441139116827518651L;
+
   /**
    * The entries of this map are of type UndoableObject, the keys of type UndoableObjects.Storable.
    */
@@ -44,6 +47,9 @@ public class UndoableObjects implements Serializable {
    */
   private transient long contentVersion;
 
+  /** Observer of content changes, or null. */
+  private transient ContentListener contentListener;
+
   /** Returns the current change stamp; equal stamps mean the readable objects are unchanged. */
   public long getVersion() {
     return version;
@@ -57,6 +63,29 @@ public class UndoableObjects implements Serializable {
   /** Records an in-place change made without saveForUndo. */
   public void noteContentChange() {
     ++contentVersion;
+    if (contentListener != null) {
+      contentListener.allChanged();
+    }
+  }
+
+  /**
+   * Reports an in-place change of {@code object} to the content listener without counting it as a
+   * content change, for state that the content version does not track (such as the fixed state).
+   */
+  public void noteObjectChanged(UndoableObjects.Storable object) {
+    if (contentListener != null) {
+      contentListener.objectChanged(object);
+    }
+  }
+
+  /** Returns the content listener, or null. */
+  public ContentListener getContentListener() {
+    return contentListener;
+  }
+
+  /** Sets the observer of content changes; null removes it. */
+  public void setContentListener(ContentListener listener) {
+    this.contentListener = listener;
   }
 
   /** Creates a new instance of UndoableObjectsList. */
@@ -72,6 +101,7 @@ public class UndoableObjects implements Serializable {
    * @return an iterator for sequential reading of the object list
    */
   public Iterator<UndoableObjectNode> startReadObject() {
+    QueryRegionRecorder.recordEverything();
     return objects.values().iterator();
   }
 
@@ -97,6 +127,9 @@ public class UndoableObjects implements Serializable {
     ++contentVersion;
     UndoableObjectNode currentUndoableObject = new UndoableObjectNode(object, stackLevel);
     objects.put(object, currentUndoableObject);
+    if (contentListener != null) {
+      contentListener.objectChanged(object);
+    }
   }
 
   /**
@@ -154,6 +187,9 @@ public class UndoableObjects implements Serializable {
         currentDeleteList.add(objectNode.undoObject);
       }
     }
+    if (contentListener != null) {
+      contentListener.objectChanged(object);
+    }
     objects.remove(object);
     ++version;
     ++contentVersion;
@@ -207,6 +243,9 @@ public class UndoableObjects implements Serializable {
     --this.stackLevel;
     ++version;
     ++contentVersion;
+    if (contentListener != null) {
+      contentListener.allChanged();
+    }
     redoPossible = true;
     return true;
   }
@@ -225,6 +264,9 @@ public class UndoableObjects implements Serializable {
     ++this.stackLevel;
     ++version;
     ++contentVersion;
+    if (contentListener != null) {
+      contentListener.allChanged();
+    }
     for (UndoableObjectNode currentNode : objects.values()) {
       if (currentNode.redoObject != null && currentNode.redoObject.level == this.stackLevel) {
         // Object was created on a lower level and changed on the current level,
@@ -348,6 +390,9 @@ public class UndoableObjects implements Serializable {
    */
   public void saveForUndo(UndoableObjects.Storable object) {
     ++contentVersion;
+    if (contentListener != null) {
+      contentListener.objectChanged(object);
+    }
     disableRedo();
     // search object in the map
     UndoableObjectNode currentNode = objects.get(object);
@@ -383,6 +428,19 @@ public class UndoableObjects implements Serializable {
         currentNode.redoObject = null;
       }
     }
+  }
+
+  /** Observer of the content changes of an {@link UndoableObjects} list. */
+  public interface ContentListener {
+
+    /**
+     * {@code object} was inserted, is about to be changed in place or deleted, or changed in a way
+     * the content version does not count.
+     */
+    void objectChanged(UndoableObjects.Storable object);
+
+    /** The content changed in a way that is not attributed to single objects. */
+    void allChanged();
   }
 
   /**
