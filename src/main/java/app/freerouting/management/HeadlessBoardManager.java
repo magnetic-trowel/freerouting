@@ -661,8 +661,7 @@ public class HeadlessBoardManager implements BoardManager {
       return;
     }
 
-    int boardResolution = Math.max(1, this.board.communication.resolution);
-    double mmToBoardScale = Unit.scale(boardResolution, Unit.MM, this.board.communication.unit);
+    double mmToBoardScale = this.board.communication.physicalToBoard(1.0, Unit.MM);
 
     // Ensure default meander constraints are properly scaled to board units
     this.board.rules.initDefaultMeanderConstraints(mmToBoardScale);

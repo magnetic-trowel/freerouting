@@ -209,12 +209,8 @@ public class BoardStatistics implements Serializable {
     // term in getNormalizedScore() is thousands of times larger than
     // maxConnections * unroutedNetPenalty for high-resolution boards, forcing the
     // score to 0 even for a perfectly-routed, zero-violation layout.
-    double boardUnitToMmFactor =
-        Unit.scale(1.0, board.communication.unit, Unit.MM)
-            / (board.communication.resolution > 0 ? board.communication.resolution : 1);
-    double boardUnitToUmFactor =
-        Unit.scale(1.0, board.communication.unit, Unit.UM)
-            / (board.communication.resolution > 0 ? board.communication.resolution : 1);
+    double boardUnitToMmFactor = board.communication.boardUnitSize(Unit.MM);
+    double boardUnitToUmFactor = board.communication.boardUnitSize(Unit.UM);
     this.board.areaCm2 =
         (float)
             (this.board.size.width

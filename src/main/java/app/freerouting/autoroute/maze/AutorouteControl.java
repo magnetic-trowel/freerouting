@@ -384,11 +384,7 @@ public class AutorouteControl {
     if (neckWidthUm <= 0) {
       return board.rules.getMinAllowedTraceHalfWidth();
     }
-    int boardResolution = Math.max(1, board.communication.resolution);
-    int neckWidth =
-        (int)
-            Math.round(
-                Unit.scale(neckWidthUm * boardResolution, Unit.UM, board.communication.unit));
+    int neckWidth = (int) Math.round(board.communication.physicalToBoard(neckWidthUm, Unit.UM));
     return Math.max(Math.max(1, neckWidth / 2), board.rules.getMinAllowedTraceHalfWidth());
   }
 }

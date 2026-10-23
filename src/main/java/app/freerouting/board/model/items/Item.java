@@ -483,8 +483,7 @@ public abstract class Item
             double shortfall = minimumClearance - actualClearance;
             double boardUnitToUmFactor =
                 (this.board != null && this.board.communication != null)
-                    ? Unit.scale(1.0, this.board.communication.unit, Unit.UM)
-                        / Math.max(1, this.board.communication.resolution)
+                    ? this.board.communication.boardUnitSize(Unit.UM)
                     : 1.0;
             double toleranceUm =
                 (this.board != null && this.board.rules != null)

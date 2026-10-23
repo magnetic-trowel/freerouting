@@ -108,6 +108,19 @@ public class Communication implements Serializable {
     return Unit.scale(this.resolution, unit, this.unit);
   }
 
+  /**
+   * Returns the length of one internal board unit in {@code unit}. Uses the coordinate transform,
+   * not the declared resolution: the DSN reader divides the scale by powers of ten when the
+   * declared resolution would overflow int coordinates (for example LibrePCB's {@code resolution mm
+   * 1000000}), so the resolution can overstate the board units per input unit.
+   */
+  public double boardUnitSize(Unit unit) {
+    double boardUnitsPerHostUnit =
+        this.coordinateTransform != null ? this.coordinateTransform.dsnToBoard(1) : this.resolution;
+    return Unit.scale(1.0, this.unit, unit)
+        / (boardUnitsPerHostUnit > 0 ? boardUnitsPerHostUnit : 1);
+  }
+
   /** Converts a physical distance to internal board coordinates. */
   public double physicalToBoard(double value, Unit unit) {
     if (this.coordinateTransform != null) {

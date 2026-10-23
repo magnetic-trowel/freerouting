@@ -1151,9 +1151,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       if (statistics.getOptimizerScore(routerSettings, 0, 0, 0) == null) {
         return null;
       }
-      double boardUnitToMm =
-          Unit.scale(1.0, board.communication.unit, Unit.MM)
-              / (board.communication.resolution > 0 ? board.communication.resolution : 1);
+      double boardUnitToMm = board.communication.boardUnitSize(Unit.MM);
       return new ScoreTracker(
           statistics,
           routerSettings,

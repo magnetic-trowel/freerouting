@@ -45,7 +45,8 @@ class MeanderSettingsOverrideTest {
             Unit.MM,
             10000,
             new Communication.SpecctraParserInfo("\"", null, null, null, null, false),
-            new app.freerouting.io.CoordinateTransform(1, 0, 0),
+            // The reader's transform: 10000 board units per mm, matching the resolution.
+            new app.freerouting.io.CoordinateTransform(10000, 0, 0),
             new app.freerouting.board.actions.ItemIdGenerator(),
             new app.freerouting.board.state.BoardObserverAdaptor());
 

@@ -643,9 +643,7 @@ public class BoardComparator {
   }
 
   private static double getMmFactor(RoutingBoard board) {
-    return app.freerouting.board.model.structure.Unit.scale(
-            1.0, board.communication.unit, app.freerouting.board.model.structure.Unit.MM)
-        / (board.communication.resolution > 0 ? board.communication.resolution : 1);
+    return board.communication.boardUnitSize(app.freerouting.board.model.structure.Unit.MM);
   }
 
   private static Map<String, NetClass> buildNetClassMap(RoutingBoard board) {

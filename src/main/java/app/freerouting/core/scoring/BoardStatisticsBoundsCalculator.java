@@ -44,9 +44,7 @@ final class BoardStatisticsBoundsCalculator {
     double minTraceLength = 0.0;
     int minViaCount = 0;
     int minBendCount = 0;
-    double boardUnitToMmFactor =
-        Unit.scale(1.0, board.communication.unit, Unit.MM)
-            / (board.communication.resolution > 0 ? board.communication.resolution : 1);
+    double boardUnitToMmFactor = board.communication.boardUnitSize(Unit.MM);
 
     for (int netNumber = 1; netNumber <= board.rules.nets.maxNetNumber(); netNumber++) {
       Net net = board.rules.nets.get(netNumber);
