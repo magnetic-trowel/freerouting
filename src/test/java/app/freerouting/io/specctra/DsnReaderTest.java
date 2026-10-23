@@ -201,6 +201,26 @@ class DsnReaderTest {
         "a power layer that carries a plane must stay non-routable");
   }
 
+  @Test
+  void boardWithOnlyPowerLayersRoutesOnThem() {
+    // Every copper layer is a KiCad power layer with a zone: refusing the board ("all layers are
+    // disabled") would leave nothing to route on.
+    String dsn =
+        dsnWithPowerLayer(
+                "    (plane GND (polygon F.Cu 0 0 0 20000 0 20000 20000 0 20000))\n"
+                    + "    (plane GND (polygon In1.Cu 0 0 0 20000 0 20000 20000 0 20000))\n"
+                    + "    (plane GND (polygon B.Cu 0 0 0 20000 0 20000 20000 0 20000))\n")
+            .replace("(type signal)", "(type power)");
+    InputStream in = new ByteArrayInputStream(dsn.getBytes(StandardCharsets.UTF_8));
+    BoardReadResult result = DsnReader.readBoard(in, null, null);
+
+    assertInstanceOf(BoardReadResult.Success.class, result);
+    RoutingBoard board = (RoutingBoard) ((BoardReadResult.Success) result).board();
+    for (var layer : board.layerStructure.layers) {
+      assertTrue(layer.isSignal, "layer " + layer.name + " must be routable");
+    }
+  }
+
   // Sealed-switch exhaustiveness check (compile-time guarantee)
 
   @Test
