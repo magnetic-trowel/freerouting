@@ -14,6 +14,7 @@ import app.freerouting.geometry.planar.FloatLine;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntPoint;
+import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.PolylineArea;
 import app.freerouting.geometry.planar.PolylineShape;
@@ -25,13 +26,30 @@ import app.freerouting.util.TextManager;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
 /** Class describing a board outline. */
 public class BoardOutline extends Item implements Serializable {
+
+  // Pinned to the value before edgePieces was added; board hashes serialize the item list.
+  @java.io.Serial private static final long serialVersionUID = -1133130106310414855L;
+
+  /**
+   * The largest distance, in mm, by which the bounding octagon of an outline edge piece may extend
+   * beyond the piece.
+   */
+  private static final double MAX_OCTAGON_OVERSHOOT_MM = 0.05;
+
+  /** The most pieces one outline edge is cut into. */
+  private static final int MAX_PIECES_PER_EDGE = 4096;
+
+  /** Cached result of {@link #edgePieces()}. */
+  private transient Line[][] edgePieces;
 
   private static final int HALF_WIDTH = 100;
 
@@ -69,9 +87,85 @@ public class BoardOutline extends Item implements Serializable {
         result = tileShapes.length * this.board.layerStructure.layers.length;
       }
     } else {
-      result = this.lineCount() * this.board.layerStructure.layers.length;
+      result = this.edgePieces().length * this.board.layerStructure.layers.length;
     }
     return result;
+  }
+
+  /**
+   * The outline edges as the line triples whose offset shapes are the keepout strips of the
+   * outline: [start cut, edge, end cut]. An edge at a multiple of 45 degrees is one piece bounded
+   * by its neighbouring border lines. Any other edge is cut by lines perpendicular to it into
+   * pieces short enough that the bounding octagon of each piece's strip, which is what the
+   * 45-degree autoroute tree stores, extends at most {@link #MAX_OCTAGON_OVERSHOOT_MM} beyond the
+   * strip. The octagon of a whole edge at such an angle covers a wedge of the board, and pins in
+   * that wedge cannot be reached by the maze search.
+   */
+  public Line[][] edgePieces() {
+    if (this.edgePieces == null) {
+      this.edgePieces = calculateEdgePieces();
+    }
+    return this.edgePieces;
+  }
+
+  private Line[][] calculateEdgePieces() {
+    double maxOvershoot =
+        this.board != null && this.board.communication != null
+            ? this.board.communication.physicalToBoard(MAX_OCTAGON_OVERSHOOT_MM, Unit.MM)
+            : 0;
+    // The 90-degree autoroute tree stores bounding boxes instead of octagons.
+    boolean boxes =
+        this.board != null
+            && this.board.rules != null
+            && this.board.rules.getTraceAngleRestriction() == AngleRestriction.NINETY_DEGREE;
+    List<Line[]> result = new ArrayList<>();
+    for (PolylineShape shape : this.shapes) {
+      int lineCount = shape.borderLineCount();
+      for (int i = 0; i < lineCount; i++) {
+        Line previous = shape.borderLine((i + lineCount - 1) % lineCount);
+        Line edge = shape.borderLine(i);
+        Line next = shape.borderLine((i + 1) % lineCount);
+        FloatPoint from = previous.intersectionApprox(edge);
+        FloatPoint to = edge.intersectionApprox(next);
+        int pieceCount = pieceCount(from, to, maxOvershoot, boxes);
+        Line start = previous;
+        for (int piece = 1; piece < pieceCount; piece++) {
+          double t = piece / (double) pieceCount;
+          IntPoint cutPoint =
+              new FloatPoint(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t).round();
+          Line cut = new Line(cutPoint, edge.direction().turn45Degree(2));
+          result.add(new Line[] {start, edge, cut});
+          start = cut;
+        }
+        result.add(new Line[] {start, edge, next});
+      }
+    }
+    return result.toArray(new Line[0][]);
+  }
+
+  /**
+   * The number of pieces for an edge from {@code from} to {@code to}. The bounding octagon of a
+   * segment of length l at angle a to the nearest axis extends l * sin(a) * (cos(a) - sin(a))
+   * beyond it, which is 0 at multiples of 45 degrees; its bounding box extends l * sin(a) * cos(a).
+   */
+  private static int pieceCount(
+      FloatPoint from, FloatPoint to, double maxOvershoot, boolean boxes) {
+    if (from == null || to == null || !(maxOvershoot > 0)) {
+      return 1;
+    }
+    double dx = Math.abs(to.x - from.x);
+    double dy = Math.abs(to.y - from.y);
+    double length = Math.hypot(dx, dy);
+    if (!(length > 0) || !Double.isFinite(length)) {
+      return 1;
+    }
+    double cos = Math.max(dx, dy) / length;
+    double sin = Math.min(dx, dy) / length;
+    double overshoot = length * sin * (boxes ? cos : cos - sin);
+    if (overshoot <= maxOvershoot) {
+      return 1;
+    }
+    return (int) Math.min(MAX_PIECES_PER_EDGE, Math.ceil(overshoot / maxOvershoot));
   }
 
   @Override
@@ -302,6 +396,7 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = keepoutArea.translateBy(vector);
     }
     keepoutLines = null;
+    edgePieces = null;
     invalidateEdgePinNets();
   }
 
@@ -316,6 +411,7 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = keepoutArea.turn90Degree(factor, pole);
     }
     keepoutLines = null;
+    edgePieces = null;
     invalidateEdgePinNets();
   }
 
@@ -331,6 +427,7 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = keepoutArea.rotateApprox(angle, pole);
     }
     keepoutLines = null;
+    edgePieces = null;
     invalidateEdgePinNets();
   }
 
@@ -345,6 +442,7 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = keepoutArea.mirrorVertical(pole);
     }
     keepoutLines = null;
+    edgePieces = null;
     invalidateEdgePinNets();
   }
 

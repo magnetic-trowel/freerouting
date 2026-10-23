@@ -26,7 +26,6 @@ import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.LineSegment;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.Polyline;
-import app.freerouting.geometry.planar.PolylineShape;
 import app.freerouting.geometry.planar.RegularTileShape;
 import app.freerouting.geometry.planar.Shape;
 import app.freerouting.geometry.planar.ShapeBoundingDirections;
@@ -1291,26 +1290,19 @@ public class ShapeSearchTree extends MinAreaTree {
         result[i] = it.next();
       }
     } else {
-      // Only the line shapes of the outline are inserted as obstacles into the tree.
-      result = new TileShape[boardOutline.lineCount() * this.board.layerStructure.layers.length];
+      // Only the line shapes of the outline are inserted as obstacles into the tree, one strip per
+      // edge piece (see BoardOutline.edgePieces).
+      Line[][] edgePieces = boardOutline.edgePieces();
+      result = new TileShape[edgePieces.length * this.board.layerStructure.layers.length];
       int halfWidth = boardOutline.getHalfWidth();
-      Line[] currentLineArr = new Line[3];
       int currentNo = 0;
       for (int layerIndex = 0; layerIndex < this.board.layerStructure.layers.length; layerIndex++) {
-        for (int shapeIndex = 0; shapeIndex < boardOutline.shapeCount(); shapeIndex++) {
-          PolylineShape currentOutlineShape = boardOutline.getShape(shapeIndex);
-          int borderLineCount = currentOutlineShape.borderLineCount();
-          currentLineArr[0] = currentOutlineShape.borderLine(borderLineCount - 1);
-          for (int i = 0; i < borderLineCount; i++) {
-            currentLineArr[1] = currentOutlineShape.borderLine(i);
-            currentLineArr[2] = currentOutlineShape.borderLine((i + 1) % borderLineCount);
-            Polyline tmpPolyline = new Polyline(currentLineArr);
-            int cmpValue =
-                this.clearanceCompensationValue(boardOutline.clearanceClassIndex(), layerIndex);
-            result[currentNo] = tmpPolyline.offsetShape(halfWidth + cmpValue, 0);
-            ++currentNo;
-            currentLineArr[0] = currentLineArr[1];
-          }
+        int cmpValue =
+            this.clearanceCompensationValue(boardOutline.clearanceClassIndex(), layerIndex);
+        for (Line[] piece : edgePieces) {
+          Polyline tmpPolyline = new Polyline(piece.clone());
+          result[currentNo] = tmpPolyline.offsetShape(halfWidth + cmpValue, 0);
+          ++currentNo;
         }
       }
     }
