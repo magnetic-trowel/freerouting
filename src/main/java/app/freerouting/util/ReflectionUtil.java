@@ -269,10 +269,13 @@ public final class ReflectionUtil {
             // Is the array of primitive types or strings?
             if (field.getType().getComponentType().isPrimitive()
                 || field.getType().getComponentType() == String.class) {
-              // Only set the field if it is not null on the source object
-              // The field is an array of primitive types or strings, so we can copy it
-              // directly
-              field.set(target, sourceValue);
+              // Copy the array so that later edits of the merged settings cannot write back
+              // into the source (strings are immutable, so a shallow copy is enough).
+              int length = java.lang.reflect.Array.getLength(sourceValue);
+              Object copy =
+                  java.lang.reflect.Array.newInstance(field.getType().getComponentType(), length);
+              System.arraycopy(sourceValue, 0, copy, 0, length);
+              field.set(target, copy);
               numberOfFieldsChanged++;
             } else {
               // The field is an array of objects (like LayerSettings[])

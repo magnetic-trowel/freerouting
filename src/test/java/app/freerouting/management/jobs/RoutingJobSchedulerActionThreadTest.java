@@ -1,6 +1,7 @@
 package app.freerouting.management.jobs;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -187,6 +188,31 @@ class RoutingJobSchedulerActionThreadTest {
     RoutingJobSchedulerActionThread action = new RoutingJobSchedulerActionThread(job);
     action.assignTerminalState(false);
     assertEquals(RoutingJobState.CANCELLED, job.state);
+  }
+
+  @Test
+  void cancelOfRunningJobEndsCancelled() {
+    RoutingJob job = new RoutingJob();
+    job.state = RoutingJobState.RUNNING;
+    RoutingJobSchedulerActionThread action = new RoutingJobSchedulerActionThread(job);
+    job.thread = action;
+    assertTrue(action.cancelIfRunning());
+    assertEquals(RoutingJobState.STOPPING, job.state);
+    assertTrue(action.isStopRequested());
+    action.assignTerminalState(true);
+    assertEquals(RoutingJobState.CANCELLED, job.state);
+  }
+
+  @Test
+  void cancelAfterCompletionKeepsTheJobCompleted() {
+    RoutingJob job = new RoutingJob();
+    job.state = RoutingJobState.RUNNING;
+    RoutingJobSchedulerActionThread action = new RoutingJobSchedulerActionThread(job);
+    job.thread = action;
+    action.assignTerminalState(true);
+    assertFalse(action.cancelIfRunning());
+    assertEquals(RoutingJobState.COMPLETED, job.state);
+    assertFalse(job.isCancelledByUser());
   }
 
   private static RoutingJobSchedulerActionThread stoppedJob(

@@ -353,6 +353,26 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
   }
 
   /**
+   * Turns a running job into a stopping, user-cancelled one and asks the thread to stop. The state
+   * changes under the lock of the terminal-state transitions, so a cancel that races with the end
+   * of the pipeline either becomes {@link RoutingJobState#CANCELLED} or finds the job already
+   * terminal; it can no longer leave a finished job in {@link RoutingJobState#STOPPING}.
+   *
+   * @return whether the job was running
+   */
+  boolean cancelIfRunning() {
+    synchronized (terminalStateLock) {
+      if (job.state != RoutingJobState.RUNNING) {
+        return false;
+      }
+      job.setCancelledByUser(true);
+      job.state = RoutingJobState.STOPPING;
+    }
+    requestStop();
+    return true;
+  }
+
+  /**
    * Marks a job that is still running or stopping as timed out. A job that already reached {@link
    * RoutingJobState#COMPLETED} or another terminal state keeps that state.
    */

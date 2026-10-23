@@ -654,10 +654,15 @@ public final class RoutingJobScheduler {
         job.setCancelledByUser(true);
         saveJob(job);
       } else if (job.state == RoutingJobState.RUNNING) {
-        job.state = RoutingJobState.STOPPING;
-        job.setCancelledByUser(true);
-        if (job.thread != null) {
-          job.thread.requestStop();
+        if (job.thread instanceof RoutingJobSchedulerActionThread action) {
+          // The action thread may assign the terminal state at the same time.
+          action.cancelIfRunning();
+        } else {
+          job.state = RoutingJobState.STOPPING;
+          job.setCancelledByUser(true);
+          if (job.thread != null) {
+            job.thread.requestStop();
+          }
         }
         saveJob(job);
       } else if (!job.isCancelledByUser()
