@@ -22,10 +22,10 @@ import java.io.Serializable;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /** Represents a job that needs to be processed by the router. */
 public class RoutingJob implements Serializable, Comparable<RoutingJob> {
@@ -46,13 +46,13 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
 
   // events to signal input and output updates
   protected final transient List<RoutingJobUpdatedEventListener> settingsUpdatedEventListeners =
-      new ArrayList<>();
+      new CopyOnWriteArrayList<>();
   protected final transient List<RoutingJobUpdatedEventListener> inputUpdatedEventListeners =
-      new ArrayList<>();
+      new CopyOnWriteArrayList<>();
   protected final transient List<RoutingJobUpdatedEventListener> outputUpdatedEventListeners =
-      new ArrayList<>();
+      new CopyOnWriteArrayList<>();
   protected final transient List<RoutingJobLogEntryAddedEventListener> logEntryAddedEventListeners =
-      new ArrayList<>();
+      new CopyOnWriteArrayList<>();
 
   @SerializedName("short_name")
   @Schema(name = "short_name", description = "A short name for the job")
@@ -479,13 +479,16 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
 
   @Override
   public int compareTo(RoutingJob o) {
-    if (this.priority.ordinal() < o.priority.ordinal()) {
-      return -1;
-    } else if (this.priority.ordinal() > o.priority.ordinal()) {
-      return 1;
-    } else {
-      return 0;
-    }
+    return Integer.compare(effectivePriority().ordinal(), o.effectivePriority().ordinal());
+  }
+
+  /**
+   * Returns the priority used for scheduling. A job deserialized from client JSON may carry a null
+   * or unknown priority; it is scheduled as {@link RoutingJobPriority#NORMAL} instead of failing
+   * the scheduler's sort for every queued job.
+   */
+  private RoutingJobPriority effectivePriority() {
+    return this.priority != null ? this.priority : RoutingJobPriority.NORMAL;
   }
 
   /** Returns the input file details. */
