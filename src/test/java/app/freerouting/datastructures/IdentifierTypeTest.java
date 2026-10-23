@@ -49,4 +49,26 @@ class IdentifierTypeTest {
     oswStartWithNumber.flush();
     assertEquals("\"600a\"", baosStartWithNumber.toString());
   }
+
+  @Test
+  void strictWriteQuotesEveryNameWithAPunctuationCharacter() throws Exception {
+    IdentifierType identifierType = new IdentifierType(new String[] {"(", ")", " "}, "\"");
+    // KiCad 10 rejects a whole session that holds a bare ADD|SUB.
+    assertEquals("\"ADD|SUB\"", strictlyWritten(identifierType, "ADD|SUB"));
+    assertEquals("\"+5V\"", strictlyWritten(identifierType, "+5V"));
+    assertEquals("\"VCC.A\"", strictlyWritten(identifierType, "VCC.A"));
+    assertEquals("\"Ω1\"", strictlyWritten(identifierType, "Ω1"));
+    assertEquals("GND", strictlyWritten(identifierType, "GND"));
+    assertEquals("U12", strictlyWritten(identifierType, "U12"));
+  }
+
+  private static String strictlyWritten(IdentifierType identifierType, String name)
+      throws Exception {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    OutputStreamWriter writer =
+        new OutputStreamWriter(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    identifierType.writeStrict(name, writer);
+    writer.flush();
+    return bytes.toString(java.nio.charset.StandardCharsets.UTF_8);
+  }
 }

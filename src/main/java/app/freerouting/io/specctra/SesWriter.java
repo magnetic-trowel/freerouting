@@ -340,7 +340,7 @@ public final class SesWriter {
         if (currentNet == null) {
           FRLogger.warn("SesWriter.writeNet: net not found");
         } else {
-          identifierType.write(currentNet.name, file);
+          identifierType.writeStrict(currentNet.name, file);
         }
         headerWritten = true;
       }
