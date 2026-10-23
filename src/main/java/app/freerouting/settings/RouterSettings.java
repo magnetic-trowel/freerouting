@@ -625,7 +625,9 @@ public class RouterSettings implements Serializable, Cloneable {
     scoring.undesiredDirectionTraceCost = new double[layerCount];
 
     for (int i = 0; i < layerCount; i++) {
-      layers[i].routable = true;
+      // Null means routable (getLayerActive, applyBoardSpecificOptimizations) without overriding a
+      // lower-priority source's choice when these settings are merged.
+      layers[i].routable = null;
       layers[i].preferredDirectionHorizontal = null;
       layers[i].bendCost = null;
       layers[i].preferredDirectionTraceCost = null;
@@ -673,6 +675,8 @@ public class RouterSettings implements Serializable, Cloneable {
     result.planeAsObstacle = this.planeAsObstacle;
     result.neckWidthUm = this.neckWidthUm;
     result.strictDrc = this.strictDrc;
+    result.fixKicadFootprints = this.fixKicadFootprints;
+    result.resultJsonPath = this.resultJsonPath;
     result.tracePullTightAccuracy = this.tracePullTightAccuracy;
     result.viasAllowed = this.viasAllowed;
     result.automaticNeckdown = this.automaticNeckdown;

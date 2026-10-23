@@ -166,6 +166,10 @@ public class CompositeBoardInput {
     boolean isDsn = job.input.format == FileFormat.DSN;
     boolean isJson = job.input.format == FileFormat.KICAD_DESIGN_JSON;
 
+    // The board load fills board defaults (all layers routable, alternating directions, bend
+    // costs) into job.routerSettings. Merge only what the caller set, or those defaults would
+    // override the DSN's layer rules and the CLI at API priority.
+    RouterSettings callerSettings = job.routerSettings != null ? job.routerSettings.clone() : null;
     HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
     if (isDsn) {
       boardManager.loadFromSpecctraDsn(
@@ -233,8 +237,8 @@ public class CompositeBoardInput {
     }
 
     // API settings (from caller / job settings overrides)
-    if (job.routerSettings != null) {
-      settingsMerger.addOrReplaceSources(new ApiSettings(job.routerSettings));
+    if (callerSettings != null) {
+      settingsMerger.addOrReplaceSources(new ApiSettings(callerSettings));
     }
 
     job.routerSettings = settingsMerger.merge();

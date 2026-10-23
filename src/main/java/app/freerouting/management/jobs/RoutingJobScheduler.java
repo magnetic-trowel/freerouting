@@ -13,6 +13,7 @@ import app.freerouting.logger.FRLogger;
 import app.freerouting.management.HeadlessBoardManager;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
+import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.ApiSettings;
 import app.freerouting.settings.sources.DefaultSettings;
@@ -91,6 +92,10 @@ public final class RoutingJobScheduler {
                           // load the board from the input into a RoutingBoard object
                           if (isDsn || isJson) {
                             try {
+                              // The board load fills board defaults into job.routerSettings;
+                              // merge only what the caller set (see CompositeBoardInput).
+                              RouterSettings callerSettings =
+                                  job.routerSettings != null ? job.routerSettings.clone() : null;
                               HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
                               if (isDsn) {
                                 boardManager.loadFromSpecctraDsn(
@@ -165,9 +170,8 @@ public final class RoutingJobScheduler {
                               // Keep per-job overrides (e.g. tests toggling fanout/optimizer) by
                               // applying the job's current settings as highest-priority API
                               // settings.
-                              if (job.routerSettings != null) {
-                                settingsMerger.addOrReplaceSources(
-                                    new ApiSettings(job.routerSettings));
+                              if (callerSettings != null) {
+                                settingsMerger.addOrReplaceSources(new ApiSettings(callerSettings));
                               }
 
                               // Apply the final merged settings to the job and optimize them for
