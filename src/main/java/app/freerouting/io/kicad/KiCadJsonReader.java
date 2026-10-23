@@ -721,6 +721,7 @@ public final class KiCadJsonReader {
         }
         String viaPadstackName =
             String.format(
+                Locale.ROOT,
                 "Via[%d-%d]_%.0f:%.0f_um",
                 vj.startLayerIndex, vj.endLayerIndex, vj.diameter * 1000.0, vj.drill * 1000.0);
         Padstack viaPadstack = padstacks.get(viaPadstackName);
@@ -851,6 +852,7 @@ public final class KiCadJsonReader {
         }
         String viaPadstackName =
             String.format(
+                Locale.ROOT,
                 "Via[%d-%d]_%.0f:%.0f_um",
                 vj.startLayerIndex, vj.endLayerIndex, vj.diameter * 1000.0, vj.drill * 1000.0);
         Padstack viaPadstack = board.library.padstacks.get(viaPadstackName);
@@ -873,7 +875,9 @@ public final class KiCadJsonReader {
       } else if ("oval".equalsIgnoreCase(pad.shape)) {
         shapeStr = "Oval";
       } else {
-        shapeStr = pad.shape.substring(0, 1).toUpperCase() + pad.shape.substring(1).toLowerCase();
+        shapeStr =
+            pad.shape.substring(0, 1).toUpperCase(Locale.ROOT)
+                + pad.shape.substring(1).toLowerCase(Locale.ROOT);
       }
     }
 

@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 /** Represents a job that needs to be processed by the router. */
@@ -163,8 +164,8 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
 
   /** We need a parameterless constructor for the serialization. */
   public RoutingJob() {
-    this.name = "J-" + this.id.toString().substring(0, 6).toUpperCase();
-    this.shortName = this.id.toString().substring(0, 6).toUpperCase();
+    this.name = "J-" + this.id.toString().substring(0, 6).toUpperCase(Locale.ROOT);
+    this.shortName = this.id.toString().substring(0, 6).toUpperCase(Locale.ROOT);
   }
 
   /** Creates a new instance of DesignFile and prepares the intermediate file handling. */
@@ -172,9 +173,9 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
     this();
     this.sessionId = sessionId;
     this.shortName =
-        this.sessionId.toString().substring(0, 6).toUpperCase()
+        this.sessionId.toString().substring(0, 6).toUpperCase(Locale.ROOT)
             + "\\"
-            + this.id.toString().substring(0, 6).toUpperCase();
+            + this.id.toString().substring(0, 6).toUpperCase(Locale.ROOT);
   }
 
   /** Detects the file format from its binary content. */
@@ -277,10 +278,10 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
 
   /** Detects the file format from a file path extension. */
   public static FileFormat getFileFormat(Path path) {
-    String filename = path.toString().toLowerCase();
+    String filename = path.toString().toLowerCase(Locale.ROOT);
     String[] parts = filename.split("\\.");
     if (parts.length > 1) {
-      String extension = parts[parts.length - 1].toLowerCase();
+      String extension = parts[parts.length - 1].toLowerCase(Locale.ROOT);
       return switch (extension) {
         case DSN_FILE_EXTENSION -> FileFormat.DSN;
         case BINARY_FILE_EXTENSION -> FileFormat.FRB;
@@ -396,7 +397,7 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
 
     this.output = new BoardFileDetails();
 
-    if ((filename != null) && (filename.toLowerCase().endsWith(DSN_FILE_EXTENSION))) {
+    if ((filename != null) && (filename.toLowerCase(Locale.ROOT).endsWith(DSN_FILE_EXTENSION))) {
       this.input.format = FileFormat.DSN;
       this.input.setFilename(filename);
     }
@@ -427,7 +428,7 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
     String originalFilename = filePath.getFileName().toString();
     String[] nameParts = originalFilename.split("\\.");
     if (nameParts.length > 1) {
-      String extension = nameParts[nameParts.length - 1].toLowerCase();
+      String extension = nameParts[nameParts.length - 1].toLowerCase(Locale.ROOT);
       if (extension.equals(newFileExtension)) {
         return filePath.toString();
       }

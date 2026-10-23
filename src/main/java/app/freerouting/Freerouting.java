@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 import javax.swing.UIManager;
@@ -105,7 +106,7 @@ public class Freerouting {
 
     // Add all endpoints as connectors
     for (String endpointUrl : apiServerSettings.endpoints) {
-      endpointUrl = endpointUrl.toLowerCase();
+      endpointUrl = endpointUrl.toLowerCase(Locale.ROOT);
       String[] endpointParts = endpointUrl.split("://");
       String protocol = endpointParts[0];
 
@@ -253,7 +254,7 @@ public class Freerouting {
     Server mcpServer = new Server();
 
     for (String endpointUrl : mcpServerSettings.endpoints) {
-      endpointUrl = endpointUrl.toLowerCase();
+      endpointUrl = endpointUrl.toLowerCase(Locale.ROOT);
       String[] endpointParts = endpointUrl.split("://");
       String protocol = endpointParts[0];
 

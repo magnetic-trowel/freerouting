@@ -533,7 +533,11 @@ public class GlobalSettings implements Serializable {
     for (var entry : System.getenv().entrySet()) {
       if (entry.getKey().startsWith("FREEROUTING__")) {
         String propertyName =
-            entry.getKey().substring("FREEROUTING__".length()).toLowerCase().replace("__", ".");
+            entry
+                .getKey()
+                .substring("FREEROUTING__".length())
+                .toLowerCase(Locale.ROOT)
+                .replace("__", ".");
 
         // Skip router settings - they're handled by EnvironmentVariablesSource
         // to prevent conflicts with the SettingsMerger
@@ -643,7 +647,7 @@ public class GlobalSettings implements Serializable {
               } else if ("debug.filter_by_net".equals(parts[0])) {
                 String[] nets = parts[1].split(",");
                 for (String net : nets) {
-                  debugSettings.filterByNet.add(net.trim().toLowerCase());
+                  debugSettings.filterByNet.add(net.trim().toLowerCase(Locale.ROOT));
                 }
               }
             } else {
@@ -688,7 +692,7 @@ public class GlobalSettings implements Serializable {
                 continue;
               }
 
-              String lowerFile = file.toLowerCase();
+              String lowerFile = file.toLowerCase(Locale.ROOT);
               if (lowerFile.endsWith(".dsn")) {
                 if (hasDsn) {
                   FRLogger.warn(
@@ -832,7 +836,7 @@ public class GlobalSettings implements Serializable {
           }
         } else if (args[i].startsWith("-is")) {
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            String op = args[i + 1].toLowerCase().trim();
+            String op = args[i + 1].toLowerCase(Locale.ROOT).trim();
             routerSettings.optimizer.itemSelectionStrategy =
                 op.startsWith("prio")
                     ? ItemSelectionStrategy.PRIORITIZED
@@ -842,7 +846,7 @@ public class GlobalSettings implements Serializable {
         } else if ("-l".equals(args[i])) {
           String localeString = "";
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            localeString = args[i + 1].toLowerCase().replace("-", "_");
+            localeString = args[i + 1].toLowerCase(Locale.ROOT).replace("-", "_");
             i++;
           }
 
@@ -953,7 +957,7 @@ public class GlobalSettings implements Serializable {
           // get the log level from the command line arguments
           // and save it to the settings
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            logging.console.level = args[i + 1].toUpperCase();
+            logging.console.level = args[i + 1].toUpperCase(Locale.ROOT);
             i++;
           }
         } else {

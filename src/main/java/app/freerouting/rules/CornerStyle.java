@@ -1,6 +1,7 @@
 package app.freerouting.rules;
 
 import java.io.Serializable;
+import java.util.Locale;
 
 /** Geometric corner style for trace length tuning meander patterns. */
 public enum CornerStyle implements Serializable {
@@ -18,7 +19,7 @@ public enum CornerStyle implements Serializable {
       return FILLET;
     }
     try {
-      return CornerStyle.valueOf(name.trim().toUpperCase());
+      return CornerStyle.valueOf(name.trim().toUpperCase(Locale.ROOT));
     } catch (IllegalArgumentException _) {
       return FILLET;
     }
@@ -26,6 +27,6 @@ public enum CornerStyle implements Serializable {
 
   @Override
   public String toString() {
-    return super.toString().toLowerCase();
+    return super.toString().toLowerCase(Locale.ROOT);
   }
 }

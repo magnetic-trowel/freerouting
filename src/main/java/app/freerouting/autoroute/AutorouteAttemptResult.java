@@ -1,5 +1,7 @@
 package app.freerouting.autoroute;
 
+import java.util.Locale;
+
 /** Represents the outcome of an autoroute attempt, including its state and detail message. */
 public class AutorouteAttemptResult {
 
@@ -20,6 +22,6 @@ public class AutorouteAttemptResult {
 
   @Override
   public String toString() {
-    return this.state.toString().toUpperCase() + ": " + this.details;
+    return this.state.toString().toUpperCase(Locale.ROOT) + ": " + this.details;
   }
 }

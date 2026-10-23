@@ -6,6 +6,7 @@ import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.SettingsSource;
 import app.freerouting.util.ReflectionUtil;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -146,7 +147,7 @@ public class CliSettings implements SettingsSource {
     if (value == null || !fieldPath.endsWith(".version")) {
       return value;
     }
-    return switch (value.trim().toLowerCase()) {
+    return switch (value.trim().toLowerCase(Locale.ROOT)) {
       case "v1", "legacy" -> "V1_LEGACY";
       case "v2", "continuous" ->
           fieldPath.startsWith("optimizer") ? "V2_LOWER_BOUND" : "V2_CONTINUOUS";
@@ -199,7 +200,7 @@ public class CliSettings implements SettingsSource {
 
   /** Applies "-is sequential|prioritized". Other values (e.g. the removed "random") warn. */
   private void applyItemSelectionStrategy(RouterSettings settings, String value) {
-    String v = value.trim().toLowerCase();
+    String v = value.trim().toLowerCase(Locale.ROOT);
     if (v.startsWith("prio")) {
       applyRouterSetting(settings, "router.optimizer.item_selection_strategy", "PRIORITIZED");
     } else if (v.startsWith("seq")) {

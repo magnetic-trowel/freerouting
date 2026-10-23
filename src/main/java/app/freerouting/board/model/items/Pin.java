@@ -755,7 +755,7 @@ public class Pin extends DrillItem implements Serializable {
   public String toString() {
     StringBuilder simpleName = new StringBuilder();
 
-    simpleName.append(this.getClass().getSimpleName().toLowerCase());
+    simpleName.append(this.getClass().getSimpleName().toLowerCase(Locale.ROOT));
 
     if (pinIndex > 0) {
       simpleName.append(" #");

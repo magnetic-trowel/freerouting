@@ -23,6 +23,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -274,7 +275,7 @@ public class CompositeBoardInput {
             effectiveSessionFormat == FileFormat.KICAD_SESSION_JSON
                 || effectiveSessionFormat == FileFormat.KICAD_DESIGN_JSON
                 || (effectiveSessionFilename != null
-                    && effectiveSessionFilename.toLowerCase().endsWith(".json"));
+                    && effectiveSessionFilename.toLowerCase(Locale.ROOT).endsWith(".json"));
 
         if (!isJsonSession) {
           // Check payload header directly in case default extension (.ses) was supplied for JSON

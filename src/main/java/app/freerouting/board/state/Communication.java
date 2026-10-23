@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.util.Collection;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -62,7 +63,7 @@ public class Communication implements Serializable {
     if (specctraParserInfo == null || specctraParserInfo.hostCad == null) {
       return false;
     }
-    String cad = specctraParserInfo.hostCad.toLowerCase();
+    String cad = specctraParserInfo.hostCad.toLowerCase(Locale.ROOT);
     return cad.contains("fusion") || cad.contains("cadsoft") || cad.contains("eagle");
   }
 
@@ -71,7 +72,7 @@ public class Communication implements Serializable {
     if (specctraParserInfo == null || specctraParserInfo.hostCad == null) {
       return false;
     }
-    return specctraParserInfo.hostCad.toLowerCase().contains("kicad");
+    return specctraParserInfo.hostCad.toLowerCase(Locale.ROOT).contains("kicad");
   }
 
   /** Host is old kicad. */
@@ -82,7 +83,7 @@ public class Communication implements Serializable {
       return false;
     }
 
-    if (specctraParserInfo.hostCad.toLowerCase().contains("kicad")) {
+    if (specctraParserInfo.hostCad.toLowerCase(Locale.ROOT).contains("kicad")) {
       String versionString = specctraParserInfo.hostVersion;
       Matcher matcher = Pattern.compile("\\d+").matcher(versionString);
       if (matcher.find()) {

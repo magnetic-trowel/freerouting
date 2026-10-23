@@ -29,6 +29,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -220,7 +221,7 @@ public final class RoutingJobScheduler {
                                   boolean isJsonSession =
                                       (sessionFilenameToLoad != null
                                               && sessionFilenameToLoad
-                                                  .toLowerCase()
+                                                  .toLowerCase(Locale.ROOT)
                                                   .endsWith(".json"))
                                           || RoutingJob.getFileFormat(sessionBytesToLoad)
                                               == FileFormat.KICAD_DESIGN_JSON;
@@ -349,7 +350,7 @@ public final class RoutingJobScheduler {
   }
 
   private String uuidToShortCode(UUID uuid) {
-    return uuid.toString().substring(0, 6).toUpperCase();
+    return uuid.toString().substring(0, 6).toUpperCase(Locale.ROOT);
   }
 
   /**

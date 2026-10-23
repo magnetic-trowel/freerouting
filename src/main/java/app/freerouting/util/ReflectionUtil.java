@@ -4,6 +4,7 @@ import app.freerouting.logger.FRLogger;
 import com.google.gson.annotations.SerializedName;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.Locale;
 
 /** Utility methods for reflective field access and copying between settings objects. */
 public final class ReflectionUtil {
@@ -119,11 +120,11 @@ public final class ReflectionUtil {
       return name;
     }
     String[] parts = name.split("_");
-    StringBuilder sb = new StringBuilder(parts[0].toLowerCase());
+    StringBuilder sb = new StringBuilder(parts[0].toLowerCase(Locale.ROOT));
     for (int i = 1; i < parts.length; i++) {
       if (!parts[i].isEmpty()) {
         sb.append(Character.toUpperCase(parts[i].charAt(0)))
-            .append(parts[i].substring(1).toLowerCase());
+            .append(parts[i].substring(1).toLowerCase(Locale.ROOT));
       }
     }
     return sb.toString();

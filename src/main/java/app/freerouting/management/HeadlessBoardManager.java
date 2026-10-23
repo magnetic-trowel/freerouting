@@ -49,6 +49,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Manages routing board operations in headless (non-GUI) mode for automated processing.
@@ -199,9 +200,9 @@ public class HeadlessBoardManager implements BoardManager {
       return;
     }
     String counterpartPath = null;
-    if (inputFilename.toLowerCase().endsWith(".dsn")) {
+    if (inputFilename.toLowerCase(Locale.ROOT).endsWith(".dsn")) {
       counterpartPath = inputFilename.substring(0, inputFilename.length() - 4) + ".json";
-    } else if (inputFilename.toLowerCase().endsWith(".json")) {
+    } else if (inputFilename.toLowerCase(Locale.ROOT).endsWith(".json")) {
       counterpartPath = inputFilename.substring(0, inputFilename.length() - 5) + ".dsn";
     }
     if (counterpartPath == null) {
@@ -233,7 +234,7 @@ public class HeadlessBoardManager implements BoardManager {
 
   private static RoutingBoard loadBoardFromFileForComparison(java.io.File file) {
     try (java.io.InputStream is = new java.io.FileInputStream(file)) {
-      if (file.getName().toLowerCase().endsWith(".json")) {
+      if (file.getName().toLowerCase(Locale.ROOT).endsWith(".json")) {
         try (java.io.Reader r =
             new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8)) {
           app.freerouting.io.BoardReadResult readResult =

@@ -2,6 +2,7 @@ package app.freerouting.logger;
 
 import java.io.File;
 import java.net.URI;
+import java.util.Locale;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.appender.ConsoleAppender;
@@ -137,7 +138,7 @@ public class Log4j2ConfigurationFactory extends ConfigurationFactory {
 
   private Level parseLevel(String level) {
     try {
-      return Level.valueOf(level.toUpperCase());
+      return Level.valueOf(level.toUpperCase(Locale.ROOT));
     } catch (Exception e) {
       return Level.INFO;
     }

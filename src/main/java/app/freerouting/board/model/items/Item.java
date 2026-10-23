@@ -1384,7 +1384,7 @@ public abstract class Item
   public String toString() {
     StringBuilder simpleName = new StringBuilder();
 
-    simpleName.append(this.getClass().getSimpleName().toLowerCase());
+    simpleName.append(this.getClass().getSimpleName().toLowerCase(Locale.ROOT));
 
     if (componentId > 0) {
       simpleName.append(" of component #");

@@ -1,6 +1,7 @@
 package app.freerouting.board.model.structure;
 
 import java.io.Serializable;
+import java.util.Locale;
 
 /** Enum for the user units inch, mil or millimeter. */
 public enum Unit implements Serializable {
@@ -26,7 +27,7 @@ public enum Unit implements Serializable {
    */
   public static Unit fromString(String string) {
     try {
-      return Unit.valueOf(string.toUpperCase());
+      return Unit.valueOf(string.toUpperCase(Locale.ROOT));
     } catch (IllegalArgumentException _) {
       return null;
     }
@@ -34,6 +35,6 @@ public enum Unit implements Serializable {
 
   @Override
   public String toString() {
-    return super.toString().toLowerCase();
+    return super.toString().toLowerCase(Locale.ROOT);
   }
 }

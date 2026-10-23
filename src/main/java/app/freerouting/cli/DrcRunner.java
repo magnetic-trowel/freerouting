@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.UUID;
 
 /** Executes a Design Rules Check (DRC) on a board without autorouting. */
@@ -77,7 +78,7 @@ public final class DrcRunner {
       try {
         File sessionFile = new File(globalSettings.designSessionFilename);
         if (sessionFile.exists()) {
-          if (globalSettings.designSessionFilename.toLowerCase().endsWith(".json")) {
+          if (globalSettings.designSessionFilename.toLowerCase(Locale.ROOT).endsWith(".json")) {
             FRLogger.info(
                 "Loading KiCad JSON session file for DRC: " + globalSettings.designSessionFilename);
             try (java.io.FileReader jsonReader = new java.io.FileReader(sessionFile)) {
