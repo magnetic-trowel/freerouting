@@ -390,28 +390,49 @@ public final class BatchAutorouter extends NamedAlgorithm {
    */
   public static AutorouteAttemptResult enforceStrictDrc(
       app.freerouting.board.facade.RoutingBoard board, int routeNetNo, int maxItemIdBefore) {
+    List<Item> newItems = newTracesAndVias(board, routeNetNo, maxItemIdBefore);
+    AutorouteAttemptResult rejection = strictDrcRejection(newItems);
+    if (rejection != null) {
+      board.removeItems(newItems);
+    }
+    return rejection;
+  }
+
+  /**
+   * Like {@link #enforceStrictDrc} but leaves the board unchanged: returns the rejection if a new
+   * trace or via of the net violates clearance, or null if the connection is clean. Callers that
+   * hold an undo snapshot roll the whole attempt back instead, which also restores the connections
+   * the attempt ripped.
+   */
+  static AutorouteAttemptResult strictDrcRejection(
+      app.freerouting.board.facade.RoutingBoard board, int routeNetNo, int maxItemIdBefore) {
+    return strictDrcRejection(newTracesAndVias(board, routeNetNo, maxItemIdBefore));
+  }
+
+  private static List<Item> newTracesAndVias(
+      app.freerouting.board.facade.RoutingBoard board, int routeNetNo, int maxItemIdBefore) {
     List<Item> newItems = new ArrayList<>();
-    boolean hasViolation = false;
     for (Item currentItem : board.getConnectableItems(routeNetNo)) {
-      if (currentItem.getId() <= maxItemIdBefore
-          || !(currentItem instanceof Trace
+      if (currentItem.getId() > maxItemIdBefore
+          && (currentItem instanceof Trace
               || currentItem instanceof app.freerouting.board.model.items.Via)) {
-        continue;
-      }
-      newItems.add(currentItem);
-      if (!hasViolation && !currentItem.clearanceViolations().isEmpty()) {
-        hasViolation = true;
+        newItems.add(currentItem);
       }
     }
-    if (!hasViolation) {
-      return null;
+    return newItems;
+  }
+
+  private static AutorouteAttemptResult strictDrcRejection(List<Item> newItems) {
+    for (Item currentItem : newItems) {
+      if (!currentItem.clearanceViolations().isEmpty()) {
+        return new AutorouteAttemptResult(
+            AutorouteAttemptState.FAILED,
+            "strict_drc: connection ripped because "
+                + newItems.size()
+                + " new item(s) included clearance violations");
+      }
     }
-    board.removeItems(newItems);
-    return new AutorouteAttemptResult(
-        AutorouteAttemptState.FAILED,
-        "strict_drc: connection ripped because "
-            + newItems.size()
-            + " new item(s) included clearance violations");
+    return null;
   }
 
   public boolean isFanoutTimedOut() {
