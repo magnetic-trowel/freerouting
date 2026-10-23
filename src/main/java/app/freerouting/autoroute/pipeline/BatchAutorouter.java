@@ -409,19 +409,6 @@ public final class BatchAutorouter extends NamedAlgorithm {
     return strictDrcRejection(newTracesAndVias(board, routeNetNo, maxItemIdBefore));
   }
 
-  private static List<Item> newTracesAndVias(
-      app.freerouting.board.facade.RoutingBoard board, int routeNetNo, int maxItemIdBefore) {
-    List<Item> newItems = new ArrayList<>();
-    for (Item currentItem : board.getConnectableItems(routeNetNo)) {
-      if (currentItem.getId() > maxItemIdBefore
-          && (currentItem instanceof Trace
-              || currentItem instanceof app.freerouting.board.model.items.Via)) {
-        newItems.add(currentItem);
-      }
-    }
-    return newItems;
-  }
-
   private static AutorouteAttemptResult strictDrcRejection(List<Item> newItems) {
     for (Item currentItem : newItems) {
       if (!currentItem.clearanceViolations().isEmpty()) {
@@ -433,6 +420,19 @@ public final class BatchAutorouter extends NamedAlgorithm {
       }
     }
     return null;
+  }
+
+  private static List<Item> newTracesAndVias(
+      app.freerouting.board.facade.RoutingBoard board, int routeNetNo, int maxItemIdBefore) {
+    List<Item> newItems = new ArrayList<>();
+    for (Item currentItem : board.getConnectableItems(routeNetNo)) {
+      if (currentItem.getId() > maxItemIdBefore
+          && (currentItem instanceof Trace
+              || currentItem instanceof app.freerouting.board.model.items.Via)) {
+        newItems.add(currentItem);
+      }
+    }
+    return newItems;
   }
 
   public boolean isFanoutTimedOut() {

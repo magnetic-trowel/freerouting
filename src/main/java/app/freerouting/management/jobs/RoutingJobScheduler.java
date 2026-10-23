@@ -94,7 +94,7 @@ public final class RoutingJobScheduler {
                             try {
                               // The board load fills board defaults into job.routerSettings;
                               // merge only what the caller set (see CompositeBoardInput).
-                              RouterSettings callerSettings =
+                              final RouterSettings callerSettings =
                                   job.routerSettings != null ? job.routerSettings.clone() : null;
                               HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
                               boardManager.holdPostLoadProcessing();

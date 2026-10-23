@@ -19,9 +19,10 @@ class RationalPointProjectionTest {
 
   @Test
   void projectsHalfIntegerPointOntoHorizontalLine() {
-    Line xAxis = new Line(new IntPoint(0, 0), new IntPoint(10, 0));
+    Line horizontalAxis = new Line(new IntPoint(0, 0), new IntPoint(10, 0));
     // (0.5, 0.5) projects to (0.5, 0).
-    assertSamePoint(new FloatPoint(0.5, 0.0), rational(1, 1, 2).perpendicularProjection(xAxis));
+    assertSamePoint(
+        new FloatPoint(0.5, 0.0), rational(1, 1, 2).perpendicularProjection(horizontalAxis));
   }
 
   @Test

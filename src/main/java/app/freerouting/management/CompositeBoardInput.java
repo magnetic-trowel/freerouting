@@ -169,7 +169,8 @@ public class CompositeBoardInput {
     // The board load fills board defaults (all layers routable, alternating directions, bend
     // costs) into job.routerSettings. Merge only what the caller set, or those defaults would
     // override the DSN's layer rules and the CLI at API priority.
-    RouterSettings callerSettings = job.routerSettings != null ? job.routerSettings.clone() : null;
+    final RouterSettings callerSettings =
+        job.routerSettings != null ? job.routerSettings.clone() : null;
     HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
     boardManager.holdPostLoadProcessing();
     if (isDsn) {

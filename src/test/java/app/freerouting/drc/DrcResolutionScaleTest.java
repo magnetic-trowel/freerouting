@@ -55,16 +55,16 @@ class DrcResolutionScaleTest {
         .formatted(
             resolution,
             unit,
-            n(100 * scale),
-            n(0.25 * scale),
-            n(0.2 * scale),
-            n(0.6 * scale),
-            n(10 * scale),
-            n(50 * scale),
-            n(10.4 * scale));
+            plain(100 * scale),
+            plain(0.25 * scale),
+            plain(0.2 * scale),
+            plain(0.6 * scale),
+            plain(10 * scale),
+            plain(50 * scale),
+            plain(10.4 * scale));
   }
 
-  private static String n(double value) {
+  private static String plain(double value) {
     return java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
   }
 
