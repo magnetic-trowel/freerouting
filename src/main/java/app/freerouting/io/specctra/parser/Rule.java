@@ -127,15 +127,16 @@ public abstract class Rule {
    * width applies instead of producing zero-width wires.
    */
   public static WidthRule readWidthRule(IJFlexScanner scanner) {
-    double value = scanner.nextDouble();
+    // Null if the token is not a number; unboxing it used to abort the whole read with an NPE.
+    Double value = scanner.nextDouble();
 
     if (!scanner.nextClosingBracket()) {
       return null;
     }
 
-    if (!Double.isFinite(value) || value <= 0) {
+    if (value == null || !Double.isFinite(value) || value <= 0) {
       FRLogger.warn(
-          "Rule.readWidthRule: ignoring non-positive width "
+          "Rule.readWidthRule: ignoring non-positive or unreadable width "
               + value
               + " at '"
               + scanner.getScopeIdentifier()
@@ -286,7 +287,8 @@ public abstract class Rule {
 
   public static ClearanceRule readClearanceRule(IJFlexScanner scanner) {
     try {
-      double value = scanner.nextDouble();
+      // Null if the token is not a number; checked once the scope has been consumed.
+      Double value = scanner.nextDouble();
 
       Collection<String> classPairs = new LinkedList<>();
       Object nextToken = scanner.nextToken();
@@ -325,6 +327,13 @@ public abstract class Rule {
         }
       }
 
+      if (value == null) {
+        FRLogger.warn(
+            "Rule.read_clearance_rule: ignoring unreadable clearance at '"
+                + scanner.getScopeIdentifier()
+                + "'");
+        return null;
+      }
       return new ClearanceRule(value, classPairs);
     } catch (IOException e) {
       FRLogger.error("Rule.read_clearance_rule: IO error scanning file", e);
