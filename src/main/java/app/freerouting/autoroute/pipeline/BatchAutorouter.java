@@ -133,6 +133,9 @@ public final class BatchAutorouter extends NamedAlgorithm {
   /** Why the last pass loop stopped. Null until the loop records a reason. */
   public StopReason lastStopReason;
 
+  /** The exception that aborted the last pass, or null if it ran to its end. */
+  public Exception lastPassFailure;
+
   /** Board hash after fanout, where the pass loop started. */
   public String passLoopStartHash;
 
@@ -146,7 +149,9 @@ public final class BatchAutorouter extends NamedAlgorithm {
     NO_IMPROVEMENT,
     TIMED_OUT,
     CANCELLED,
-    REPEATED
+    REPEATED,
+    /** A pass threw; the loop ended on the board from the start of that pass. */
+    ERROR
   }
 
   /**

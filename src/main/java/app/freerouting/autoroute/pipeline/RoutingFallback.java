@@ -166,7 +166,8 @@ public final class RoutingFallback {
   public static boolean isRetryable(BatchAutorouter.StopReason reason) {
     return reason == BatchAutorouter.StopReason.STAGNATION
         || reason == BatchAutorouter.StopReason.NO_IMPROVEMENT
-        || reason == BatchAutorouter.StopReason.COMPLETED;
+        || reason == BatchAutorouter.StopReason.COMPLETED
+        || reason == BatchAutorouter.StopReason.ERROR;
   }
 
   /** Human-readable stop reason for logs. */
@@ -182,6 +183,7 @@ public final class RoutingFallback {
       case TIMED_OUT -> "timeout";
       case CANCELLED -> "cancelled";
       case REPEATED -> "a repeat of an earlier pass loop";
+      case ERROR -> "an internal error";
     };
   }
 

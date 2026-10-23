@@ -78,6 +78,7 @@ final class AutorouteBatchLoop {
     router.initialUnroutedCount = calculateIncompleteCount(router.board);
     router.resetAntiOscillationState();
     router.lastStopReason = null;
+    router.lastPassFailure = null;
 
     final BoardHistory bh = new BoardHistory(job.routerSettings);
 
@@ -359,6 +360,25 @@ final class AutorouteBatchLoop {
               + "'");
 
       continueAutorouting = autoroutePass(currentPass);
+
+      if (router.lastPassFailure != null) {
+        // The pass stopped part way, possibly inside an insertion: continue from the board it
+        // started on, not from whatever state the exception left behind.
+        RoutingBoard boardBeforePass = bh.restoreLastAdded();
+        if (boardBeforePass != null) {
+          router.board = boardBeforePass;
+          board = router.board;
+        }
+        job.logWarning(
+            "Auto-routing pass #"
+                + currentPass
+                + " failed; the auto-router stopped "
+                + (boardBeforePass != null
+                    ? "with the board from the start of that pass."
+                    : "with the board as the failure left it."));
+        stopFor(BatchAutorouter.StopReason.ERROR);
+        break;
+      }
 
       BoardStatistics boardStatisticsAfter = router.boardStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);

@@ -34,6 +34,9 @@ public class BoardHistory {
   private final RouterSettings routerSettings;
   private final ReadWriteLock rwLock = new ReentrantReadWriteLock();
 
+  /** The entry of the board passed to the last {@link #add} call; null if it was not kept. */
+  private BoardHistoryEntry lastAdded;
+
   /** Constructs a BoardHistory with default maximum history size. */
   public BoardHistory(RouterSettings routerSettings) {
     this(routerSettings, MAX_HISTORY_SIZE);
@@ -64,9 +67,14 @@ public class BoardHistory {
 
   /** Same as {@link #add(RoutingBoard)} for a board whose router score is already known. */
   public synchronized void add(RoutingBoard board, float newScore) {
-    if (contains(board)) {
-      return;
+    String hash = board.getHash();
+    for (BoardHistoryEntry entry : boards) {
+      if (entry.hash.equals(hash)) {
+        lastAdded = entry;
+        return;
+      }
     }
+    lastAdded = null;
 
     if (boards.size() >= maxHistorySize) {
 
@@ -91,7 +99,16 @@ public class BoardHistory {
       boards.remove(worstIndex);
     }
 
-    boards.add(new BoardHistoryEntry(board, newScore));
+    lastAdded = new BoardHistoryEntry(board, newScore);
+    boards.add(lastAdded);
+  }
+
+  /**
+   * Returns a copy of the board passed to the last {@link #add} call, or null if the history did
+   * not keep it (it was full and the board scored no better than its worst entry).
+   */
+  public synchronized RoutingBoard restoreLastAdded() {
+    return lastAdded == null ? null : (RoutingBoard) BasicBoard.deserialize(lastAdded.board);
   }
 
   private static RouterSettings createLegacyRouterSettings(RoutingCostSettings scoringSettings) {
@@ -103,6 +120,7 @@ public class BoardHistory {
   /** Clears all boards from history. */
   public synchronized void clear() {
     boards.clear();
+    lastAdded = null;
   }
 
   /** Returns true if the board snapshot is already present in history. */

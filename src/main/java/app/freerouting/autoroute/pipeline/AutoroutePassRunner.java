@@ -248,6 +248,7 @@ final class AutoroutePassRunner {
       return routed > 0 || notRouted > 0;
     } catch (Exception e) {
       router.job.logError("Something went wrong during the auto-routing", e);
+      router.lastPassFailure = e;
       router.airLine = null;
       return false;
     }

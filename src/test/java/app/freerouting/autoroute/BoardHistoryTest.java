@@ -140,4 +140,35 @@ class BoardHistoryTest {
         "The better-scoring board (board1) must be retained when a worse board is added at "
             + "capacity");
   }
+
+  @Test
+  void restoreLastAddedReturnsTheLastBoardEvenWhenAnEarlierOneScoresBetter() {
+    BoardHistory history = new BoardHistory(routerSettings);
+    history.add(board1);
+    history.add(board2);
+
+    RoutingBoard last = history.restoreLastAdded();
+
+    assertNotNull(last);
+    assertEquals(board2.getHash(), last.getHash());
+  }
+
+  @Test
+  void restoreLastAddedFindsABoardThatWasAlreadyInTheHistory() {
+    BoardHistory history = new BoardHistory(routerSettings);
+    history.add(board2);
+    history.add(board1);
+    history.add(board2);
+
+    assertEquals(board2.getHash(), history.restoreLastAdded().getHash());
+  }
+
+  @Test
+  void restoreLastAddedIsNullWhenTheHistoryDidNotKeepTheBoard() {
+    BoardHistory history = new BoardHistory(routerSettings, 1);
+    history.add(board1);
+    history.add(board2);
+
+    assertEquals(null, history.restoreLastAdded());
+  }
 }
