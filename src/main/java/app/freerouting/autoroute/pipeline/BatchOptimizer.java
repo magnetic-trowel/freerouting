@@ -3,6 +3,7 @@ package app.freerouting.autoroute.pipeline;
 import app.freerouting.autoroute.ItemRouteResult;
 import app.freerouting.autoroute.ItemSelectionStrategy;
 import app.freerouting.autoroute.events.TaskStateChangedEvent;
+import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.BoardImage;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
@@ -1719,101 +1720,81 @@ public final class BatchOptimizer extends NamedAlgorithm {
   }
 
   /** Reads the vias and traces on the board in ascending x order. */
+  /**
+   * Returns the optimizer's candidate order: one item per distinct (x, y, first layer) key in
+   * ascending order, where a via is keyed by its center and a trace by the larger of its end
+   * corners. A via wins over a trace with the same key, and among items of one kind the first in
+   * the item list wins. Unfixed vias and traces without ignored nets are eligible; a trace touching
+   * an unfixed via is not, because the via is optimized instead.
+   *
+   * <p>This is the order the former selection loop produced by scanning the whole item list once
+   * per candidate for the smallest key above the previous one; it is now built with one sort.
+   */
+  static List<Item> optimizationOrder(BasicBoard board) {
+    record Entry(double x, double y, int layer, int rank, int index, Item item) {}
+    List<Entry> entries = new ArrayList<>();
+    int index = 0;
+    Iterator<UndoableObjects.UndoableObjectNode> it = board.itemList.startReadObject();
+    for (UndoableObjects.Storable current = board.itemList.readObject(it);
+        current != null;
+        current = board.itemList.readObject(it)) {
+      if (current instanceof Via via && !via.isUserFixed() && !via.hasIgnoredNets()) {
+        FloatPoint center = via.getCenter().toFloat();
+        entries.add(new Entry(center.x, center.y, via.firstLayer(), 0, index++, via));
+      }
+    }
+    // Traces after vias, so that a via is preferred to a trace at the same location.
+    it = board.itemList.startReadObject();
+    for (UndoableObjects.Storable current = board.itemList.readObject(it);
+        current != null;
+        current = board.itemList.readObject(it)) {
+      if (current instanceof Trace trace
+          && !trace.isShoveFixed()
+          && !trace.hasIgnoredNets()
+          && !touchesUnfixedVia(trace)) {
+        FloatPoint first = trace.firstCorner().toFloat();
+        FloatPoint last = trace.lastCorner().toFloat();
+        FloatPoint key = first.x < last.x || first.x == last.x && first.y < last.y ? last : first;
+        entries.add(new Entry(key.x, key.y, trace.getLayer(), 1, index++, trace));
+      }
+    }
+    java.util.Comparator<Entry> byKey =
+        (a, b) -> {
+          if (a.x() != b.x()) {
+            return a.x() < b.x() ? -1 : 1;
+          }
+          if (a.y() != b.y()) {
+            return a.y() < b.y() ? -1 : 1;
+          }
+          return Integer.compare(a.layer(), b.layer());
+        };
+    entries.sort(byKey.thenComparingInt(Entry::rank).thenComparingInt(Entry::index));
+    List<Item> result = new ArrayList<>();
+    Entry previous = null;
+    for (Entry entry : entries) {
+      if (previous == null || byKey.compare(previous, entry) != 0) {
+        result.add(entry.item());
+        previous = entry;
+      }
+    }
+    return result;
+  }
+
+  private static boolean touchesUnfixedVia(Trace trace) {
+    for (Item contact : trace.getNormalContacts()) {
+      if (contact instanceof Via && !contact.isUserFixed()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   protected class ReadSortedRouteItems {
 
-    protected FloatPoint minItemCoor;
-    protected int minItemLayer;
-
-    ReadSortedRouteItems() {
-      minItemCoor = new FloatPoint(Integer.MIN_VALUE, Integer.MIN_VALUE);
-      minItemLayer = -1;
-    }
+    private final Iterator<Item> order = optimizationOrder(board).iterator();
 
     Item next() {
-      Item result = null;
-      FloatPoint currentMinCoor = new FloatPoint(Integer.MAX_VALUE, Integer.MAX_VALUE);
-      int currentMinLayer = Integer.MAX_VALUE;
-      Iterator<UndoableObjects.UndoableObjectNode> it = board.itemList.startReadObject();
-      for (; ; ) {
-        UndoableObjects.Storable currentItem = board.itemList.readObject(it);
-        if (currentItem == null) {
-          break;
-        }
-        if (currentItem instanceof Via currentVia) {
-          if (!currentVia.isUserFixed() && !currentVia.hasIgnoredNets()) {
-            FloatPoint currentViaCenter = currentVia.getCenter().toFloat();
-            int currentViaMinLayer = currentVia.firstLayer();
-            if (currentViaCenter.x > minItemCoor.x
-                || currentViaCenter.x == minItemCoor.x
-                    && (currentViaCenter.y > minItemCoor.y
-                        || currentViaCenter.y == minItemCoor.y
-                            && currentViaMinLayer > minItemLayer)) {
-              if (currentViaCenter.x < currentMinCoor.x
-                  || currentViaCenter.x == currentMinCoor.x
-                      && (currentViaCenter.y < currentMinCoor.y
-                          || currentViaCenter.y == currentMinCoor.y
-                              && currentViaMinLayer < currentMinLayer)) {
-                currentMinCoor = currentViaCenter;
-                currentMinLayer = currentViaMinLayer;
-                result = currentVia;
-              }
-            }
-          }
-        }
-      }
-      // Read traces last to prefer vias to traces at the same location
-      it = board.itemList.startReadObject();
-      for (; ; ) {
-        UndoableObjects.Storable currentItem = board.itemList.readObject(it);
-        if (currentItem == null) {
-          break;
-        }
-        if (currentItem instanceof Trace currentTrace) {
-          if (!currentTrace.isShoveFixed() && !currentTrace.hasIgnoredNets()) {
-            FloatPoint firstCorner = currentTrace.firstCorner().toFloat();
-            FloatPoint lastCorner = currentTrace.lastCorner().toFloat();
-            FloatPoint compareCorner;
-            if (firstCorner.x < lastCorner.x
-                || firstCorner.x == lastCorner.x && firstCorner.y < lastCorner.y) {
-              compareCorner = lastCorner;
-            } else {
-              compareCorner = firstCorner;
-            }
-            int currentTraceLayer = currentTrace.getLayer();
-            if (compareCorner.x > minItemCoor.x
-                || compareCorner.x == minItemCoor.x
-                    && (compareCorner.y > minItemCoor.y
-                        || compareCorner.y == minItemCoor.y && currentTraceLayer > minItemLayer)) {
-              if (compareCorner.x < currentMinCoor.x
-                  || compareCorner.x == currentMinCoor.x
-                      && (compareCorner.y < currentMinCoor.y
-                          || compareCorner.y == currentMinCoor.y
-                              && currentTraceLayer < currentMinLayer)) {
-                boolean isConnectedToVia = false;
-                Set<Item> traceContacts = currentTrace.getNormalContacts();
-                for (Item currentContact : traceContacts) {
-                  if (currentContact instanceof Via && !currentContact.isUserFixed()) {
-                    isConnectedToVia = true;
-                    break;
-                  }
-                }
-                if (!isConnectedToVia) {
-                  currentMinCoor = compareCorner;
-                  currentMinLayer = currentTraceLayer;
-                  result = currentTrace;
-                }
-              }
-            }
-          }
-        }
-      }
-      minItemCoor = currentMinCoor;
-      minItemLayer = currentMinLayer;
-      return result;
-    }
-
-    FloatPoint getCurrentPosition() {
-      return minItemCoor;
+      return order.hasNext() ? order.next() : null;
     }
   }
 }
