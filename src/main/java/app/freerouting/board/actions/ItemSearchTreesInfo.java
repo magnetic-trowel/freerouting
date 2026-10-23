@@ -2,20 +2,44 @@ package app.freerouting.board.actions;
 
 import app.freerouting.datastructures.ShapeTree;
 import app.freerouting.geometry.planar.TileShape;
-import java.util.Collection;
-import java.util.LinkedList;
 
 /**
- * Stores information about the search trees of the board items, which is precalculated for
- * performance reasons.
+ * Stores the search tree entries and the precalculated tree shapes of an item for each search tree.
+ * Array-backed: same lookup semantics (identity match on the tree, first match wins, insertion
+ * order kept) as the former LinkedList implementation, without iterator allocation or per-node
+ * pointer chasing.
  */
 public class ItemSearchTreesInfo {
 
-  private final Collection<SearchTreeInfo> treeList;
+  private ShapeTree[] trees = new ShapeTree[2];
+  private ShapeTree.Leaf[][] entries = new ShapeTree.Leaf[2][];
+  private TileShape[][] shapes = new TileShape[2][];
+  private int count;
 
   /** Creates a new instance of ItemSearchTreeEntries. */
-  public ItemSearchTreesInfo() {
-    this.treeList = new LinkedList<>();
+  public ItemSearchTreesInfo() {}
+
+  private int indexOf(ShapeTree tree) {
+    ShapeTree[] t = this.trees;
+    for (int i = 0; i < count; i++) {
+      if (t[i] == tree) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private int add(ShapeTree tree) {
+    if (count == trees.length) {
+      int n = count * 2;
+      trees = java.util.Arrays.copyOf(trees, n);
+      entries = java.util.Arrays.copyOf(entries, n);
+      shapes = java.util.Arrays.copyOf(shapes, n);
+    }
+    trees[count] = tree;
+    entries[count] = null;
+    shapes[count] = null;
+    return count++;
   }
 
   /**
@@ -23,25 +47,17 @@ public class ItemSearchTreesInfo {
    * tree no entries of this item are inserted.
    */
   public ShapeTree.Leaf[] getTreeEntries(ShapeTree tree) {
-    for (SearchTreeInfo currentTreeInfo : this.treeList) {
-      if (currentTreeInfo.tree == tree) {
-        return currentTreeInfo.entryArr;
-      }
-    }
-    return null;
+    int i = indexOf(tree);
+    return i < 0 ? null : entries[i];
   }
 
   /** Sets the item tree entries for the tree with identification number treeNo. */
   public void setTreeEntries(ShapeTree.Leaf[] treeEntries, ShapeTree tree) {
-    for (SearchTreeInfo currentTreeInfo : this.treeList) {
-      if (currentTreeInfo.tree == tree) {
-        currentTreeInfo.entryArr = treeEntries;
-        return;
-      }
+    int i = indexOf(tree);
+    if (i < 0) {
+      i = add(tree);
     }
-    SearchTreeInfo newTreeInfo = new SearchTreeInfo(tree);
-    newTreeInfo.entryArr = treeEntries;
-    this.treeList.add(newTreeInfo);
+    entries[i] = treeEntries;
   }
 
   /**
@@ -49,45 +65,23 @@ public class ItemSearchTreesInfo {
    * if the tile shapes of this tree are not yet precalculated.
    */
   public TileShape[] getPrecalculatedTreeShapes(ShapeTree tree) {
-    for (SearchTreeInfo currentTreeInfo : this.treeList) {
-      if (currentTreeInfo.tree == tree) {
-        return currentTreeInfo.precalculatedTreeShapes;
-      }
-    }
-    return null;
+    int i = indexOf(tree);
+    return i < 0 ? null : shapes[i];
   }
 
-  /** Sets the item tree entries for the tree with identification number treeNo. */
+  /** Sets the precalculated tree shapes for the tree with identification number treeNo. */
   public void setPrecalculatedTreeShapes(TileShape[] tileShapes, ShapeTree tree) {
-    for (SearchTreeInfo currentTreeInfo : this.treeList) {
-      if (currentTreeInfo.tree == tree) {
-        currentTreeInfo.precalculatedTreeShapes = tileShapes;
-        return;
-      }
+    int i = indexOf(tree);
+    if (i < 0) {
+      i = add(tree);
     }
-    SearchTreeInfo newTreeInfo = new SearchTreeInfo(tree);
-    newTreeInfo.precalculatedTreeShapes = tileShapes;
-    this.treeList.add(newTreeInfo);
+    shapes[i] = tileShapes;
   }
 
   /** Clears the stored information about the precalculated tree shapes for all search trees. */
   public void clearPrecalculatedTreeShapes() {
-    for (SearchTreeInfo currentTreeInfo : this.treeList) {
-
-      currentTreeInfo.precalculatedTreeShapes = null;
-    }
-  }
-
-  private static class SearchTreeInfo {
-
-    final ShapeTree tree;
-    ShapeTree.Leaf[] entryArr;
-    TileShape[] precalculatedTreeShapes;
-
-    SearchTreeInfo(ShapeTree tree) {
-      this.tree = tree;
-      entryArr = null;
-      precalculatedTreeShapes = null;
+    for (int i = 0; i < count; i++) {
+      shapes[i] = null;
     }
   }
 }

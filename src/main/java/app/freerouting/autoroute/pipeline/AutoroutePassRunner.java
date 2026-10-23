@@ -69,7 +69,12 @@ final class AutoroutePassRunner {
 
       long initialProgressStatisticsStart =
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
-      router.progressStatistics = new BoardStatistics(router.board, null, false);
+      // Statistics only feed board-updated listeners; a listener-less attempt (optimizer
+      // candidate) discards them.
+      router.progressStatistics =
+          router.boardUpdatedEventListeners.isEmpty()
+              ? null
+              : new BoardStatistics(router.board, null, false);
       router.progressItemsSinceStatistics = 0;
       final BoardStatistics stats = router.progressStatistics;
       if (BatchAutorouter.isBenchmarkProfileEnabled()) {
@@ -207,7 +212,8 @@ final class AutoroutePassRunner {
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
       long finalBoardStatisticsStart =
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
-      final BoardStatistics boardStatistics = router.boardStatistics();
+      final BoardStatistics boardStatistics =
+          router.boardUpdatedEventListeners.isEmpty() ? null : router.boardStatistics();
       if (BatchAutorouter.isBenchmarkProfileEnabled()) {
         router.profileBoardStatisticsNanos += System.nanoTime() - finalBoardStatisticsStart;
         router.profileIntermediateStatisticsNanos += System.nanoTime() - finalStatisticsStart;
@@ -432,7 +438,10 @@ final class AutoroutePassRunner {
           >= BatchAutorouter.PROGRESS_STATISTICS_ITEM_INTERVAL) {
         long progressStatisticsStart =
             BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
-        router.progressStatistics = new BoardStatistics(router.board, null, false);
+        router.progressStatistics =
+            router.boardUpdatedEventListeners.isEmpty()
+                ? null
+                : new BoardStatistics(router.board, null, false);
         router.progressItemsSinceStatistics = 0;
         if (BatchAutorouter.isBenchmarkProfileEnabled()) {
           router.profileBoardStatisticsNanos += System.nanoTime() - progressStatisticsStart;

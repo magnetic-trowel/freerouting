@@ -94,6 +94,10 @@ public final class IntPoint extends Point implements Serializable {
   /** Returns the difference vector of this point and other. */
   @Override
   public Vector differenceBy(Point other) {
+    if (other instanceof IntPoint o) {
+      // -(o.x - x) == x - o.x in two's-complement int arithmetic.
+      return new IntVector(x - o.x, y - o.y);
+    }
     Vector tmp = other.differenceBy(this);
     return tmp.negate();
   }
@@ -111,6 +115,15 @@ public final class IntPoint extends Point implements Serializable {
 
   @Override
   public Side sideOf(Line line) {
+    if (line.a instanceof IntPoint a && line.b instanceof IntPoint b) {
+      int v1x = x - a.x;
+      int v1y = y - a.y;
+      int v2x = b.x - a.x;
+      int v2y = b.y - a.y;
+      // Same expression and operand order as IntVector.sideOf(IntVector), then negated.
+      double determinant = (double) v1x * v2y - (double) v1y * v2x;
+      return Side.of(determinant).negate();
+    }
     Vector v1 = differenceBy(line.a);
     Vector v2 = line.b.differenceBy(line.a);
     return v1.sideOf(v2);

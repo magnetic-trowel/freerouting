@@ -79,6 +79,7 @@ public abstract class ShapeTree {
       }
       // Construct a new KdLeaf and set it up
       Leaf newLeaf = new Leaf(object, index, null, boundingShape);
+      newLeaf.layerMask = leafLayerMask(object, index);
       this.insert(newLeaf);
       return newLeaf;
     } finally {
@@ -87,6 +88,16 @@ public abstract class ShapeTree {
   }
 
   abstract void insert(Leaf leaf);
+
+  /** Layer bit of the index-th shape of object, or all bits when unknown. */
+  protected long leafLayerMask(ShapeTree.Storable object, int index) {
+    return -1L;
+  }
+
+  /** Bit for a layer, or all bits when the layer cannot be represented. */
+  public static long layerBit(int layer) {
+    return (layer >= 0 && layer < 64) ? (1L << layer) : -1L;
+  }
 
   public abstract void removeLeaf(Leaf leaf);
 
@@ -230,6 +241,12 @@ public abstract class ShapeTree {
 
     public RegularTileShape boundingShape;
     InnerNode parent;
+
+    /**
+     * Superset of the layers of the leaves below this node (bit i = layer i; all bits when unknown
+     * or layer >= 64). Kept conservative: OR-ed on insert, never narrowed on removal.
+     */
+    public long layerMask = -1L;
   }
 
   //////////////////////////////////////////////////////////

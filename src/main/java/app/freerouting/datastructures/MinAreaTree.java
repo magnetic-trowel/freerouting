@@ -84,6 +84,33 @@ public class MinAreaTree extends ShapeTree {
     }
   }
 
+  /**
+   * Appends the overlapping leaves in traversal order, without sorting, while the read lock is
+   * held. Subtrees whose layer mask has no bit in common with {@code layerBits} are skipped; pass
+   * -1 to visit all layers. Skipping a subtree keeps the relative order of the remaining leaves.
+   */
+  protected final void overlapsUnsortedUnlocked(
+      RegularTileShape shape, long layerBits, List<Leaf> result) {
+    if (this.root == null) {
+      return;
+    }
+    ArrayStack<TreeNode> stack = nodeStack.get();
+    stack.reset();
+    stack.push(this.root);
+    TreeNode currentNode;
+    while ((currentNode = stack.pop()) != null) {
+      onNodeVisited();
+      if ((currentNode.layerMask & layerBits) != 0 && currentNode.boundingShape.intersects(shape)) {
+        if (currentNode instanceof Leaf leaf) {
+          result.add(leaf);
+        } else {
+          stack.push(((InnerNode) currentNode).firstChild);
+          stack.push(((InnerNode) currentNode).secondChild);
+        }
+      }
+    }
+  }
+
   /** Extension hook for testing and instrumentation during tree traversal. */
   protected void onNodeVisited() {}
 
@@ -115,6 +142,7 @@ public class MinAreaTree extends ShapeTree {
     RegularTileShape newBounds = leaf.boundingShape.union(leafToReplace.boundingShape);
     InnerNode currentParent = leafToReplace.parent;
     InnerNode newNode = new InnerNode(newBounds, currentParent);
+    newNode.layerMask = leaf.layerMask | leafToReplace.layerMask;
 
     if (leafToReplace.parent != null) {
       // Replace the pointer from the parent to the leaf with our new node
@@ -144,6 +172,7 @@ public class MinAreaTree extends ShapeTree {
       InnerNode currentInnerNode = (InnerNode) node;
       currentInnerNode.boundingShape =
           leafToInsert.boundingShape.union(currentInnerNode.boundingShape);
+      currentInnerNode.layerMask |= leafToInsert.layerMask;
 
       // Choose the child, so that the area increase of that child after taking the union
       // with the shape of leafToInsert is minimal.

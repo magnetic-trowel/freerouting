@@ -31,6 +31,8 @@ class ShapeSearchTreeLeafLifecycleTest {
     GatedShapeSearchTree tree = new GatedShapeSearchTree(gate);
     BlockingRoom room = new BlockingRoom(gate);
     tree.insert(room);
+    // Insertion reads the shape layer to tag the leaf; gate only the query's dereference.
+    room.armed = true;
     ShapeTree.Leaf leaf = tree.overlaps(QUERY_SHAPE).iterator().next();
 
     Collection<ShapeTree.TreeEntry> entries = new LinkedList<>();
@@ -107,6 +109,7 @@ class ShapeSearchTreeLeafLifecycleTest {
   private static final class BlockingRoom extends CompleteFreeSpaceExpansionRoom {
 
     private final Gate gate;
+    private volatile boolean armed;
 
     private BlockingRoom(Gate gate) {
       super(new IntBox(-20, -20, 20, 20), 0, 1);
@@ -115,8 +118,10 @@ class ShapeSearchTreeLeafLifecycleTest {
 
     @Override
     public int shapeLayer(int index) {
-      gate.shapeLayerEntered.countDown();
-      await(gate.allowShapeLayerToContinue);
+      if (armed) {
+        gate.shapeLayerEntered.countDown();
+        await(gate.allowShapeLayerToContinue);
+      }
       return super.shapeLayer(index);
     }
   }

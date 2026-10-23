@@ -32,8 +32,10 @@ import java.awt.geom.Rectangle2D;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 /** Statistics of a board. */
 public class BoardStatistics implements Serializable {
@@ -461,11 +463,25 @@ public class BoardStatistics implements Serializable {
     int total = 0;
     int escaped = 0;
     int alreadyConnected = 0;
+    // All pins of one net share the answer: the connected set is an equivalence class over the
+    // net's connectable items, so it either covers the whole net for every pin or for none.
+    Map<Integer, Boolean> netFullyConnected = new HashMap<>();
     for (Pin pin : smdPins) {
       if (pin.netCount() > 0) {
         total++;
         int netNumber = pin.getNetNumber(0);
-        if (pin.getUnconnectedSet(netNumber).isEmpty()) {
+        boolean pinConnected;
+        if (netNumber > 0) {
+          Boolean memo = netFullyConnected.get(netNumber);
+          if (memo == null) {
+            memo = pin.getUnconnectedSet(netNumber).isEmpty();
+            netFullyConnected.put(netNumber, memo);
+          }
+          pinConnected = memo;
+        } else {
+          pinConnected = pin.getUnconnectedSet(netNumber).isEmpty();
+        }
+        if (pinConnected) {
           alreadyConnected++;
         }
         if (isPinEscaped(pin)) {

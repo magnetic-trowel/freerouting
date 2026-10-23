@@ -59,6 +59,15 @@ public final class DebugControl {
     return settings != null ? settings.debugSettings : null;
   }
 
+  /**
+   * Returns true if single stepping or an insertion delay is configured, i.e. if {@link
+   * #check(String, String)} can do anything other than return false.
+   */
+  public boolean isActive() {
+    DebugSettings ds = getDebugSettings();
+    return ds != null && (ds.singleStepExecution || ds.traceInsertionDelay != 0);
+  }
+
   /** Resets the execution state. Starts in PAUSED mode if single stepping is enabled. */
   public void reset() {
     DebugSettings ds = getDebugSettings();

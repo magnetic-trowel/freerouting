@@ -162,6 +162,9 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
     Collection<IncompleteFreeSpaceExpansionRoom> result = new ArrayList<>();
     result.add(new IncompleteFreeSpaceExpansionRoom(startShape, roomLayer, shapeToBeContained));
     ArrayStack<TreeNode> stack = completeShapeStack.get();
+    // Only leaves on roomLayer can restrain the room; pruning other-layer subtrees keeps the
+    // relative DFS order of the remaining leaves.
+    final long roomLayerBits = debugAnchor ? -1L : layerBit(roomLayer);
     stack.reset();
     stack.push(this.root);
     TreeNode currentNode;
@@ -174,12 +177,13 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
       if (currentNode.boundingShape.intersects(boundingShape)) {
         if (currentNode instanceof Leaf currentLeaf) {
           SearchTreeObject currentObject = (SearchTreeObject) currentLeaf.object;
-          boolean isObstacle = currentObject.isTraceObstacle(netNumber);
-
           int shapeIndex = currentLeaf.shapeIndexInObject;
           int objectLayer = currentObject.shapeLayer(shapeIndex);
           boolean sameLayer = objectLayer == roomLayer;
           boolean ignoredObject = currentObject == ignoreObject;
+          boolean isObstacle =
+              (debugAnchor || (sameLayer && !ignoredObject))
+                  && currentObject.isTraceObstacle(netNumber);
           if (debugAnchor) {
             traceCompleteShapeFilter(
                 debugStep,
@@ -194,8 +198,9 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
           }
           if (isObstacle && sameLayer && !ignoredObject) {
 
-            IntOctagon currentObjectShape =
-                currentObject.getTreeShape(this, shapeIndex).boundingOctagon();
+            // The 45-degree tree stores each leaf's bounding octagon at insertion, which equals
+            // getTreeShape(this, shapeIndex).boundingOctagon().
+            IntOctagon currentObjectShape = (IntOctagon) currentLeaf.boundingShape;
             if (debugAnchor) {
               traceCompleteShapeCandidate(
                   debugStep, netNumber, roomLayer, currentObject, currentObjectShape);
@@ -306,10 +311,14 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
         } else {
           TreeNode first = ((InnerNode) currentNode).firstChild;
           TreeNode second = ((InnerNode) currentNode).secondChild;
-          if (first != null && first.boundingShape.intersects(boundingShape)) {
+          if (first != null
+              && (first.layerMask & roomLayerBits) != 0
+              && first.boundingShape.intersects(boundingShape)) {
             stack.push(first);
           }
-          if (second != null && second.boundingShape.intersects(boundingShape)) {
+          if (second != null
+              && (second.layerMask & roomLayerBits) != 0
+              && second.boundingShape.intersects(boundingShape)) {
             stack.push(second);
           }
         }

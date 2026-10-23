@@ -13,6 +13,7 @@ import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.datastructures.ArrayStack;
 import app.freerouting.datastructures.MinAreaTree;
+import app.freerouting.datastructures.ShapeTree;
 import app.freerouting.datastructures.Signum;
 import app.freerouting.geometry.planar.Circle;
 import app.freerouting.geometry.planar.ConvexShape;
@@ -60,6 +61,15 @@ public class ShapeSearchTree extends MinAreaTree {
   /** Reusable result list for spatial overlap queries, isolated per caller thread. */
   private final ThreadLocal<List<Leaf>> queryLeafBuffer =
       ThreadLocal.withInitial(() -> new ArrayList<>(128));
+
+  /** Tags each leaf with the layer of its shape so traversals can skip other-layer subtrees. */
+  @Override
+  protected long leafLayerMask(ShapeTree.Storable object, int index) {
+    if (object instanceof SearchTreeObject searchTreeObject) {
+      return layerBit(searchTreeObject.shapeLayer(index));
+    }
+    return -1L;
+  }
 
   /**
    * The clearance class number for which the shapes of this tree is compensated. If
@@ -503,7 +513,12 @@ public class ShapeSearchTree extends MinAreaTree {
     tmpList.clear();
     boolean is45Degree = shape instanceof IntOctagon;
     try {
-      this.overlapsUnlocked(bounds, tmpList);
+      this.overlapsUnsortedUnlocked(bounds, layer >= 0 ? layerBit(layer) : -1L, tmpList);
+      if (layer >= 0) {
+        tmpList.removeIf(
+            leaf -> ((SearchTreeObject) leaf.object).shapeLayer(leaf.shapeIndexInObject) != layer);
+      }
+      tmpList.sort(null);
       for (Leaf currentLeaf : tmpList) {
         SearchTreeObject currentObject = (SearchTreeObject) currentLeaf.object;
         int shapeIndex = currentLeaf.shapeIndexInObject;
@@ -632,7 +647,10 @@ public class ShapeSearchTree extends MinAreaTree {
     Set<EntrySortedByClearance> sortedItems = new TreeSet<>();
     int nextEntryId = 0;
     try {
-      overlapsUnlocked(offsetBounds, tmpList);
+      overlapsUnsortedUnlocked(offsetBounds, layerBit(layer), tmpList);
+      tmpList.removeIf(
+          leaf -> ((SearchTreeObject) leaf.object).shapeLayer(leaf.shapeIndexInObject) != layer);
+      tmpList.sort(null);
       for (Leaf currentLeaf : tmpList) {
         SearchTreeObject currentObject = (SearchTreeObject) currentLeaf.object;
         int shapeIndex = currentLeaf.shapeIndexInObject;

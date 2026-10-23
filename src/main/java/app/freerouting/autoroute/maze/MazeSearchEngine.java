@@ -31,12 +31,11 @@ import app.freerouting.geometry.planar.Polyline;
 import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.logger.FRLogger;
 import java.util.Collection;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.NavigableSet;
 import java.util.Random;
 import java.util.Set;
-import java.util.SortedSet;
 import java.util.TreeSet;
 
 /** Class for auto-routing an incomplete connection via a maze search algorithm. */
@@ -50,7 +49,7 @@ public class MazeSearchEngine {
   final AutorouteControl ctrl;
 
   /** The queue of expanded elements used in this search algorithm. */
-  final SortedSet<MazeListElement> mazeExpansionList;
+  final NavigableSet<MazeListElement> mazeExpansionList;
 
   /**
    * Used for calculating of a good lower bound for the distance between a new MazeExpansionElement
@@ -325,9 +324,7 @@ public class MazeSearchEngine {
         return false;
       }
 
-      Iterator<MazeListElement> it = mazeExpansionList.iterator();
-      listElement = it.next();
-      it.remove();
+      listElement = mazeExpansionList.pollFirst();
 
       int currentSectionNo = listElement.sectionNoOfDoor;
       currentDoorSection = listElement.door.getMazeSearchElement(currentSectionNo);

@@ -46,12 +46,19 @@ public class GlobalSettings implements Serializable {
     return currentInstance;
   }
 
+  /** Cached reflective handle to {@code Freerouting.globalSettings}; looked up on first use. */
+  private static volatile java.lang.reflect.Field cachedGlobalSettingsField;
+
   private static GlobalSettings getFreeroutingGlobalSettingsIfAvailable() {
     try {
-      Class<?> freeroutingClass =
-          Class.forName(
-              "app.freerouting.Freerouting", false, GlobalSettings.class.getClassLoader());
-      java.lang.reflect.Field field = freeroutingClass.getField("globalSettings");
+      java.lang.reflect.Field field = cachedGlobalSettingsField;
+      if (field == null) {
+        Class<?> freeroutingClass =
+            Class.forName(
+                "app.freerouting.Freerouting", false, GlobalSettings.class.getClassLoader());
+        field = freeroutingClass.getField("globalSettings");
+        cachedGlobalSettingsField = field;
+      }
       Object val = field.get(null);
       if (val instanceof GlobalSettings gs) {
         return gs;
