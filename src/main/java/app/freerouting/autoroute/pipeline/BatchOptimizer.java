@@ -823,6 +823,19 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 ? this.settings.optimizer.maxConsecutiveFailures
                 : 50);
 
+    // Candidates with the same key route identically; evaluate the first and reuse its result.
+    int[] representative = new int[candidateItemIds.size()];
+    int[] lastDuplicate = new int[candidateItemIds.size()];
+    Map<String, Integer> firstIndexByKey = new HashMap<>();
+    for (int k = 0; k < candidateItemIds.size(); k++) {
+      String key = candidateKey(this.board, candidateItemIds.get(k));
+      Integer first = key == null ? null : firstIndexByKey.putIfAbsent(key, k);
+      representative[k] = first == null ? k : first;
+      lastDuplicate[representative[k]] = k;
+    }
+    Map<Integer, Future<CandidateResult>> futureByIndex = new HashMap<>();
+    int nextToSubmit = 0;
+
     try {
       for (int i = 0; i < candidateItemIds.size(); i += chunkSize) {
         if (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs) {
@@ -837,28 +850,43 @@ public final class BatchOptimizer extends NamedAlgorithm {
         }
 
         int end = Math.min(i + chunkSize, candidateItemIds.size());
-        List<Integer> chunk = candidateItemIds.subList(i, end);
-        List<Future<CandidateResult>> futures = new ArrayList<>(chunk.size());
-        for (int itemId : chunk) {
-          futures.add(
-              pool.submit(
-                  new OptimizeCandidateTask(
-                      job,
-                      baselineImage,
-                      itemId,
-                      this.minCumulativeTraceLength,
-                      withPreferredDirections,
-                      this.useIncreasedRipupCosts,
-                      this.thread,
-                      this.deadlineMs,
-                      baselineMetrics,
-                      selection != CommitSelection.ALL,
-                      selection == CommitSelection.SCORE_RANKED ? scoreTracker : null)));
-        }
-
-        for (Future<CandidateResult> future : futures) {
+        for (int k = i; k < end; k++) {
+          // Keep chunkSize candidates in flight ahead of the one consumed next. Results are still
+          // consumed in candidate order, so every decision is the same as with a barrier per
+          // chunk, but a slow candidate no longer leaves the other workers idle.
+          int submitLimit = Math.min(candidateItemIds.size(), k + chunkSize);
+          while (nextToSubmit < submitLimit) {
+            int toSubmit = nextToSubmit++;
+            if (representative[toSubmit] != toSubmit) {
+              continue;
+            }
+            int itemId = candidateItemIds.get(toSubmit);
+            futureByIndex.put(
+                toSubmit,
+                pool.submit(
+                    new OptimizeCandidateTask(
+                        job,
+                        baselineImage,
+                        itemId,
+                        this.minCumulativeTraceLength,
+                        withPreferredDirections,
+                        this.useIncreasedRipupCosts,
+                        this.thread,
+                        this.deadlineMs,
+                        baselineMetrics,
+                        selection != CommitSelection.ALL,
+                        selection == CommitSelection.SCORE_RANKED ? scoreTracker : null)));
+          }
           try {
-            CandidateResult res = future.get();
+            int rep = representative[k];
+            CandidateResult res = futureByIndex.get(rep).get();
+            if (k == lastDuplicate[rep]) {
+              futureByIndex.remove(rep);
+            }
+            if (res != null && rep != k) {
+              int itemId = candidateItemIds.get(k);
+              res = res.forDuplicate(itemId, getItemPosition(this.board.getItem(itemId)));
+            }
             this.totalItemsOptimized++;
             if (res != null) {
               this.workerCpuNanos.addAndGet(res.cpuUsedNanos);
@@ -1262,23 +1290,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     }
     routerCountersBefore.incompleteCount = calculateIncompleteCount(routingBoard);
 
-    Set<Item> rippedItems = new TreeSet<>();
-    rippedItems.add(item);
-
-    if (item instanceof Trace currentTrace) {
-      Set<Item> currentContactList = currentTrace.getStartContacts();
-      for (int i = 0; i < 2; i++) {
-        if (containsOnlyUnfixedTraces(currentContactList)) {
-          rippedItems.addAll(currentContactList);
-        }
-        currentContactList = currentTrace.getEndContacts();
-      }
-    }
-
-    Set<Item> rippedConnections = new TreeSet<>();
-    for (Item currentItem : rippedItems) {
-      rippedConnections.addAll(currentItem.getConnectionItems(Item.StopConnectionOption.NONE));
-    }
+    Set<Item> rippedConnections = rippedConnectionsOf(item);
 
     for (Item currentItem : rippedConnections) {
       if (currentItem.isUserFixed() || currentItem.hasIgnoredNets()) {
@@ -1335,6 +1347,51 @@ public final class BatchOptimizer extends NamedAlgorithm {
     return result;
   }
 
+  /** The connections a candidate rips: its own and, for a trace, those of unfixed neighbours. */
+  private static Set<Item> rippedConnectionsOf(Item item) {
+    Set<Item> rippedItems = new TreeSet<>();
+    rippedItems.add(item);
+
+    if (item instanceof Trace currentTrace) {
+      Set<Item> currentContactList = currentTrace.getStartContacts();
+      for (int i = 0; i < 2; i++) {
+        if (containsOnlyUnfixedTraces(currentContactList)) {
+          rippedItems.addAll(currentContactList);
+        }
+        currentContactList = currentTrace.getEndContacts();
+      }
+    }
+
+    Set<Item> rippedConnections = new TreeSet<>();
+    for (Item currentItem : rippedItems) {
+      rippedConnections.addAll(currentItem.getConnectionItems(Item.StopConnectionOption.NONE));
+    }
+    return rippedConnections;
+  }
+
+  /**
+   * Returns everything {@link #optRouteItemOnBoard} reads of a candidate besides the pass's board
+   * image and flags: the connections it rips, the nets whose traces it combines and whether it is a
+   * trace (which scales the rip-up cost). Candidates with equal keys, such as the vias of one
+   * connection or the branches beside a fork, produce the same result. Returns null for candidates
+   * that are not shared.
+   */
+  static String candidateKey(RoutingBoard board, int itemId) {
+    Item item = board.getItem(itemId);
+    if (item == null || item.hasIgnoredNets()) {
+      return null;
+    }
+    StringBuilder key = new StringBuilder(item.getClass().getName());
+    for (int i = 0; i < item.netCount(); i++) {
+      key.append(':').append(item.getNetNumber(i));
+    }
+    key.append('|');
+    for (Item ripped : rippedConnectionsOf(item)) {
+      key.append(ripped.getId()).append(',');
+    }
+    return key.toString();
+  }
+
   private static FloatPoint getItemPosition(Item item) {
     if (item instanceof Via via) {
       return via.getCenter().toFloat();
@@ -1368,6 +1425,12 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.itemPosition = itemPosition;
       this.cpuUsedNanos = cpuUsedNanos;
       this.allocUsedBytes = allocUsedBytes;
+    }
+
+    /** This result for a duplicate candidate: same routing, board and changes, its own item. */
+    CandidateResult forDuplicate(int itemId, FloatPoint position) {
+      return new CandidateResult(
+          result.withItemId(itemId), board, changes, scoreGain, position, 0, 0);
     }
 
     /** True if this candidate is a better pick than the other under the commit selection. */

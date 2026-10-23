@@ -5,7 +5,11 @@ import app.freerouting.datastructures.Stoppable;
 /** Runs an interactive action in a separate thread that can be stopped by the user. */
 public abstract class StoppableThread extends Thread implements Stoppable {
 
-  private StopRequestState stopRequestState = StopRequestState.NONE;
+  /**
+   * Volatile so the readers, which the maze polls for every expansion element and every optimizer
+   * worker shares, need no lock; the writers stay synchronized for their check-then-set.
+   */
+  private volatile StopRequestState stopRequestState = StopRequestState.NONE;
 
   /** Creates a new stoppable thread. */
   protected StoppableThread() {}
@@ -25,7 +29,7 @@ public abstract class StoppableThread extends Thread implements Stoppable {
   }
 
   @Override
-  public synchronized boolean isStopRequested() {
+  public boolean isStopRequested() {
     return this.stopRequestState == StopRequestState.ALL;
   }
 
@@ -37,7 +41,7 @@ public abstract class StoppableThread extends Thread implements Stoppable {
   }
 
   /** Returns whether the Autorouter should stop. */
-  public synchronized boolean isStopAutoRouterRequested() {
+  public boolean isStopAutoRouterRequested() {
     return this.stopRequestState != StopRequestState.NONE;
   }
 
