@@ -1,5 +1,6 @@
 package app.freerouting.datastructures;
 
+import app.freerouting.geometry.planar.IntOctagon;
 import app.freerouting.geometry.planar.RegularTileShape;
 import app.freerouting.geometry.planar.ShapeBoundingDirections;
 import app.freerouting.logger.FRLogger;
@@ -165,6 +166,14 @@ public class MinAreaTree extends ShapeTree {
     }
   }
 
+  /** Area growth of childShape when added is merged into it; octagons skip the union object. */
+  private static double areaIncrease(RegularTileShape added, RegularTileShape childShape) {
+    if (added instanceof IntOctagon addedOctagon && childShape instanceof IntOctagon childOctagon) {
+      return IntOctagon.unionArea(addedOctagon, childOctagon) - childOctagon.area();
+    }
+    return added.union(childShape).area() - childShape.area();
+  }
+
   private Leaf positionLocate(TreeNode currentNode, Leaf leafToInsert) {
     TreeNode node = currentNode;
 
@@ -177,14 +186,10 @@ public class MinAreaTree extends ShapeTree {
       // Choose the child, so that the area increase of that child after taking the union
       // with the shape of leafToInsert is minimal.
 
-      RegularTileShape firstChildShape = currentInnerNode.firstChild.boundingShape;
-      RegularTileShape unionWithFirstChildShape = leafToInsert.boundingShape.union(firstChildShape);
-      double firstAreaIncrease = unionWithFirstChildShape.area() - firstChildShape.area();
-
-      RegularTileShape secondChildShape = currentInnerNode.secondChild.boundingShape;
-      RegularTileShape unionWithSecondChildShape =
-          leafToInsert.boundingShape.union(secondChildShape);
-      double secondAreaIncrease = unionWithSecondChildShape.area() - secondChildShape.area();
+      double firstAreaIncrease =
+          areaIncrease(leafToInsert.boundingShape, currentInnerNode.firstChild.boundingShape);
+      double secondAreaIncrease =
+          areaIncrease(leafToInsert.boundingShape, currentInnerNode.secondChild.boundingShape);
 
       if (firstAreaIncrease <= secondAreaIncrease) {
         node = currentInnerNode.firstChild;
