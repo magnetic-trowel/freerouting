@@ -150,6 +150,14 @@ public class Components implements Serializable {
   }
 
   /**
+   * Removes the top snapshot from the undo stack, keeping its changes in the snapshot below. Must
+   * be called together with the item list's pop so both undo stacks stay at the same level.
+   */
+  public boolean popSnapshot() {
+    return this.undoList.popSnapshot();
+  }
+
+  /**
    * Restores the situation at the previous snapshot. Returns false, if no more undo is possible.
    */
   public boolean undo(BoardObservers observers) {

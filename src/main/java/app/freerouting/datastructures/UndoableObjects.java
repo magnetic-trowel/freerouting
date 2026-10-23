@@ -328,6 +328,15 @@ public class UndoableObjects implements Serializable {
     }
     deletedObjectsStack.remove(deletedObjectsStackSize - 1);
     --stackLevel;
+    if (stackLevel == 0) {
+      // Nothing can be undone or redone below the bottom level. Drop the saved copies, which would
+      // otherwise grow with every popped snapshot (the batch router and the optimizer pop one per
+      // attempt) and be carried along by every serialized copy of the board.
+      for (UndoableObjectNode currentNode : objects.values()) {
+        currentNode.undoObject = null;
+        currentNode.redoObject = null;
+      }
+    }
     ++version;
     return true;
   }
