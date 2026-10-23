@@ -9,6 +9,7 @@ import app.freerouting.management.BoardLoader;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
 import app.freerouting.settings.sources.DsnFileSettings;
+import app.freerouting.util.AtomicFiles;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -133,7 +134,7 @@ public final class DrcRunner {
       String outputFileName = drcJob.drc.getAbsolutePath();
       try {
         Path outputFilePath = Path.of(outputFileName);
-        Files.write(outputFilePath, drcReportJson.getBytes(StandardCharsets.UTF_8));
+        AtomicFiles.write(outputFilePath, drcReportJson.getBytes(StandardCharsets.UTF_8));
         FRLogger.info("DRC report written to: " + outputFileName);
       } catch (IOException e) {
         FRLogger.error("Couldn't save the DRC report to '" + outputFileName + "'", e);

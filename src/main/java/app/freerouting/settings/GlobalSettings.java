@@ -9,14 +9,15 @@ import app.freerouting.io.FileFormat;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.sources.CliSettings;
 import app.freerouting.settings.sources.DefaultSettings;
+import app.freerouting.util.AtomicFiles;
 import app.freerouting.util.ReflectionUtil;
 import app.freerouting.util.gson.GsonProvider;
 import com.google.gson.annotations.SerializedName;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Serializable;
-import java.io.Writer;
 import java.nio.file.AccessDeniedException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -478,8 +479,11 @@ public class GlobalSettings implements Serializable {
     globalSettings.version = getReleaseSafeVersion();
 
     // Write the settings to the file
-    try (Writer writer = Files.newBufferedWriter(configurationFilePath)) {
-      GsonProvider.GSON.toJson(globalSettings, writer);
+    // Atomically: a process stopped while saving must not leave a truncated freerouting.json.
+    try {
+      AtomicFiles.write(
+          configurationFilePath,
+          GsonProvider.GSON.toJson(globalSettings).getBytes(StandardCharsets.UTF_8));
     } catch (AccessDeniedException e) {
       throw new AccessDeniedException(
           configurationFilePath.toString(),
