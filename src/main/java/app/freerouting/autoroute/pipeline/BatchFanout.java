@@ -248,7 +248,11 @@ public final class BatchFanout {
         String fullPinName =
             currentComponent.boardComponent.name + "-" + currentPin.boardPin.name();
         int netNumber = currentPin.boardPin.getNetNumber(0);
-        int targetCount = currentPin.boardPin.getUnconnectedSet(netNumber).size();
+        // Only the granular trace messages below report it; the connectivity walk is not free.
+        int targetCount =
+            FRLogger.isGranularTraceActive()
+                ? currentPin.boardPin.getUnconnectedSet(netNumber).size()
+                : -1;
 
         app.freerouting.rules.Net net = this.routingBoard.rules.nets.get(netNumber);
         if (net != null) {

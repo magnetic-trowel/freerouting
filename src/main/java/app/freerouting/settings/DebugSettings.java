@@ -3,6 +3,7 @@ package app.freerouting.settings;
 import com.google.gson.annotations.SerializedName;
 import java.io.Serializable;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 
 /** Settings for debugging the routing engine. */
@@ -49,7 +50,7 @@ public class DebugSettings implements Serializable {
     return filterByNet.contains(netNoStr)
         || filterByNet.contains("Net #" + netNumber)
         || filterByNet.contains("Net#" + netNumber)
-        || (netName != null && filterByNet.contains(netName.toLowerCase()));
+        || (netName != null && filterByNet.contains(netName.toLowerCase(Locale.ROOT)));
     // Note: external input should be lower-cased before adding to the set if we
     // want case insensitivity
   }

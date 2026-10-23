@@ -1,6 +1,7 @@
 package app.freerouting.logger;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.UUID;
 
 /** Represents a single in-memory log entry. */
@@ -55,6 +56,6 @@ public class LogEntry {
 
   @Override
   public String toString() {
-    return "%-7s".formatted(this.type.toString().toUpperCase()) + " " + this.message;
+    return "%-7s".formatted(this.type.toString().toUpperCase(Locale.ROOT)) + " " + this.message;
   }
 }

@@ -15,6 +15,9 @@ import java.util.Locale;
  */
 public class ClearanceMatrix implements Serializable {
 
+  // Pinned to the value before getModificationCount was added.
+  @java.io.Serial private static final long serialVersionUID = -7470527678988917326L;
+
   public static final int clearance_safety_margin = 16;
   private final LayerStructure layerStructure;
   private final int[] maxValueOnLayer; //  maximum clearance value for each layer
@@ -23,6 +26,9 @@ public class ClearanceMatrix implements Serializable {
   private int classCount;
 
   private Row[] row; // vector of classCount rows of the clearance matrix
+
+  /** Counts the changes of this matrix, for caches of clearance-dependent results. */
+  private transient int modificationCount;
 
   /**
    * Creates a new instance for {@code classCount} clearance classes on the layers in {@code
@@ -74,6 +80,11 @@ public class ClearanceMatrix implements Serializable {
     return row[clearanceClassIndex].name;
   }
 
+  /** Returns a count that changes whenever a value or the class list of this matrix changes. */
+  public int getModificationCount() {
+    return modificationCount;
+  }
+
   /** Sets the value of all clearance classes with number {@literal >}= 1 to {@code value}. */
   public void setDefaultValue(int value) {
     for (int i = 0; i < layerStructure.layers.length; i++) {
@@ -114,6 +125,7 @@ public class ClearanceMatrix implements Serializable {
     }
 
     currentEntry.layer[layer] = value;
+    ++modificationCount;
     currentRow.maxValue[layer] = Math.max(currentRow.maxValue[layer], value);
     this.maxValueOnLayer[layer] = Math.max(this.maxValueOnLayer[layer], value);
   }
@@ -165,39 +177,41 @@ public class ClearanceMatrix implements Serializable {
     int finalValue =
         addSafetyMargin ? valueFromTheMatrix + clearance_safety_margin : valueFromTheMatrix;
 
-    FRLogger.trace(
-        "ClearanceMatrix.get_value",
-        "clearance_retrieved",
-        () ->
-            "Clearance value: class_i="
-                + classI
-                + " ("
-                + (classI < row.length ? row[classI].name : "?")
-                + ")"
-                + ", class_j="
-                + classJ
-                + " ("
-                + (classJ < row.length ? row[classJ].name : "?")
-                + ")"
-                + ", layer="
-                + layer
-                + " ("
-                + (layer < layerStructure.layers.length ? layerStructure.layers[layer].name : "?")
-                + ")"
-                + ", base_value="
-                + valueFromTheMatrix
-                + " ("
-                + (valueFromTheMatrix / 10000.0)
-                + "mm)"
-                + ", safety_margin="
-                + (addSafetyMargin ? clearance_safety_margin : 0)
-                + ", finalValue="
-                + finalValue
-                + " ("
-                + (finalValue / 10000.0)
-                + "mm)",
-        "Clearance Check",
-        new Point[0]);
+    if (FRLogger.isGranularTraceActive()) {
+      FRLogger.trace(
+          "ClearanceMatrix.get_value",
+          "clearance_retrieved",
+          () ->
+              "Clearance value: class_i="
+                  + classI
+                  + " ("
+                  + (classI < row.length ? row[classI].name : "?")
+                  + ")"
+                  + ", class_j="
+                  + classJ
+                  + " ("
+                  + (classJ < row.length ? row[classJ].name : "?")
+                  + ")"
+                  + ", layer="
+                  + layer
+                  + " ("
+                  + (layer < layerStructure.layers.length ? layerStructure.layers[layer].name : "?")
+                  + ")"
+                  + ", base_value="
+                  + valueFromTheMatrix
+                  + " ("
+                  + (valueFromTheMatrix / 10000.0)
+                  + "mm)"
+                  + ", safety_margin="
+                  + (addSafetyMargin ? clearance_safety_margin : 0)
+                  + ", finalValue="
+                  + finalValue
+                  + " ("
+                  + (finalValue / 10000.0)
+                  + "mm)",
+          "Clearance Check",
+          new Point[0]);
+    }
 
     return finalValue;
   }
@@ -284,6 +298,7 @@ public class ClearanceMatrix implements Serializable {
     if (this.getNo(className) >= 0) {
       return false;
     }
+    ++modificationCount;
     int oldClassCount = this.classCount;
     ++this.classCount;
 
@@ -325,6 +340,7 @@ public class ClearanceMatrix implements Serializable {
 
   /** Removes the class with the given index from the clearance matrix. */
   public void removeClass(int index) {
+    ++modificationCount;
     int oldClassCount = this.classCount;
     --this.classCount;
 

@@ -49,6 +49,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Manages routing board operations in headless (non-GUI) mode for automated processing.
@@ -179,6 +180,11 @@ public class HeadlessBoardManager implements BoardManager {
    */
   protected long originalBoardChecksum;
 
+  /** Set by {@link #holdPostLoadProcessing()}; the held scan waits in heldPostLoadStart. */
+  private boolean holdPostLoadProcessing;
+
+  private Runnable heldPostLoadStart;
+
   /**
    * Creates a new headless board manager for the specified routing job.
    *
@@ -199,9 +205,9 @@ public class HeadlessBoardManager implements BoardManager {
       return;
     }
     String counterpartPath = null;
-    if (inputFilename.toLowerCase().endsWith(".dsn")) {
+    if (inputFilename.toLowerCase(Locale.ROOT).endsWith(".dsn")) {
       counterpartPath = inputFilename.substring(0, inputFilename.length() - 4) + ".json";
-    } else if (inputFilename.toLowerCase().endsWith(".json")) {
+    } else if (inputFilename.toLowerCase(Locale.ROOT).endsWith(".json")) {
       counterpartPath = inputFilename.substring(0, inputFilename.length() - 5) + ".dsn";
     }
     if (counterpartPath == null) {
@@ -233,7 +239,7 @@ public class HeadlessBoardManager implements BoardManager {
 
   private static RoutingBoard loadBoardFromFileForComparison(java.io.File file) {
     try (java.io.InputStream is = new java.io.FileInputStream(file)) {
-      if (file.getName().toLowerCase().endsWith(".json")) {
+      if (file.getName().toLowerCase(Locale.ROOT).endsWith(".json")) {
         try (java.io.Reader r =
             new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8)) {
           app.freerouting.io.BoardReadResult readResult =
@@ -367,6 +373,7 @@ public class HeadlessBoardManager implements BoardManager {
     this.edgeClearanceAppliedByOverride = false;
     applyCopperToEdgeClearanceOverride();
     applyHoleClearanceOverride();
+    applyMinTraceWidthOverride();
     applyPlaneNetsOverride();
     applyPlaneAsObstacleOverride();
     applyClearanceToleranceOverride();
@@ -416,6 +423,38 @@ public class HeadlessBoardManager implements BoardManager {
               + configuredClearanceBoardUnits
               + " board units)"
               + (holeKeepouts > 0 ? ", " + holeKeepouts + " hole keepouts reclassified." : "."));
+    }
+  }
+
+  /**
+   * Makes {@code router.min_trace_width_um} the board's minimum trace half width, which every
+   * automatic narrowing respects. Rounded up, so a trace at the minimum is never narrower than the
+   * configured width.
+   */
+  private void applyMinTraceWidthOverride() {
+    if (this.board == null
+        || this.board.rules == null
+        || this.routingJob == null
+        || this.routingJob.routerSettings == null
+        || this.routingJob.routerSettings.minTraceWidthUm == null) {
+      return;
+    }
+    double minTraceWidthUm = this.routingJob.routerSettings.minTraceWidthUm;
+    if (minTraceWidthUm < 0) {
+      FRLogger.warn(
+          "Ignoring router.min_trace_width_um because it is negative: " + minTraceWidthUm);
+      return;
+    }
+    double width = this.board.communication.physicalToBoard(minTraceWidthUm, Unit.UM);
+    int halfWidth = (int) Math.ceil(width / 2 - 1e-6);
+    this.board.rules.setMinAllowedTraceHalfWidth(halfWidth);
+    if (halfWidth > 0) {
+      FRLogger.info(
+          "Applied minimum trace width: "
+              + minTraceWidthUm
+              + " um ("
+              + 2 * halfWidth
+              + " board units).");
     }
   }
 
@@ -660,8 +699,7 @@ public class HeadlessBoardManager implements BoardManager {
       return;
     }
 
-    int boardResolution = Math.max(1, this.board.communication.resolution);
-    double mmToBoardScale = Unit.scale(boardResolution, Unit.MM, this.board.communication.unit);
+    double mmToBoardScale = this.board.communication.physicalToBoard(1.0, Unit.MM);
 
     // Ensure default meander constraints are properly scaled to board units
     this.board.rules.initDefaultMeanderConstraints(mmToBoardScale);
@@ -955,6 +993,7 @@ public class HeadlessBoardManager implements BoardManager {
       this.routingJob.routerSettings.applyNetClassExclusions(this.board);
       applyCopperToEdgeClearanceOverride();
       applyHoleClearanceOverride();
+      applyMinTraceWidthOverride();
       applyPlaneNetsOverride();
       applyPlaneAsObstacleOverride();
       applyClearanceToleranceOverride();
@@ -993,6 +1032,26 @@ public class HeadlessBoardManager implements BoardManager {
     // load (including GUI loads) on large designs.
   }
 
+  /**
+   * Makes the next load hold its deferred post-load scan (statistics, score bounds and the
+   * pre-existing clearance baseline) until {@link #releasePostLoadProcessing()}. Callers that apply
+   * a rules file or import a session after the load use it, so the scan neither races with those
+   * changes nor records the board as it was before them.
+   */
+  public void holdPostLoadProcessing() {
+    this.holdPostLoadProcessing = true;
+  }
+
+  /** Starts a post-load scan held by {@link #holdPostLoadProcessing()}. */
+  public void releasePostLoadProcessing() {
+    this.holdPostLoadProcessing = false;
+    Runnable start = this.heldPostLoadStart;
+    this.heldPostLoadStart = null;
+    if (start != null) {
+      start.run();
+    }
+  }
+
   private void scheduleDeferredPostLoadProcessing(String inputFilename, String analyticsFormat) {
     if (this.board == null) {
       return;
@@ -1002,6 +1061,30 @@ public class HeadlessBoardManager implements BoardManager {
         new java.util.concurrent.CompletableFuture<>();
     loadedBoard.postLoadFuture = future;
     HeadlessBoardManager manager = this;
+    java.util.concurrent.atomic.AtomicBoolean started =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    Runnable start =
+        () -> {
+          if (started.compareAndSet(false, true)) {
+            startDeferredPostLoadThread(
+                loadedBoard, future, manager, inputFilename, analyticsFormat);
+          }
+        };
+    if (this.holdPostLoadProcessing) {
+      this.heldPostLoadStart = start;
+      // A caller that waits for the scan before the release starts it instead of waiting forever.
+      loadedBoard.postLoadStarter = start;
+    } else {
+      start.run();
+    }
+  }
+
+  private void startDeferredPostLoadThread(
+      RoutingBoard loadedBoard,
+      java.util.concurrent.CompletableFuture<Void> future,
+      HeadlessBoardManager manager,
+      String inputFilename,
+      String analyticsFormat) {
     Thread.ofVirtual()
         .name("board-post-load")
         .start(

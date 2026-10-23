@@ -10,6 +10,7 @@ import app.freerouting.logger.FRLogger;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
 import app.freerouting.settings.sources.DsnFileSettings;
+import app.freerouting.util.AtomicFiles;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -233,7 +234,7 @@ public final class CliRunner {
               + "' ("
               + routingJob.output.format
               + ")...");
-      Files.write(outputFilePath, outputData.readAllBytes());
+      AtomicFiles.write(outputFilePath, outputData.readAllBytes());
       if (Files.exists(outputFilePath) && Files.size(outputFilePath) > 0) {
         FRLogger.info(
             "Successfully saved output file '"
@@ -270,10 +271,7 @@ public final class CliRunner {
                     false);
             byte[] bytes = outResult.getFile(fmt);
             if (bytes != null) {
-              if (addPath.getParent() != null) {
-                Files.createDirectories(addPath.getParent());
-              }
-              Files.write(addPath, bytes);
+              AtomicFiles.write(addPath, bytes);
               FRLogger.info(
                   "Successfully saved additional output file '"
                       + addPath.toAbsolutePath()

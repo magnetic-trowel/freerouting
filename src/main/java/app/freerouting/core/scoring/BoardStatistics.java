@@ -32,8 +32,10 @@ import java.awt.geom.Rectangle2D;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 /** Statistics of a board. */
 public class BoardStatistics implements Serializable {
@@ -86,6 +88,14 @@ public class BoardStatistics implements Serializable {
 
   @SerializedName("fanout")
   public BoardStatisticsFanout fanout = new BoardStatisticsFanout();
+
+  /**
+   * Forgets the cached optimizer score bounds of the board. Call it after changing the rules the
+   * bounds depend on (default trace width, clearance, vias), such as after reading a rules file.
+   */
+  public static void forgetBounds(BasicBoard board) {
+    BoardStatisticsBoundsCalculator.invalidate(board);
+  }
 
   /** Creates empty board statistics. */
   public BoardStatistics() {}
@@ -207,12 +217,8 @@ public class BoardStatistics implements Serializable {
     // term in getNormalizedScore() is thousands of times larger than
     // maxConnections * unroutedNetPenalty for high-resolution boards, forcing the
     // score to 0 even for a perfectly-routed, zero-violation layout.
-    double boardUnitToMmFactor =
-        Unit.scale(1.0, board.communication.unit, Unit.MM)
-            / (board.communication.resolution > 0 ? board.communication.resolution : 1);
-    double boardUnitToUmFactor =
-        Unit.scale(1.0, board.communication.unit, Unit.UM)
-            / (board.communication.resolution > 0 ? board.communication.resolution : 1);
+    double boardUnitToMmFactor = board.communication.boardUnitSize(Unit.MM);
+    double boardUnitToUmFactor = board.communication.boardUnitSize(Unit.UM);
     this.board.areaCm2 =
         (float)
             (this.board.size.width
@@ -461,11 +467,25 @@ public class BoardStatistics implements Serializable {
     int total = 0;
     int escaped = 0;
     int alreadyConnected = 0;
+    // All pins of one net share the answer: the connected set is an equivalence class over the
+    // net's connectable items, so it either covers the whole net for every pin or for none.
+    Map<Integer, Boolean> netFullyConnected = new HashMap<>();
     for (Pin pin : smdPins) {
       if (pin.netCount() > 0) {
         total++;
         int netNumber = pin.getNetNumber(0);
-        if (pin.getUnconnectedSet(netNumber).isEmpty()) {
+        boolean pinConnected;
+        if (netNumber > 0) {
+          Boolean memo = netFullyConnected.get(netNumber);
+          if (memo == null) {
+            memo = pin.getUnconnectedSet(netNumber).isEmpty();
+            netFullyConnected.put(netNumber, memo);
+          }
+          pinConnected = memo;
+        } else {
+          pinConnected = pin.getUnconnectedSet(netNumber).isEmpty();
+        }
+        if (pinConnected) {
           alreadyConnected++;
         }
         if (isPinEscaped(pin)) {

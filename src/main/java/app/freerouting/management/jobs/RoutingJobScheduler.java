@@ -13,6 +13,7 @@ import app.freerouting.logger.FRLogger;
 import app.freerouting.management.HeadlessBoardManager;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
+import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.ApiSettings;
 import app.freerouting.settings.sources.DefaultSettings;
@@ -29,6 +30,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -90,7 +92,12 @@ public final class RoutingJobScheduler {
                           // load the board from the input into a RoutingBoard object
                           if (isDsn || isJson) {
                             try {
+                              // The board load fills board defaults into job.routerSettings;
+                              // merge only what the caller set (see CompositeBoardInput).
+                              final RouterSettings callerSettings =
+                                  job.routerSettings != null ? job.routerSettings.clone() : null;
                               HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
+                              boardManager.holdPostLoadProcessing();
                               if (isDsn) {
                                 boardManager.loadFromSpecctraDsn(
                                     job.input.getData(), null, new ItemIdGenerator());
@@ -164,9 +171,8 @@ public final class RoutingJobScheduler {
                               // Keep per-job overrides (e.g. tests toggling fanout/optimizer) by
                               // applying the job's current settings as highest-priority API
                               // settings.
-                              if (job.routerSettings != null) {
-                                settingsMerger.addOrReplaceSources(
-                                    new ApiSettings(job.routerSettings));
+                              if (callerSettings != null) {
+                                settingsMerger.addOrReplaceSources(new ApiSettings(callerSettings));
                               }
 
                               // Apply the final merged settings to the job and optimize them for
@@ -220,7 +226,7 @@ public final class RoutingJobScheduler {
                                   boolean isJsonSession =
                                       (sessionFilenameToLoad != null
                                               && sessionFilenameToLoad
-                                                  .toLowerCase()
+                                                  .toLowerCase(Locale.ROOT)
                                                   .endsWith(".json"))
                                           || RoutingJob.getFileFormat(sessionBytesToLoad)
                                               == FileFormat.KICAD_DESIGN_JSON;
@@ -259,13 +265,33 @@ public final class RoutingJobScheduler {
                                 }
                               }
 
+                              // The rules and the session are on the board: scan it now.
+                              boardManager.releasePostLoadProcessing();
+
                               // All pre-checks look fine, start the routing process on a new thread
                               StoppableThread routerThread =
                                   new RoutingJobSchedulerActionThread(job);
-                              job.thread = routerThread;
-                              job.state = RoutingJobState.RUNNING;
-                              job.thread.start();
-                              startedAny = true;
+                              // Loading took a while; a cancel or timeout in the meantime wins
+                              // (cancelJob changes the state under the same lock).
+                              boolean stillReady;
+                              synchronized (jobs) {
+                                stillReady = job.state == RoutingJobState.READY_TO_START;
+                                if (stillReady) {
+                                  job.thread = routerThread;
+                                  job.state = RoutingJobState.RUNNING;
+                                }
+                              }
+                              if (stillReady) {
+                                routerThread.start();
+                                startedAny = true;
+                              } else {
+                                FRLogger.info(
+                                    "Routing job '"
+                                        + job.shortName
+                                        + "' left the ready state ("
+                                        + job.state
+                                        + ") while it was being set up; not started.");
+                              }
                             } catch (Exception e) {
                               FRLogger.error(
                                   "Failed to set up routing job '"
@@ -349,7 +375,7 @@ public final class RoutingJobScheduler {
   }
 
   private String uuidToShortCode(UUID uuid) {
-    return uuid.toString().substring(0, 6).toUpperCase();
+    return uuid.toString().substring(0, 6).toUpperCase(Locale.ROOT);
   }
 
   /**
@@ -628,10 +654,15 @@ public final class RoutingJobScheduler {
         job.setCancelledByUser(true);
         saveJob(job);
       } else if (job.state == RoutingJobState.RUNNING) {
-        job.state = RoutingJobState.STOPPING;
-        job.setCancelledByUser(true);
-        if (job.thread != null) {
-          job.thread.requestStop();
+        if (job.thread instanceof RoutingJobSchedulerActionThread action) {
+          // The action thread may assign the terminal state at the same time.
+          action.cancelIfRunning();
+        } else {
+          job.state = RoutingJobState.STOPPING;
+          job.setCancelledByUser(true);
+          if (job.thread != null) {
+            job.thread.requestStop();
+          }
         }
         saveJob(job);
       } else if (!job.isCancelledByUser()

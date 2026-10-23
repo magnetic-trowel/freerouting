@@ -428,7 +428,11 @@ public class JobInputResource extends BaseController {
       if (job.routerSettings == null) {
         job.routerSettings = new RouterSettings();
       }
-      job.routerSettings.setLayerCount(job.input.statistics.layers.totalCount);
+      // Resize only on a change: setLayerCount resets the per-layer settings the caller may have
+      // posted before the input.
+      if (job.routerSettings.getLayerCount() != job.input.statistics.layers.totalCount) {
+        job.routerSettings.setLayerCount(job.input.statistics.layers.totalCount);
+      }
       job.fireSettingsUpdatedEvent();
 
       var request =
@@ -633,7 +637,9 @@ public class JobInputResource extends BaseController {
     if (job.routerSettings == null) {
       job.routerSettings = new RouterSettings();
     }
-    job.routerSettings.setLayerCount(job.input.statistics.layers.totalCount);
+    if (job.routerSettings.getLayerCount() != job.input.statistics.layers.totalCount) {
+      job.routerSettings.setLayerCount(job.input.statistics.layers.totalCount);
+    }
     job.fireSettingsUpdatedEvent();
 
     var request = TextManager.shortenString(jsonBody, 200);

@@ -776,7 +776,7 @@ public class DesignRulesChecker {
       double lengthInBoardUnits = trace.getLength();
       double lengthInTargetUnits = convertCoordinate(lengthInBoardUnits, coordinateUnit);
       desc.append(", length ")
-          .append(String.format("%.4f", lengthInTargetUnits))
+          .append(String.format(Locale.ROOT, "%.4f", lengthInTargetUnits))
           .append(" ")
           .append(coordinateUnit);
     }

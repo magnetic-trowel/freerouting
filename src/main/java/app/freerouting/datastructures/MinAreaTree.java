@@ -1,5 +1,6 @@
 package app.freerouting.datastructures;
 
+import app.freerouting.geometry.planar.IntOctagon;
 import app.freerouting.geometry.planar.RegularTileShape;
 import app.freerouting.geometry.planar.ShapeBoundingDirections;
 import app.freerouting.logger.FRLogger;
@@ -58,6 +59,7 @@ public class MinAreaTree extends ShapeTree {
 
   /** Appends overlapping leaves into {@code result} while read lock is held. */
   protected final void overlapsUnlocked(RegularTileShape shape, List<Leaf> result) {
+    recordQuery(shape, -1L);
     if (this.root == null) {
       return;
     }
@@ -84,8 +86,41 @@ public class MinAreaTree extends ShapeTree {
     }
   }
 
+  /**
+   * Appends the overlapping leaves in traversal order, without sorting, while the read lock is
+   * held. Subtrees whose layer mask has no bit in common with {@code layerBits} are skipped; pass
+   * -1 to visit all layers. Skipping a subtree keeps the relative order of the remaining leaves.
+   */
+  protected final void overlapsUnsortedUnlocked(
+      RegularTileShape shape, long layerBits, List<Leaf> result) {
+    recordQuery(shape, layerBits);
+    if (this.root == null) {
+      return;
+    }
+    ArrayStack<TreeNode> stack = nodeStack.get();
+    stack.reset();
+    stack.push(this.root);
+    TreeNode currentNode;
+    while ((currentNode = stack.pop()) != null) {
+      onNodeVisited();
+      if ((currentNode.layerMask & layerBits) != 0 && currentNode.boundingShape.intersects(shape)) {
+        if (currentNode instanceof Leaf leaf) {
+          result.add(leaf);
+        } else {
+          stack.push(((InnerNode) currentNode).firstChild);
+          stack.push(((InnerNode) currentNode).secondChild);
+        }
+      }
+    }
+  }
+
   /** Extension hook for testing and instrumentation during tree traversal. */
   protected void onNodeVisited() {}
+
+  /** Reports a query to this thread's {@link QueryRegionRecorder}. */
+  protected void recordQuery(RegularTileShape shape, long layerBits) {
+    QueryRegionRecorder.recordQuery(shape, layerBits);
+  }
 
   @Override
   void insert(Leaf leaf) {
@@ -115,6 +150,7 @@ public class MinAreaTree extends ShapeTree {
     RegularTileShape newBounds = leaf.boundingShape.union(leafToReplace.boundingShape);
     InnerNode currentParent = leafToReplace.parent;
     InnerNode newNode = new InnerNode(newBounds, currentParent);
+    newNode.layerMask = leaf.layerMask | leafToReplace.layerMask;
 
     if (leafToReplace.parent != null) {
       // Replace the pointer from the parent to the leaf with our new node
@@ -137,6 +173,14 @@ public class MinAreaTree extends ShapeTree {
     }
   }
 
+  /** Area growth of childShape when added is merged into it; octagons skip the union object. */
+  private static double areaIncrease(RegularTileShape added, RegularTileShape childShape) {
+    if (added instanceof IntOctagon addedOctagon && childShape instanceof IntOctagon childOctagon) {
+      return IntOctagon.unionArea(addedOctagon, childOctagon) - childOctagon.area();
+    }
+    return added.union(childShape).area() - childShape.area();
+  }
+
   private Leaf positionLocate(TreeNode currentNode, Leaf leafToInsert) {
     TreeNode node = currentNode;
 
@@ -144,18 +188,15 @@ public class MinAreaTree extends ShapeTree {
       InnerNode currentInnerNode = (InnerNode) node;
       currentInnerNode.boundingShape =
           leafToInsert.boundingShape.union(currentInnerNode.boundingShape);
+      currentInnerNode.layerMask |= leafToInsert.layerMask;
 
       // Choose the child, so that the area increase of that child after taking the union
       // with the shape of leafToInsert is minimal.
 
-      RegularTileShape firstChildShape = currentInnerNode.firstChild.boundingShape;
-      RegularTileShape unionWithFirstChildShape = leafToInsert.boundingShape.union(firstChildShape);
-      double firstAreaIncrease = unionWithFirstChildShape.area() - firstChildShape.area();
-
-      RegularTileShape secondChildShape = currentInnerNode.secondChild.boundingShape;
-      RegularTileShape unionWithSecondChildShape =
-          leafToInsert.boundingShape.union(secondChildShape);
-      double secondAreaIncrease = unionWithSecondChildShape.area() - secondChildShape.area();
+      double firstAreaIncrease =
+          areaIncrease(leafToInsert.boundingShape, currentInnerNode.firstChild.boundingShape);
+      double secondAreaIncrease =
+          areaIncrease(leafToInsert.boundingShape, currentInnerNode.secondChild.boundingShape);
 
       if (firstAreaIncrease <= secondAreaIncrease) {
         node = currentInnerNode.firstChild;

@@ -132,7 +132,11 @@ public abstract class Vector implements Serializable {
 
   /** Returns an approximation of the signed angle between this vector and other. */
   public double angleApprox(Vector other) {
-    double result = StrictMath.acos(cosAngle(other));
+    // Rounding can push the cosine of (anti)parallel vectors just outside [-1, 1], where acos is
+    // NaN. A NaN here poisons Polygon.windingNumberAfterClosing and with it the orientation of
+    // keepouts, planes and outlines.
+    double cos = Math.max(-1.0, Math.min(1.0, cosAngle(other)));
+    double result = StrictMath.acos(cos);
     if (this.sideOf(other) == Side.ON_THE_LEFT) {
       result = -result;
     }

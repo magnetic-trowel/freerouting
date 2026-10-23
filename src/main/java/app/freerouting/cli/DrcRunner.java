@@ -9,11 +9,12 @@ import app.freerouting.management.BoardLoader;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
 import app.freerouting.settings.sources.DsnFileSettings;
+import app.freerouting.util.AtomicFiles;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.UUID;
 
 /** Executes a Design Rules Check (DRC) on a board without autorouting. */
@@ -77,7 +78,7 @@ public final class DrcRunner {
       try {
         File sessionFile = new File(globalSettings.designSessionFilename);
         if (sessionFile.exists()) {
-          if (globalSettings.designSessionFilename.toLowerCase().endsWith(".json")) {
+          if (globalSettings.designSessionFilename.toLowerCase(Locale.ROOT).endsWith(".json")) {
             FRLogger.info(
                 "Loading KiCad JSON session file for DRC: " + globalSettings.designSessionFilename);
             try (java.io.FileReader jsonReader = new java.io.FileReader(sessionFile)) {
@@ -132,7 +133,7 @@ public final class DrcRunner {
       String outputFileName = drcJob.drc.getAbsolutePath();
       try {
         Path outputFilePath = Path.of(outputFileName);
-        Files.write(outputFilePath, drcReportJson.getBytes(StandardCharsets.UTF_8));
+        AtomicFiles.write(outputFilePath, drcReportJson.getBytes(StandardCharsets.UTF_8));
         FRLogger.info("DRC report written to: " + outputFileName);
       } catch (IOException e) {
         FRLogger.error("Couldn't save the DRC report to '" + outputFileName + "'", e);

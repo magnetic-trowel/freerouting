@@ -3,6 +3,7 @@ package app.freerouting.autoroute.pipeline;
 import app.freerouting.autoroute.ItemRouteResult;
 import app.freerouting.autoroute.ItemSelectionStrategy;
 import app.freerouting.autoroute.events.TaskStateChangedEvent;
+import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.BoardImage;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
@@ -823,6 +824,19 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 ? this.settings.optimizer.maxConsecutiveFailures
                 : 50);
 
+    // Candidates with the same key route identically; evaluate the first and reuse its result.
+    int[] representative = new int[candidateItemIds.size()];
+    int[] lastDuplicate = new int[candidateItemIds.size()];
+    Map<String, Integer> firstIndexByKey = new HashMap<>();
+    for (int k = 0; k < candidateItemIds.size(); k++) {
+      String key = candidateKey(this.board, candidateItemIds.get(k));
+      Integer first = key == null ? null : firstIndexByKey.putIfAbsent(key, k);
+      representative[k] = first == null ? k : first;
+      lastDuplicate[representative[k]] = k;
+    }
+    Map<Integer, Future<CandidateResult>> futureByIndex = new HashMap<>();
+    int nextToSubmit = 0;
+
     try {
       for (int i = 0; i < candidateItemIds.size(); i += chunkSize) {
         if (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs) {
@@ -837,28 +851,43 @@ public final class BatchOptimizer extends NamedAlgorithm {
         }
 
         int end = Math.min(i + chunkSize, candidateItemIds.size());
-        List<Integer> chunk = candidateItemIds.subList(i, end);
-        List<Future<CandidateResult>> futures = new ArrayList<>(chunk.size());
-        for (int itemId : chunk) {
-          futures.add(
-              pool.submit(
-                  new OptimizeCandidateTask(
-                      job,
-                      baselineImage,
-                      itemId,
-                      this.minCumulativeTraceLength,
-                      withPreferredDirections,
-                      this.useIncreasedRipupCosts,
-                      this.thread,
-                      this.deadlineMs,
-                      baselineMetrics,
-                      selection != CommitSelection.ALL,
-                      selection == CommitSelection.SCORE_RANKED ? scoreTracker : null)));
-        }
-
-        for (Future<CandidateResult> future : futures) {
+        for (int k = i; k < end; k++) {
+          // Keep chunkSize candidates in flight ahead of the one consumed next. Results are still
+          // consumed in candidate order, so every decision is the same as with a barrier per
+          // chunk, but a slow candidate no longer leaves the other workers idle.
+          int submitLimit = Math.min(candidateItemIds.size(), k + chunkSize);
+          while (nextToSubmit < submitLimit) {
+            int toSubmit = nextToSubmit++;
+            if (representative[toSubmit] != toSubmit) {
+              continue;
+            }
+            int itemId = candidateItemIds.get(toSubmit);
+            futureByIndex.put(
+                toSubmit,
+                pool.submit(
+                    new OptimizeCandidateTask(
+                        job,
+                        baselineImage,
+                        itemId,
+                        this.minCumulativeTraceLength,
+                        withPreferredDirections,
+                        this.useIncreasedRipupCosts,
+                        this.thread,
+                        this.deadlineMs,
+                        baselineMetrics,
+                        selection != CommitSelection.ALL,
+                        selection == CommitSelection.SCORE_RANKED ? scoreTracker : null)));
+          }
           try {
-            CandidateResult res = future.get();
+            int rep = representative[k];
+            CandidateResult res = futureByIndex.get(rep).get();
+            if (k == lastDuplicate[rep]) {
+              futureByIndex.remove(rep);
+            }
+            if (res != null && rep != k) {
+              int itemId = candidateItemIds.get(k);
+              res = res.forDuplicate(itemId, getItemPosition(this.board.getItem(itemId)));
+            }
             this.totalItemsOptimized++;
             if (res != null) {
               this.workerCpuNanos.addAndGet(res.cpuUsedNanos);
@@ -1151,9 +1180,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       if (statistics.getOptimizerScore(routerSettings, 0, 0, 0) == null) {
         return null;
       }
-      double boardUnitToMm =
-          Unit.scale(1.0, board.communication.unit, Unit.MM)
-              / (board.communication.resolution > 0 ? board.communication.resolution : 1);
+      double boardUnitToMm = board.communication.boardUnitSize(Unit.MM);
       return new ScoreTracker(
           statistics,
           routerSettings,
@@ -1264,23 +1291,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     }
     routerCountersBefore.incompleteCount = calculateIncompleteCount(routingBoard);
 
-    Set<Item> rippedItems = new TreeSet<>();
-    rippedItems.add(item);
-
-    if (item instanceof Trace currentTrace) {
-      Set<Item> currentContactList = currentTrace.getStartContacts();
-      for (int i = 0; i < 2; i++) {
-        if (containsOnlyUnfixedTraces(currentContactList)) {
-          rippedItems.addAll(currentContactList);
-        }
-        currentContactList = currentTrace.getEndContacts();
-      }
-    }
-
-    Set<Item> rippedConnections = new TreeSet<>();
-    for (Item currentItem : rippedItems) {
-      rippedConnections.addAll(currentItem.getConnectionItems(Item.StopConnectionOption.NONE));
-    }
+    Set<Item> rippedConnections = rippedConnectionsOf(item);
 
     for (Item currentItem : rippedConnections) {
       if (currentItem.isUserFixed() || currentItem.hasIgnoredNets()) {
@@ -1337,6 +1348,51 @@ public final class BatchOptimizer extends NamedAlgorithm {
     return result;
   }
 
+  /** The connections a candidate rips: its own and, for a trace, those of unfixed neighbours. */
+  private static Set<Item> rippedConnectionsOf(Item item) {
+    Set<Item> rippedItems = new TreeSet<>();
+    rippedItems.add(item);
+
+    if (item instanceof Trace currentTrace) {
+      Set<Item> currentContactList = currentTrace.getStartContacts();
+      for (int i = 0; i < 2; i++) {
+        if (containsOnlyUnfixedTraces(currentContactList)) {
+          rippedItems.addAll(currentContactList);
+        }
+        currentContactList = currentTrace.getEndContacts();
+      }
+    }
+
+    Set<Item> rippedConnections = new TreeSet<>();
+    for (Item currentItem : rippedItems) {
+      rippedConnections.addAll(currentItem.getConnectionItems(Item.StopConnectionOption.NONE));
+    }
+    return rippedConnections;
+  }
+
+  /**
+   * Returns everything {@link #optRouteItemOnBoard} reads of a candidate besides the pass's board
+   * image and flags: the connections it rips, the nets whose traces it combines and whether it is a
+   * trace (which scales the rip-up cost). Candidates with equal keys, such as the vias of one
+   * connection or the branches beside a fork, produce the same result. Returns null for candidates
+   * that are not shared.
+   */
+  static String candidateKey(RoutingBoard board, int itemId) {
+    Item item = board.getItem(itemId);
+    if (item == null || item.hasIgnoredNets()) {
+      return null;
+    }
+    StringBuilder key = new StringBuilder(item.getClass().getName());
+    for (int i = 0; i < item.netCount(); i++) {
+      key.append(':').append(item.getNetNumber(i));
+    }
+    key.append('|');
+    for (Item ripped : rippedConnectionsOf(item)) {
+      key.append(ripped.getId()).append(',');
+    }
+    return key.toString();
+  }
+
   private static FloatPoint getItemPosition(Item item) {
     if (item instanceof Via via) {
       return via.getCenter().toFloat();
@@ -1370,6 +1426,12 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.itemPosition = itemPosition;
       this.cpuUsedNanos = cpuUsedNanos;
       this.allocUsedBytes = allocUsedBytes;
+    }
+
+    /** This result for a duplicate candidate: same routing, board and changes, its own item. */
+    CandidateResult forDuplicate(int itemId, FloatPoint position) {
+      return new CandidateResult(
+          result.withItemId(itemId), board, changes, scoreGain, position, 0, 0);
     }
 
     /** True if this candidate is a better pick than the other under the commit selection. */
@@ -1658,101 +1720,81 @@ public final class BatchOptimizer extends NamedAlgorithm {
   }
 
   /** Reads the vias and traces on the board in ascending x order. */
+  /**
+   * Returns the optimizer's candidate order: one item per distinct (x, y, first layer) key in
+   * ascending order, where a via is keyed by its center and a trace by the larger of its end
+   * corners. A via wins over a trace with the same key, and among items of one kind the first in
+   * the item list wins. Unfixed vias and traces without ignored nets are eligible; a trace touching
+   * an unfixed via is not, because the via is optimized instead.
+   *
+   * <p>This is the order the former selection loop produced by scanning the whole item list once
+   * per candidate for the smallest key above the previous one; it is now built with one sort.
+   */
+  static List<Item> optimizationOrder(BasicBoard board) {
+    record Entry(double x, double y, int layer, int rank, int index, Item item) {}
+    List<Entry> entries = new ArrayList<>();
+    int index = 0;
+    Iterator<UndoableObjects.UndoableObjectNode> it = board.itemList.startReadObject();
+    for (UndoableObjects.Storable current = board.itemList.readObject(it);
+        current != null;
+        current = board.itemList.readObject(it)) {
+      if (current instanceof Via via && !via.isUserFixed() && !via.hasIgnoredNets()) {
+        FloatPoint center = via.getCenter().toFloat();
+        entries.add(new Entry(center.x, center.y, via.firstLayer(), 0, index++, via));
+      }
+    }
+    // Traces after vias, so that a via is preferred to a trace at the same location.
+    it = board.itemList.startReadObject();
+    for (UndoableObjects.Storable current = board.itemList.readObject(it);
+        current != null;
+        current = board.itemList.readObject(it)) {
+      if (current instanceof Trace trace
+          && !trace.isShoveFixed()
+          && !trace.hasIgnoredNets()
+          && !touchesUnfixedVia(trace)) {
+        FloatPoint first = trace.firstCorner().toFloat();
+        FloatPoint last = trace.lastCorner().toFloat();
+        FloatPoint key = first.x < last.x || first.x == last.x && first.y < last.y ? last : first;
+        entries.add(new Entry(key.x, key.y, trace.getLayer(), 1, index++, trace));
+      }
+    }
+    java.util.Comparator<Entry> byKey =
+        (a, b) -> {
+          if (a.x() != b.x()) {
+            return a.x() < b.x() ? -1 : 1;
+          }
+          if (a.y() != b.y()) {
+            return a.y() < b.y() ? -1 : 1;
+          }
+          return Integer.compare(a.layer(), b.layer());
+        };
+    entries.sort(byKey.thenComparingInt(Entry::rank).thenComparingInt(Entry::index));
+    List<Item> result = new ArrayList<>();
+    Entry previous = null;
+    for (Entry entry : entries) {
+      if (previous == null || byKey.compare(previous, entry) != 0) {
+        result.add(entry.item());
+        previous = entry;
+      }
+    }
+    return result;
+  }
+
+  private static boolean touchesUnfixedVia(Trace trace) {
+    for (Item contact : trace.getNormalContacts()) {
+      if (contact instanceof Via && !contact.isUserFixed()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   protected class ReadSortedRouteItems {
 
-    protected FloatPoint minItemCoor;
-    protected int minItemLayer;
-
-    ReadSortedRouteItems() {
-      minItemCoor = new FloatPoint(Integer.MIN_VALUE, Integer.MIN_VALUE);
-      minItemLayer = -1;
-    }
+    private final Iterator<Item> order = optimizationOrder(board).iterator();
 
     Item next() {
-      Item result = null;
-      FloatPoint currentMinCoor = new FloatPoint(Integer.MAX_VALUE, Integer.MAX_VALUE);
-      int currentMinLayer = Integer.MAX_VALUE;
-      Iterator<UndoableObjects.UndoableObjectNode> it = board.itemList.startReadObject();
-      for (; ; ) {
-        UndoableObjects.Storable currentItem = board.itemList.readObject(it);
-        if (currentItem == null) {
-          break;
-        }
-        if (currentItem instanceof Via currentVia) {
-          if (!currentVia.isUserFixed() && !currentVia.hasIgnoredNets()) {
-            FloatPoint currentViaCenter = currentVia.getCenter().toFloat();
-            int currentViaMinLayer = currentVia.firstLayer();
-            if (currentViaCenter.x > minItemCoor.x
-                || currentViaCenter.x == minItemCoor.x
-                    && (currentViaCenter.y > minItemCoor.y
-                        || currentViaCenter.y == minItemCoor.y
-                            && currentViaMinLayer > minItemLayer)) {
-              if (currentViaCenter.x < currentMinCoor.x
-                  || currentViaCenter.x == currentMinCoor.x
-                      && (currentViaCenter.y < currentMinCoor.y
-                          || currentViaCenter.y == currentMinCoor.y
-                              && currentViaMinLayer < currentMinLayer)) {
-                currentMinCoor = currentViaCenter;
-                currentMinLayer = currentViaMinLayer;
-                result = currentVia;
-              }
-            }
-          }
-        }
-      }
-      // Read traces last to prefer vias to traces at the same location
-      it = board.itemList.startReadObject();
-      for (; ; ) {
-        UndoableObjects.Storable currentItem = board.itemList.readObject(it);
-        if (currentItem == null) {
-          break;
-        }
-        if (currentItem instanceof Trace currentTrace) {
-          if (!currentTrace.isShoveFixed() && !currentTrace.hasIgnoredNets()) {
-            FloatPoint firstCorner = currentTrace.firstCorner().toFloat();
-            FloatPoint lastCorner = currentTrace.lastCorner().toFloat();
-            FloatPoint compareCorner;
-            if (firstCorner.x < lastCorner.x
-                || firstCorner.x == lastCorner.x && firstCorner.y < lastCorner.y) {
-              compareCorner = lastCorner;
-            } else {
-              compareCorner = firstCorner;
-            }
-            int currentTraceLayer = currentTrace.getLayer();
-            if (compareCorner.x > minItemCoor.x
-                || compareCorner.x == minItemCoor.x
-                    && (compareCorner.y > minItemCoor.y
-                        || compareCorner.y == minItemCoor.y && currentTraceLayer > minItemLayer)) {
-              if (compareCorner.x < currentMinCoor.x
-                  || compareCorner.x == currentMinCoor.x
-                      && (compareCorner.y < currentMinCoor.y
-                          || compareCorner.y == currentMinCoor.y
-                              && currentTraceLayer < currentMinLayer)) {
-                boolean isConnectedToVia = false;
-                Set<Item> traceContacts = currentTrace.getNormalContacts();
-                for (Item currentContact : traceContacts) {
-                  if (currentContact instanceof Via && !currentContact.isUserFixed()) {
-                    isConnectedToVia = true;
-                    break;
-                  }
-                }
-                if (!isConnectedToVia) {
-                  currentMinCoor = compareCorner;
-                  currentMinLayer = currentTraceLayer;
-                  result = currentTrace;
-                }
-              }
-            }
-          }
-        }
-      }
-      minItemCoor = currentMinCoor;
-      minItemLayer = currentMinLayer;
-      return result;
-    }
-
-    FloatPoint getCurrentPosition() {
-      return minItemCoor;
+      return order.hasNext() ? order.next() : null;
     }
   }
 }

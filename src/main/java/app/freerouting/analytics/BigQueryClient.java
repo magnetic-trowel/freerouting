@@ -27,6 +27,7 @@ import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -283,7 +284,8 @@ public class BigQueryClient implements AnalyticsClient {
         () -> {
           try {
             // Table name is the event name with some formatting.
-            String tableName = payload.event.toLowerCase().replace(" ", "_").replace("-", "_");
+            String tableName =
+                payload.event.toLowerCase(Locale.ROOT).replace(" ", "_").replace("-", "_");
 
             // Trait-only tables (identifies, user_snapshots) follow the Segment identifies
             // schema:

@@ -73,6 +73,7 @@ public class ShapeSearchTree90Degree extends ShapeSearchTree {
       startShape = ((IntBox) room.getShape()).intersection(startShape);
     }
     IntBox boundingShape = startShape;
+    recordQuery(boundingShape, -1L);
     int roomLayer = room.getLayer();
     boolean debugAnchor = isCompleteShapeDebugAnchor(netNumber, roomLayer, startShape);
     int debugStep = 0;

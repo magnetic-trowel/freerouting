@@ -1187,6 +1187,23 @@ public class Structure extends ScopeKeyword {
         updatedLayers.add(currentLayer);
       }
     }
+    // A board whose layers all carry planes would have nothing to route on and is refused ("all
+    // layers are disabled"). KiCad routes tracks on power layers, so route on them; their planes
+    // stay as copper areas, as on the outer layers of two-layer boards.
+    boolean anySignal = updatedLayers.stream().anyMatch(layer -> layer.isSignal);
+    if (!anySignal) {
+      for (int i = 0; i < updatedLayers.size(); i++) {
+        Layer currentLayer = updatedLayers.get(i);
+        FRLogger.warn(
+            "Layer '"
+                + currentLayer.name
+                + "' is a power layer, but the board has no signal layer. It will be treated as a"
+                + " signal layer.");
+        updatedLayers.set(
+            i, new Layer(currentLayer.name, currentLayer.no, true, currentLayer.netNames));
+      }
+      changed = true;
+    }
     if (changed) {
       boardConstructionInfo.layerInfo.clear();
       boardConstructionInfo.layerInfo.addAll(updatedLayers);

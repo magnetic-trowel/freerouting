@@ -6,8 +6,8 @@ import app.freerouting.geometry.planar.Point;
 import java.text.DecimalFormat;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
@@ -26,7 +26,10 @@ public final class FRLogger {
       new DecimalFormat("0.00", new java.text.DecimalFormatSymbols(java.util.Locale.US));
   public static final DecimalFormat defaultSignedFloatFormat =
       new DecimalFormat("+0.00;-0.00", new java.text.DecimalFormatSymbols(java.util.Locale.US));
-  private static final HashMap<Integer, Instant> perfData = new HashMap<>();
+
+  /** Start times of open performance traces; written by every concurrently running job. */
+  private static final ConcurrentHashMap<String, Instant> perfData = new ConcurrentHashMap<>();
+
   private static final LogEntries logEntries = new LogEntries();
   private static final CopyOnWriteArrayList<TraceEventListener> traceEventListeners =
       new CopyOnWriteArrayList<>();
@@ -165,7 +168,7 @@ public final class FRLogger {
       logger = LogManager.getLogger(LOGGER_NAME);
     }
 
-    perfData.put(perfId.hashCode(), Instant.now());
+    perfData.put(perfId, Instant.now());
   }
 
   /**
@@ -201,13 +204,10 @@ public final class FRLogger {
     }
 
     long timeElapsed = 0;
-    try {
-      timeElapsed = Duration.between(perfData.get(perfId.hashCode()), Instant.now()).toMillis();
-    } catch (Exception _) {
-      // we can ignore this exception
+    Instant start = perfData.remove(perfId);
+    if (start != null) {
+      timeElapsed = Duration.between(start, Instant.now()).toMillis();
     }
-
-    perfData.remove(perfId.hashCode());
     if (timeElapsed < 0) {
       timeElapsed = 0;
     }
@@ -348,6 +348,15 @@ public final class FRLogger {
    */
   public static LogEntry error(String msg, Throwable exception) {
     return error(msg, null, exception);
+  }
+
+  /**
+   * Returns true if a call to {@link #trace(String, String, String, String, Point[])} can have any
+   * effect: granular trace logging is on, or the debug controller single-steps or delays. Hot paths
+   * use it to skip building trace arguments.
+   */
+  public static boolean isGranularTraceActive() {
+    return granularTraceEnabled || DebugControl.getInstance().isActive();
   }
 
   /**

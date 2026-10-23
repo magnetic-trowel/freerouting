@@ -22,6 +22,19 @@ public class IdentifierType {
 
   /** Writes name after putting it into quotes, if it contains reserved characters or blanks. */
   public void write(String name, OutputStreamWriter file) {
+    write(name, file, false);
+  }
+
+  /**
+   * Writes name, quoted unless it consists of ASCII letters and digits only. Readers disagree on
+   * which other characters end a bare name: KiCad 10 rejects a whole session that holds a bare net
+   * name such as {@code ADD|SUB}.
+   */
+  public void writeStrict(String name, OutputStreamWriter file) {
+    write(name, file, true);
+  }
+
+  private void write(String name, OutputStreamWriter file, boolean strict) {
     // remove the double quotes from the identifiers
     while ((name.length() >= 2)
         && (name.charAt(0) == '"')
@@ -44,9 +57,14 @@ public class IdentifierType {
         }
       }
 
-      // if the name contains a non-ASCII character, we must put it into quotes
+      // if the name contains a non-ASCII character, or in strict mode any character other than an
+      // ASCII letter or digit, we must put it into quotes
       for (byte ch : name.getBytes(StandardCharsets.UTF_8)) {
-        if (ch <= 0) {
+        if (ch <= 0
+            || (strict
+                && !((ch >= 'a' && ch <= 'z')
+                    || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9')))) {
           needQuotes = true;
           break;
         }

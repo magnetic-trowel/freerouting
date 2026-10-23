@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Locale;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
 
@@ -152,7 +153,7 @@ public final class LoggingBootstrap {
     }
 
     Path path = Path.of(input).normalize().toAbsolutePath();
-    boolean isFile = path.getFileName().toString().toLowerCase().endsWith(".log");
+    boolean isFile = path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".log");
     String filename = isFile ? path.getFileName().toString() : "freerouting.log";
     Path folderPath = isFile ? path.getParent() : path;
 

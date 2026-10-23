@@ -119,9 +119,9 @@ public class PolygonPath extends Path {
       if (i % 2 == 0) {
         // x coordinate
         bounds[0] = Math.min(bounds[0], coordinateArr[i] - offset);
-        bounds[2] = Math.max(bounds[2], coordinateArr[i]) + offset;
+        bounds[2] = Math.max(bounds[2], coordinateArr[i] + offset);
       } else {
-        // x coordinate
+        // y coordinate
         bounds[1] = Math.min(bounds[1], coordinateArr[i] - offset);
         bounds[3] = Math.max(bounds[3], coordinateArr[i] + offset);
       }

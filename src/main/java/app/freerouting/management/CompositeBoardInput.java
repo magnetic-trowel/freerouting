@@ -23,6 +23,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -165,7 +166,13 @@ public class CompositeBoardInput {
     boolean isDsn = job.input.format == FileFormat.DSN;
     boolean isJson = job.input.format == FileFormat.KICAD_DESIGN_JSON;
 
+    // The board load fills board defaults (all layers routable, alternating directions, bend
+    // costs) into job.routerSettings. Merge only what the caller set, or those defaults would
+    // override the DSN's layer rules and the CLI at API priority.
+    final RouterSettings callerSettings =
+        job.routerSettings != null ? job.routerSettings.clone() : null;
     HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
+    boardManager.holdPostLoadProcessing();
     if (isDsn) {
       boardManager.loadFromSpecctraDsn(
           new ByteArrayInputStream(designData), null, new ItemIdGenerator());
@@ -232,8 +239,8 @@ public class CompositeBoardInput {
     }
 
     // API settings (from caller / job settings overrides)
-    if (job.routerSettings != null) {
-      settingsMerger.addOrReplaceSources(new ApiSettings(job.routerSettings));
+    if (callerSettings != null) {
+      settingsMerger.addOrReplaceSources(new ApiSettings(callerSettings));
     }
 
     job.routerSettings = settingsMerger.merge();
@@ -274,7 +281,7 @@ public class CompositeBoardInput {
             effectiveSessionFormat == FileFormat.KICAD_SESSION_JSON
                 || effectiveSessionFormat == FileFormat.KICAD_DESIGN_JSON
                 || (effectiveSessionFilename != null
-                    && effectiveSessionFilename.toLowerCase().endsWith(".json"));
+                    && effectiveSessionFilename.toLowerCase(Locale.ROOT).endsWith(".json"));
 
         if (!isJsonSession) {
           // Check payload header directly in case default extension (.ses) was supplied for JSON
@@ -302,6 +309,11 @@ public class CompositeBoardInput {
       } catch (Exception e) {
         FRLogger.error("Failed to import session data onto board", e);
       }
+      // The scheduler loads the job's input again; without this it would start without the session.
+      if (job.initialSession == null) {
+        job.setInitialSession(effectiveSessionData, effectiveSessionFilename);
+      }
     }
+    boardManager.releasePostLoadProcessing();
   }
 }

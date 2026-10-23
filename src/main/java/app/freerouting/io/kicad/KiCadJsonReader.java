@@ -158,7 +158,10 @@ public final class KiCadJsonReader {
         int clNo = i + 2;
         int clVal = (int) Math.round(nc.clearance * scaleFactor);
         clearanceMatrix.setValue(clNo, clNo, clVal);
-        clearanceMatrix.setValue(1, clNo, clVal); // spacing between default and class
+        // Spacing between default and class. setValue writes one direction only; the matrix must
+        // stay symmetric, as the DSN reader keeps it, or queries depend on argument order.
+        clearanceMatrix.setValue(1, clNo, clVal);
+        clearanceMatrix.setValue(clNo, 1, clVal);
       }
 
       if (hasEdgeClearance) {
@@ -176,6 +179,7 @@ public final class KiCadJsonReader {
         if (idxA >= 0 && idxB >= 0) {
           int clearanceVal = (int) Math.round(rule.clearance * scaleFactor);
           clearanceMatrix.setValue(idxA, idxB, clearanceVal);
+          clearanceMatrix.setValue(idxB, idxA, clearanceVal);
         }
       }
 
@@ -721,8 +725,12 @@ public final class KiCadJsonReader {
         }
         String viaPadstackName =
             String.format(
+                Locale.ROOT,
                 "Via[%d-%d]_%.0f:%.0f_um",
-                vj.startLayerIndex, vj.endLayerIndex, vj.diameter * 1000.0, vj.drill * 1000.0);
+                vj.startLayerIndex,
+                vj.endLayerIndex,
+                vj.diameter * 1000.0,
+                vj.drill * 1000.0);
         Padstack viaPadstack = padstacks.get(viaPadstackName);
         if (viaPadstack == null) {
           viaPadstack = padstacks.add(viaPadstackName, shapes, true, false);
@@ -851,8 +859,12 @@ public final class KiCadJsonReader {
         }
         String viaPadstackName =
             String.format(
+                Locale.ROOT,
                 "Via[%d-%d]_%.0f:%.0f_um",
-                vj.startLayerIndex, vj.endLayerIndex, vj.diameter * 1000.0, vj.drill * 1000.0);
+                vj.startLayerIndex,
+                vj.endLayerIndex,
+                vj.diameter * 1000.0,
+                vj.drill * 1000.0);
         Padstack viaPadstack = board.library.padstacks.get(viaPadstackName);
         if (viaPadstack == null) {
           viaPadstack = board.library.padstacks.add(viaPadstackName, shapes, true, false);
@@ -873,7 +885,9 @@ public final class KiCadJsonReader {
       } else if ("oval".equalsIgnoreCase(pad.shape)) {
         shapeStr = "Oval";
       } else {
-        shapeStr = pad.shape.substring(0, 1).toUpperCase() + pad.shape.substring(1).toLowerCase();
+        shapeStr =
+            pad.shape.substring(0, 1).toUpperCase(Locale.ROOT)
+                + pad.shape.substring(1).toLowerCase(Locale.ROOT);
       }
     }
 

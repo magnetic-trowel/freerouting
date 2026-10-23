@@ -721,7 +721,10 @@ public class Route {
       return this.prevCorner;
     }
 
-    int neckDownHalfwidth = startPin.getTraceNeckdownHalfwidth(this.layer);
+    int neckDownHalfwidth =
+        Math.max(
+            startPin.getTraceNeckdownHalfwidth(this.layer),
+            this.board.rules.getMinAllowedTraceHalfWidth());
     if (neckDownHalfwidth >= this.penHalfWidthArr[this.layer]) {
       return this.prevCorner;
     }
@@ -772,7 +775,10 @@ public class Route {
     if (pinCenter.distance(fromCorner.toFloat()) >= pinNeckDownDistance) {
       return fromCorner;
     }
-    int neckDownHalfwidth = targetPin.getTraceNeckdownHalfwidth(this.layer);
+    int neckDownHalfwidth =
+        Math.max(
+            targetPin.getTraceNeckdownHalfwidth(this.layer),
+            this.board.rules.getMinAllowedTraceHalfWidth());
     if (neckDownHalfwidth >= this.penHalfWidthArr[this.layer]) {
       return fromCorner;
     }

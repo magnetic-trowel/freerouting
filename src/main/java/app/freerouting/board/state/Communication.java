@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.util.Collection;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -62,7 +63,7 @@ public class Communication implements Serializable {
     if (specctraParserInfo == null || specctraParserInfo.hostCad == null) {
       return false;
     }
-    String cad = specctraParserInfo.hostCad.toLowerCase();
+    String cad = specctraParserInfo.hostCad.toLowerCase(Locale.ROOT);
     return cad.contains("fusion") || cad.contains("cadsoft") || cad.contains("eagle");
   }
 
@@ -71,7 +72,7 @@ public class Communication implements Serializable {
     if (specctraParserInfo == null || specctraParserInfo.hostCad == null) {
       return false;
     }
-    return specctraParserInfo.hostCad.toLowerCase().contains("kicad");
+    return specctraParserInfo.hostCad.toLowerCase(Locale.ROOT).contains("kicad");
   }
 
   /** Host is old kicad. */
@@ -82,7 +83,7 @@ public class Communication implements Serializable {
       return false;
     }
 
-    if (specctraParserInfo.hostCad.toLowerCase().contains("kicad")) {
+    if (specctraParserInfo.hostCad.toLowerCase(Locale.ROOT).contains("kicad")) {
       String versionString = specctraParserInfo.hostVersion;
       Matcher matcher = Pattern.compile("\\d+").matcher(versionString);
       if (matcher.find()) {
@@ -105,6 +106,19 @@ public class Communication implements Serializable {
       return Unit.scale(this.coordinateTransform.dsnToBoard(1), unit, this.unit);
     }
     return Unit.scale(this.resolution, unit, this.unit);
+  }
+
+  /**
+   * Returns the length of one internal board unit in {@code unit}. Uses the coordinate transform,
+   * not the declared resolution: the DSN reader divides the scale by powers of ten when the
+   * declared resolution would overflow int coordinates (for example LibrePCB's {@code resolution mm
+   * 1000000}), so the resolution can overstate the board units per input unit.
+   */
+  public double boardUnitSize(Unit unit) {
+    double boardUnitsPerHostUnit =
+        this.coordinateTransform != null ? this.coordinateTransform.dsnToBoard(1) : this.resolution;
+    return Unit.scale(1.0, this.unit, unit)
+        / (boardUnitsPerHostUnit > 0 ? boardUnitsPerHostUnit : 1);
   }
 
   /** Converts a physical distance to internal board coordinates. */

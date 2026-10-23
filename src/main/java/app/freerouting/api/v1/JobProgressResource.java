@@ -33,6 +33,7 @@ import jakarta.ws.rs.sse.Sse;
 import jakarta.ws.rs.sse.SseEventSink;
 import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -421,37 +422,16 @@ public class JobProgressResource extends BaseController {
     RoutingJobLogEntryAddedEventListener[] listenerHolder =
         new RoutingJobLogEntryAddedEventListener[1];
 
+    // The listener runs on the routing thread. Hand delivery to this stream's executor so a slow
+    // or disconnected client can neither stall routing nor throw into it.
     listenerHolder[0] =
         e -> {
+          var result = e.getLogEntry();
           try {
-            var result = e.getLogEntry();
-            OutboundSseEvent event =
-                sse.newEventBuilder()
-                    .id(String.valueOf(System.currentTimeMillis()))
-                    .data(GSON.toJson(result))
-                    .build();
-
-            eventSink.send(event);
-
-            // Close the connection if the job reached a terminal state
-            if (job.state != null && job.state.isTerminal()) {
-              job.removeLogEntryAddedEventListener(listenerHolder[0]);
-              try {
-                eventSink.close();
-              } catch (Exception closeEx) {
-                FRLogger.error("Error closing SSE event sink", closeEx);
-              }
-              executor.shutdown();
-            }
-          } catch (Exception ex) {
-            FRLogger.error("Error while streaming logs", ex);
+            executor.execute(
+                () -> sendLogEntry(job, eventSink, sse, result, listenerHolder, executor));
+          } catch (RejectedExecutionException _) {
             job.removeLogEntryAddedEventListener(listenerHolder[0]);
-            try {
-              eventSink.close();
-            } catch (Exception closeEx) {
-              FRLogger.error("Error closing SSE event sink", closeEx);
-            }
-            executor.shutdown();
           }
         };
 
@@ -477,5 +457,44 @@ public class JobProgressResource extends BaseController {
     // Log the API call
     FRAnalytics.apiEndpointCalled(
         "GET v1/jobs/" + jobId + "/logs/stream", "", "stream-started", userId);
+  }
+
+  /** Sends one log entry and closes the stream once the job is finished or delivery fails. */
+  private static void sendLogEntry(
+      RoutingJob job,
+      SseEventSink eventSink,
+      Sse sse,
+      Object result,
+      RoutingJobLogEntryAddedEventListener[] listenerHolder,
+      ScheduledExecutorService executor) {
+    try {
+      OutboundSseEvent event =
+          sse.newEventBuilder()
+              .id(String.valueOf(System.currentTimeMillis()))
+              .data(GSON.toJson(result))
+              .build();
+
+      eventSink.send(event);
+
+      // Close the connection if the job reached a terminal state
+      if (job.state != null && job.state.isTerminal()) {
+        job.removeLogEntryAddedEventListener(listenerHolder[0]);
+        try {
+          eventSink.close();
+        } catch (Exception closeEx) {
+          FRLogger.error("Error closing SSE event sink", closeEx);
+        }
+        executor.shutdown();
+      }
+    } catch (Exception ex) {
+      FRLogger.error("Error while streaming logs", ex);
+      job.removeLogEntryAddedEventListener(listenerHolder[0]);
+      try {
+        eventSink.close();
+      } catch (Exception closeEx) {
+        FRLogger.error("Error closing SSE event sink", closeEx);
+      }
+      executor.shutdown();
+    }
   }
 }

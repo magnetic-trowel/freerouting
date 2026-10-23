@@ -161,9 +161,9 @@ public final class SesWriter {
     final double xcoordinate = location[0];
     final double ycoordinate = location[1];
     file.write(" ");
-    file.write(String.valueOf(xcoordinate));
+    file.write(formatCoordinate(xcoordinate));
     file.write(" ");
-    file.write(String.valueOf(ycoordinate));
+    file.write(formatCoordinate(ycoordinate));
     if (component.placedOnFront()) {
       file.write(" front ");
     } else {
@@ -340,7 +340,7 @@ public final class SesWriter {
         if (currentNet == null) {
           FRLogger.warn("SesWriter.writeNet: net not found");
         } else {
-          identifierType.write(currentNet.name, file);
+          identifierType.writeStrict(currentNet.name, file);
         }
         headerWritten = true;
       }
@@ -402,12 +402,25 @@ public final class SesWriter {
     file.write(" ");
     double[] location = coordinateTransform.boardToDsn(viaLocation);
     final double xcoordinate = location[0];
-    file.write(String.valueOf(xcoordinate));
+    file.write(formatCoordinate(xcoordinate));
     file.write(" ");
     final double ycoordinate = location[1];
-    file.write(String.valueOf(ycoordinate));
+    file.write(formatCoordinate(ycoordinate));
     writeFixedState(file, via.getFixedState());
     file.endScope();
+  }
+
+  /**
+   * Formats a coordinate like {@link String#valueOf(double)}, but never in scientific notation:
+   * high-resolution boards have coordinates of 1e7 and more, which Java would print as {@code
+   * 1.7145E7}.
+   */
+  static String formatCoordinate(double coordinate) {
+    String text = String.valueOf(coordinate);
+    if (text.indexOf('E') < 0) {
+      return text;
+    }
+    return java.math.BigDecimal.valueOf(coordinate).toPlainString();
   }
 
   private static void writeFixedState(IndentFileWriter file, FixedState fixedState)

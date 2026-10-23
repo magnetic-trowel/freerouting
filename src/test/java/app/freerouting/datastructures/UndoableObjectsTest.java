@@ -154,4 +154,43 @@ class UndoableObjectsTest {
     }
     assertFalse(remainingIds.contains(25));
   }
+
+  /**
+   * Popping the last snapshot leaves nothing to undo, so the saved copies must go. Before, every
+   * snapshot-change-pop cycle (one per optimizer candidate or routing attempt) appended a clone to
+   * the object's undo chain.
+   */
+  @Test
+  void poppingToBottomLevelDropsSavedCopies() throws Exception {
+    UndoableObjects list = new UndoableObjects();
+    Stone stone = new Stone(1);
+    list.insert(stone);
+    for (int i = 0; i < 50; i++) {
+      list.generateSnapshot();
+      list.saveForUndo(stone);
+      assertTrue(list.popSnapshot());
+    }
+    java.lang.reflect.Field objectsField = UndoableObjects.class.getDeclaredField("objects");
+    objectsField.setAccessible(true);
+    java.util.Map<?, ?> objects = (java.util.Map<?, ?>) objectsField.get(list);
+    UndoableObjects.UndoableObjectNode node =
+        (UndoableObjects.UndoableObjectNode) objects.get(stone);
+    assertEquals(0, node.level);
+    assertEquals(null, node.undoObject);
+    assertFalse(list.undo(null, null), "nothing can be undone at the bottom level");
+  }
+
+  @Test
+  void poppingAnInnerSnapshotKeepsTheOuterUndo() {
+    UndoableObjects list = new UndoableObjects();
+    Stone stone = new Stone(1);
+    list.insert(stone);
+    list.generateSnapshot();
+    list.generateSnapshot();
+    list.delete(stone);
+    assertTrue(list.popSnapshot());
+    assertTrue(list.undo(null, null));
+    Iterator<UndoableObjects.UndoableObjectNode> it = list.startReadObject();
+    assertEquals(stone, list.readObject(it), "outer snapshot restores the deletion");
+  }
 }

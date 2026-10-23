@@ -80,6 +80,7 @@ public class RoutingBoard extends BasicBoard implements Serializable {
   private transient long shoveFailingObstacleWrites;
   private transient long shoveFailingLayerWrites;
   private transient List<Item> shoveCacheObstacles;
+  private transient java.util.IdentityHashMap<Item, Integer> shoveCacheObstacleIndex;
   private transient RoutingBoardOperations operations;
   private transient RoutingBoardSearchFacade searchFacade;
   private transient RoutingBoardUndoFacade undoFacade;
@@ -1631,6 +1632,24 @@ public class RoutingBoard extends BasicBoard implements Serializable {
       shoveCacheObstacles = new java.util.ArrayList<>();
     }
     return shoveCacheObstacles;
+  }
+
+  /** The index of each item in {@link #getShoveCacheObstacles}. */
+  public java.util.Map<Item, Integer> getShoveCacheObstacleIndex() {
+    if (shoveCacheObstacleIndex == null) {
+      shoveCacheObstacleIndex = new java.util.IdentityHashMap<>();
+    }
+    return shoveCacheObstacleIndex;
+  }
+
+  /** Empties the obstacle table of the shove check cache. */
+  public void clearShoveCacheObstacles() {
+    if (shoveCacheObstacles != null) {
+      shoveCacheObstacles.clear();
+    }
+    if (shoveCacheObstacleIndex != null) {
+      shoveCacheObstacleIndex.clear();
+    }
   }
 
   public ShoveCheckCache getShoveChecks() {

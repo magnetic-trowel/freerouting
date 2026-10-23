@@ -648,17 +648,46 @@ public final class Simplex extends TileShape implements Serializable {
 
   @Override
   public boolean intersects(IntBox box) {
+    IntOctagon bounds = boundingOctagon();
+    if (bounds != null
+        && (bounds.leftX - 1 > box.ur.x
+            || box.ll.x > bounds.rightX + 1
+            || bounds.bottomY - 1 > box.ur.y
+            || box.ll.y > bounds.topY + 1)) {
+      return false;
+    }
     return intersects(box.toSimplex());
   }
 
   @Override
   public boolean intersects(IntOctagon octagon) {
+    IntOctagon bounds = boundingOctagon();
+    if (bounds != null && boundsSeparate(bounds, octagon)) {
+      return false;
+    }
     return intersects(octagon.toSimplex());
   }
 
   @Override
   public boolean intersects(Circle circle) {
     return circle.intersects(this);
+  }
+
+  /**
+   * True if a direction of the octagon grid separates the bounding octagon of this simplex from
+   * other. The bounding octagon is rounded outward from float corners, so it is grown by one unit
+   * on the axes and two on the diagonals before the test: a true answer means the shapes are
+   * disjoint, which is what the exact intersection would also find, without building it.
+   */
+  private static boolean boundsSeparate(IntOctagon bounds, IntOctagon other) {
+    return bounds.leftX - 1 > other.rightX
+        || other.leftX > bounds.rightX + 1
+        || bounds.bottomY - 1 > other.topY
+        || other.bottomY > bounds.topY + 1
+        || bounds.lowerLeftDiagonalX - 2 > other.upperRightDiagonalX
+        || other.lowerLeftDiagonalX > bounds.upperRightDiagonalX + 2
+        || bounds.upperLeftDiagonalX - 2 > other.lowerRightDiagonalX
+        || other.upperLeftDiagonalX > bounds.lowerRightDiagonalX + 2;
   }
 
   /** Returns the edge number if line is a border line of this simplex, otherwise -1. */

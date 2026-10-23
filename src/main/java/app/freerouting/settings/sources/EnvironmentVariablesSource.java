@@ -6,6 +6,7 @@ import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.SettingsSource;
 import app.freerouting.util.ReflectionUtil;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -55,7 +56,7 @@ public class EnvironmentVariablesSource implements SettingsSource {
       String value = entry.getValue();
 
       // Convert all environment variable names to uppercase first
-      String uppercaseKey = rawKey.toUpperCase();
+      String uppercaseKey = rawKey.toUpperCase(Locale.ROOT);
 
       // Only process variables starting with FREEROUTING__ROUTER__
       if (!uppercaseKey.startsWith(ENV_PREFIX + ROUTER_PREFIX)) {
@@ -68,7 +69,8 @@ public class EnvironmentVariablesSource implements SettingsSource {
       String canonical = LegacyRouterSettingsBridge.canonicalCliPath(propertyPath);
       if (LegacyRouterSettingsBridge.isDeprecatedFlatAutorouterPath(propertyPath)) {
         LegacyRouterSettingsBridge.warnDeprecatedPath(
-            rawKey, ENV_PREFIX + ROUTER_PREFIX + canonical.replace(".", "__").toUpperCase());
+            rawKey,
+            ENV_PREFIX + ROUTER_PREFIX + canonical.replace(".", "__").toUpperCase(Locale.ROOT));
       }
 
       // Try to set the value using reflection

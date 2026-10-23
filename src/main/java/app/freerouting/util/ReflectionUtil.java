@@ -4,6 +4,7 @@ import app.freerouting.logger.FRLogger;
 import com.google.gson.annotations.SerializedName;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.Locale;
 
 /** Utility methods for reflective field access and copying between settings objects. */
 public final class ReflectionUtil {
@@ -119,11 +120,11 @@ public final class ReflectionUtil {
       return name;
     }
     String[] parts = name.split("_");
-    StringBuilder sb = new StringBuilder(parts[0].toLowerCase());
+    StringBuilder sb = new StringBuilder(parts[0].toLowerCase(Locale.ROOT));
     for (int i = 1; i < parts.length; i++) {
       if (!parts[i].isEmpty()) {
         sb.append(Character.toUpperCase(parts[i].charAt(0)))
-            .append(parts[i].substring(1).toLowerCase());
+            .append(parts[i].substring(1).toLowerCase(Locale.ROOT));
       }
     }
     return sb.toString();
@@ -268,10 +269,13 @@ public final class ReflectionUtil {
             // Is the array of primitive types or strings?
             if (field.getType().getComponentType().isPrimitive()
                 || field.getType().getComponentType() == String.class) {
-              // Only set the field if it is not null on the source object
-              // The field is an array of primitive types or strings, so we can copy it
-              // directly
-              field.set(target, sourceValue);
+              // Copy the array so that later edits of the merged settings cannot write back
+              // into the source (strings are immutable, so a shallow copy is enough).
+              int length = java.lang.reflect.Array.getLength(sourceValue);
+              Object copy =
+                  java.lang.reflect.Array.newInstance(field.getType().getComponentType(), length);
+              System.arraycopy(sourceValue, 0, copy, 0, length);
+              field.set(target, copy);
               numberOfFieldsChanged++;
             } else {
               // The field is an array of objects (like LayerSettings[])

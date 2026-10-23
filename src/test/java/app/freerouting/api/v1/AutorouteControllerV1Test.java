@@ -64,4 +64,28 @@ class AutorouteControllerV1Test extends RoutingFixtureTest {
     assertTrue(json.contains("\"job_id\"") || json.contains("\"jobId\""));
     assertTrue(json.contains("\"outputs\""));
   }
+
+  @Test
+  void testAutorouteStopsTheRouterAtTheRequestedTimeout() throws Exception {
+    RoutingJob sampleJob = getRoutingJob("Issue508-DAC2020_bm01.dsn");
+    byte[] dsnBytes = sampleJob.input.getData().readAllBytes();
+
+    AutorouteRequest req = new AutorouteRequest();
+    req.fileContent = new String(dsnBytes, StandardCharsets.UTF_8);
+    req.outputFormats = List.of("SES");
+    req.timeoutSeconds = 2;
+    req.routerSettings = new RouterSettings();
+    req.routerSettings.jobTimeoutString = "01:00:00";
+
+    long start = System.nanoTime();
+    Response response = controller.autoroute(req);
+    double seconds = (System.nanoTime() - start) / 1e9;
+
+    // bm01 does not route in two seconds; the job clock has to stop it well before the hour the
+    // router settings ask for.
+    assertTrue(seconds < 60, "request took " + seconds + " s");
+    String json = response.getEntity().toString();
+    assertTrue(json.contains("TIMED_OUT"), json);
+    assertEquals(Response.Status.ACCEPTED.getStatusCode(), response.getStatus());
+  }
 }

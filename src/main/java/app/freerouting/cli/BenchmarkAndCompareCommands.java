@@ -12,6 +12,7 @@ import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.Locale;
 
 /** Handles board comparison and benchmark score calculation CLI commands. */
 public final class BenchmarkAndCompareCommands {
@@ -72,7 +73,7 @@ public final class BenchmarkAndCompareCommands {
    */
   public static RoutingBoard loadBoardFromFile(File file) throws Exception {
     try (InputStream is = new FileInputStream(file)) {
-      if (file.getName().toLowerCase().endsWith(".json")) {
+      if (file.getName().toLowerCase(Locale.ROOT).endsWith(".json")) {
         try (Reader r = new InputStreamReader(is, StandardCharsets.UTF_8)) {
           BoardReadResult readResult =
               app.freerouting.io.kicad.KiCadJsonReader.readBoard(r, null, null);

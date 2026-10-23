@@ -7,6 +7,7 @@ import app.freerouting.datastructures.IndentFileWriter;
 import app.freerouting.logger.FRLogger;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -109,7 +110,7 @@ public class Net {
     if (meander.cornerStyle() != null) {
       scopeParameter.file.newLine();
       scopeParameter.file.write("(corner_style ");
-      scopeParameter.file.write(meander.cornerStyle().name().toLowerCase());
+      scopeParameter.file.write(meander.cornerStyle().name().toLowerCase(Locale.ROOT));
       scopeParameter.file.write(")");
     }
     if (meander.radiusPercentage() >= 0) {

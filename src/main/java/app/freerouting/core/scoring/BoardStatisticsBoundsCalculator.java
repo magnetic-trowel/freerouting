@@ -2,10 +2,12 @@ package app.freerouting.core.scoring;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.items.ConductionArea;
+import app.freerouting.board.model.items.Connectable;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.core.library.Padstack;
+import app.freerouting.datastructures.UndoableObjects;
 import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.rules.Net;
@@ -17,6 +19,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,14 +32,30 @@ final class BoardStatisticsBoundsCalculator {
 
   private BoardStatisticsBoundsCalculator() {}
 
-  static synchronized BoardStatisticsBounds calculate(BasicBoard board) {
-    BoardStatisticsBounds cached = CACHE.get(board);
-    if (cached != null) {
-      return cached;
+  /**
+   * Returns the cached bounds of the board, computing them on first use. The computation runs
+   * outside the lock so optimizer workers, each on its own board copy, do not queue behind each
+   * other; the bounds are a pure function of the board, so a lost race only repeats work.
+   */
+  static BoardStatisticsBounds calculate(BasicBoard board) {
+    synchronized (CACHE) {
+      BoardStatisticsBounds cached = CACHE.get(board);
+      if (cached != null) {
+        return cached;
+      }
     }
     BoardStatisticsBounds result = calculateUncached(board);
-    CACHE.put(board, result);
-    return result;
+    synchronized (CACHE) {
+      BoardStatisticsBounds existing = CACHE.putIfAbsent(board, result);
+      return existing != null ? existing : result;
+    }
+  }
+
+  /** Drops the cached bounds of the board, for example after its rules changed. */
+  static void invalidate(BasicBoard board) {
+    synchronized (CACHE) {
+      CACHE.remove(board);
+    }
   }
 
   private static BoardStatisticsBounds calculateUncached(BasicBoard board) {
@@ -44,17 +63,17 @@ final class BoardStatisticsBoundsCalculator {
     double minTraceLength = 0.0;
     int minViaCount = 0;
     int minBendCount = 0;
-    double boardUnitToMmFactor =
-        Unit.scale(1.0, board.communication.unit, Unit.MM)
-            / (board.communication.resolution > 0 ? board.communication.resolution : 1);
+    double boardUnitToMmFactor = board.communication.boardUnitSize(Unit.MM);
 
+    Map<Integer, List<Item>> terminalItems = terminalItemsByNet(board);
     for (int netNumber = 1; netNumber <= board.rules.nets.maxNetNumber(); netNumber++) {
       Net net = board.rules.nets.get(netNumber);
       if (net == null) {
         continue;
       }
 
-      List<Terminal> terminals = getTerminals(board, net);
+      List<Terminal> terminals =
+          getTerminals(board, terminalItems.getOrDefault(netNumber, List.of()));
       if (terminals.size() < 2) {
         continue;
       }
@@ -99,9 +118,32 @@ final class BoardStatisticsBoundsCalculator {
     result.bendEquivalentLengthMm = (float) (pitch * boardUnitToMmFactor);
   }
 
-  private static List<Terminal> getTerminals(BasicBoard board, Net net) {
+  /**
+   * Collects {@link Net#getTerminalItems()} for every net in one pass over the item list, in the
+   * same item order. Calling it per net scanned all items once per net.
+   */
+  private static Map<Integer, List<Item>> terminalItemsByNet(BasicBoard board) {
+    Map<Integer, List<Item>> result = new HashMap<>();
+    Iterator<UndoableObjects.UndoableObjectNode> it = board.itemList.startReadObject();
+    for (Item item = (Item) board.itemList.readObject(it);
+        item != null;
+        item = (Item) board.itemList.readObject(it)) {
+      if (!(item instanceof Connectable) || item.isRoutable()) {
+        continue;
+      }
+      for (int i = 0; i < item.netCount(); i++) {
+        List<Item> netItems = result.computeIfAbsent(item.getNetNumber(i), k -> new ArrayList<>());
+        if (netItems.isEmpty() || netItems.getLast() != item) {
+          netItems.add(item);
+        }
+      }
+    }
+    return result;
+  }
+
+  private static List<Terminal> getTerminals(BasicBoard board, List<Item> terminalItems) {
     List<Terminal> result = new ArrayList<>();
-    for (Item item : net.getTerminalItems()) {
+    for (Item item : terminalItems) {
       Terminal terminal = toTerminal(board, item);
       if (terminal != null && !terminal.signalLayers.isEmpty()) {
         result.add(terminal);

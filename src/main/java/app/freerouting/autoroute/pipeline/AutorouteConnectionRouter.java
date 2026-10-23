@@ -4,7 +4,6 @@ import app.freerouting.autoroute.AutorouteAttemptResult;
 import app.freerouting.autoroute.AutorouteAttemptState;
 import app.freerouting.autoroute.maze.AutorouteControl;
 import app.freerouting.autoroute.maze.AutorouteEngine;
-import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.Item;
@@ -26,12 +25,80 @@ final class AutorouteConnectionRouter {
     this.router = router;
   }
 
+  /**
+   * Routes one connection. With {@code router.strict_drc} the attempt runs inside an undo snapshot:
+   * the maze rips its victims before it inserts the new connection, and if the attempt changed the
+   * board and still did not route (the insertion failed, strict DRC rejected the new copper, or an
+   * exception escaped), the snapshot is undone and the ripped connections are back. Without it, a
+   * rejected or failed attempt leaves its victims ripped for later items and passes to route again,
+   * as before; measured on the fixture suite that exploration completed more connections.
+   */
   AutorouteAttemptResult route(
       Item item,
       int routeNetNo,
       SortedSet<Item> rippedItemList,
       Map<Item, Integer> ripupCosts,
       int ripupPassNo) {
+    RoutingBoard board = router.board;
+    Attempt attempt = new Attempt(board, rippedItemList, router.settings.isStrictDrc());
+    AutorouteAttemptResult result = null;
+    try {
+      result = routeAttempt(item, routeNetNo, rippedItemList, ripupCosts, ripupPassNo, attempt);
+      return result;
+    } finally {
+      attempt.finish(result != null && result.state == AutorouteAttemptState.ROUTED);
+    }
+  }
+
+  /** The undo snapshot around a strict-DRC connection attempt; see {@link #route}. */
+  private static final class Attempt {
+    private final RoutingBoard board;
+    private final SortedSet<Item> rippedItemList;
+    private final boolean rollsBack;
+    private long contentVersionAtSnapshot;
+
+    Attempt(RoutingBoard board, SortedSet<Item> rippedItemList, boolean rollsBack) {
+      this.board = board;
+      this.rippedItemList = rippedItemList;
+      this.rollsBack = rollsBack;
+      begin();
+    }
+
+    private void begin() {
+      if (!rollsBack) {
+        return;
+      }
+      contentVersionAtSnapshot = board.itemList.getContentVersion();
+      board.generateSnapshot();
+    }
+
+    /** Undoes a failed attempt that changed the board and opens a new snapshot for a retry. */
+    void rollbackForRetry() {
+      finish(false);
+      begin();
+    }
+
+    void finish(boolean keep) {
+      if (!rollsBack) {
+        return;
+      }
+      if (keep || board.itemList.getContentVersion() == contentVersionAtSnapshot) {
+        board.popSnapshot();
+      } else {
+        board.undo(null);
+        // The ripped connections are back on the board.
+        rippedItemList.clear();
+      }
+    }
+  }
+
+  private AutorouteAttemptResult routeAttempt(
+      Item item,
+      int routeNetNo,
+      SortedSet<Item> rippedItemList,
+      Map<Item, Integer> ripupCosts,
+      int ripupPassNo,
+      Attempt attempt) {
     try {
       Net routeNet = router.board.rules.nets.get(routeNetNo);
       boolean containsPlane = routeNet != null && routeNet.containsPlane();
@@ -72,8 +139,6 @@ final class AutorouteConnectionRouter {
       maxMilliseconds = Math.min(maxMilliseconds, Integer.MAX_VALUE);
       TimeLimit timeLimit = new TimeLimit((int) maxMilliseconds);
 
-      boolean isStrictPass = router.settings.isStrictDrc();
-
       // start_necked: a net that needed the neck before routes at the neck width, ripping like any
       // search, and
       // that result stands. The class-width search it skips would use up the space before the
@@ -83,7 +148,6 @@ final class AutorouteConnectionRouter {
           && router.settings.getNeckWidthUm() > 0
           && router.neckedRouteNets.contains(routeNetNo)) {
         int beforeStart = router.board.communication.idGenerator.maxGeneratedId();
-        byte[] startSnapshot = isStrictPass ? router.board.serialize(false) : null;
         AutorouteAttemptResult started =
             retryConnectionNecked(
                 routeNetNo,
@@ -103,7 +167,7 @@ final class AutorouteConnectionRouter {
             return started;
           }
           AutorouteAttemptResult rejection =
-              applyStrictDrcAfterRoute(routeNetNo, beforeStart, startSnapshot, ripupPassNo);
+              applyStrictDrcAfterRoute(routeNetNo, beforeStart, ripupPassNo);
           if (rejection != null) {
             return rejection;
           }
@@ -120,11 +184,6 @@ final class AutorouteConnectionRouter {
               timeLimit,
               router.isRetainAutorouteDatabase());
       int maxItemIdBeforeRoute = router.board.communication.idGenerator.maxGeneratedId();
-      // Snapshot the board state only when strict DRC is explicitly enabled; the implicit
-      // per-connection serialize that previously fired for every pass ≥ 3 caused significant
-      // allocation/GC pressure on large boards. The removeItems-based rollback in
-      // enforceStrictDrc() handles the common case without needing a full snapshot.
-      byte[] strictDrcBoardSnapshot = isStrictPass ? router.board.serialize(false) : null;
 
       long mazeSearchStart = BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
       final AutorouteAttemptResult autorouteResult =
@@ -165,6 +224,11 @@ final class AutorouteConnectionRouter {
       if ((autorouteResult.state == AutorouteAttemptState.FAILED
               || autorouteResult.state == AutorouteAttemptState.INSERT_ERROR)
           && router.settings.getNeckWidthUm() > 0) {
+        if (attempt.rollsBack) {
+          // The necked retry starts from the board before the failed attempt.
+          attempt.rollbackForRetry();
+          maxItemIdBeforeRoute = router.board.communication.idGenerator.maxGeneratedId();
+        }
         AutorouteAttemptResult neckedResult =
             retryConnectionNecked(
                 routeNetNo,
@@ -180,8 +244,7 @@ final class AutorouteConnectionRouter {
                 /* quiet= */ false);
         if (neckedResult != null) {
           AutorouteAttemptResult strictResult =
-              applyStrictDrcAfterRoute(
-                  routeNetNo, maxItemIdBeforeRoute, strictDrcBoardSnapshot, ripupPassNo);
+              applyStrictDrcAfterRoute(routeNetNo, maxItemIdBeforeRoute, ripupPassNo);
           if (strictResult != null) {
             return strictResult;
           }
@@ -191,8 +254,7 @@ final class AutorouteConnectionRouter {
 
       if (autorouteResult.state == AutorouteAttemptState.ROUTED) {
         AutorouteAttemptResult strictResult =
-            applyStrictDrcAfterRoute(
-                routeNetNo, maxItemIdBeforeRoute, strictDrcBoardSnapshot, ripupPassNo);
+            applyStrictDrcAfterRoute(routeNetNo, maxItemIdBeforeRoute, ripupPassNo);
         if (strictResult != null) {
           return strictResult;
         }
@@ -285,14 +347,22 @@ final class AutorouteConnectionRouter {
     return neckResult;
   }
 
+  /**
+   * Returns a rejection if strict DRC applies and the new copper of the connection violates
+   * clearance, or null if the connection may be kept. With {@code router.strict_drc} the caller's
+   * attempt snapshot rolls a rejected connection back. From pass 3 without it, the new traces and
+   * vias are removed and the connections the attempt ripped stay ripped.
+   */
   private AutorouteAttemptResult applyStrictDrcAfterRoute(
-      int routeNetNo, int maxItemIdBefore, byte[] boardSnapshotBeforeRoute, int ripupPassNo) {
+      int routeNetNo, int maxItemIdBefore, int ripupPassNo) {
     boolean isStrictPass = router.settings.isStrictDrc() || ripupPassNo >= 3;
     if (!isStrictPass) {
       return null;
     }
     AutorouteAttemptResult rejection =
-        BatchAutorouter.enforceStrictDrc(router.board, routeNetNo, maxItemIdBefore);
+        router.settings.isStrictDrc()
+            ? BatchAutorouter.strictDrcRejection(router.board, routeNetNo, maxItemIdBefore)
+            : BatchAutorouter.enforceStrictDrc(router.board, routeNetNo, maxItemIdBefore);
     if (rejection != null) {
       FRLogger.trace(
           "AutorouteConnectionRouter.apply_strict_drc",
@@ -300,9 +370,6 @@ final class AutorouteConnectionRouter {
           "pass=" + ripupPassNo + ", net=" + routeNetNo + ", reason=" + rejection.details,
           "",
           null);
-      if (boardSnapshotBeforeRoute != null) {
-        router.board = (RoutingBoard) BasicBoard.deserialize(boardSnapshotBeforeRoute);
-      }
     }
     return rejection;
   }

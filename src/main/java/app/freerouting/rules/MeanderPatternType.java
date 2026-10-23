@@ -1,6 +1,7 @@
 package app.freerouting.rules;
 
 import java.io.Serializable;
+import java.util.Locale;
 
 /** Type of length-tuning pattern supported for trace length matching. */
 public enum MeanderPatternType implements Serializable {
@@ -18,7 +19,7 @@ public enum MeanderPatternType implements Serializable {
     if (name == null || name.isBlank()) {
       return SINGLE_TRACK;
     }
-    String normalized = name.trim().toUpperCase().replace('-', '_');
+    String normalized = name.trim().toUpperCase(Locale.ROOT).replace('-', '_');
     return switch (normalized) {
       case "DIFF_PAIR", "DIFFPAIR", "DIFFERENTIAL_PAIR", "DIFFERENTIAL" -> DIFF_PAIR;
       case "DIFF_PAIR_SKEW", "DIFFPAIR_SKEW", "SKEW", "DIFFERENTIAL_PAIR_SKEW" -> DIFF_PAIR_SKEW;
@@ -28,6 +29,6 @@ public enum MeanderPatternType implements Serializable {
 
   @Override
   public String toString() {
-    return super.toString().toLowerCase();
+    return super.toString().toLowerCase(Locale.ROOT);
   }
 }

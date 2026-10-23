@@ -89,6 +89,7 @@ public final class BoardSnapshotManager {
 
   /** Removes the top snapshot from the undo stack. */
   boolean popSnapshot() {
+    board.components.popSnapshot();
     return board.itemList.popSnapshot();
   }
 

@@ -483,8 +483,7 @@ public abstract class Item
             double shortfall = minimumClearance - actualClearance;
             double boardUnitToUmFactor =
                 (this.board != null && this.board.communication != null)
-                    ? Unit.scale(1.0, this.board.communication.unit, Unit.UM)
-                        / Math.max(1, this.board.communication.resolution)
+                    ? this.board.communication.boardUnitSize(Unit.UM)
                     : 1.0;
             double toleranceUm =
                 (this.board != null && this.board.rules != null)
@@ -940,7 +939,10 @@ public abstract class Item
 
   /** Fixes the item. */
   public void setFixedState(FixedState fixedState) {
-    this.fixedState = fixedState;
+    if (this.fixedState != fixedState) {
+      this.fixedState = fixedState;
+      noteStateChanged();
+    }
   }
 
   /** Returns false, if this item is an obstacle for vias with the input net number. */
@@ -950,8 +952,16 @@ public abstract class Item
 
   /** Unfixes the item, if it is not fixed by the system. */
   public void unfix() {
-    if (fixedState != FixedState.SYSTEM_FIXED) {
+    if (fixedState != FixedState.SYSTEM_FIXED && fixedState != FixedState.UNFIXED) {
       fixedState = FixedState.UNFIXED;
+      noteStateChanged();
+    }
+  }
+
+  /** Reports a change the content version does not count, for caches of board queries. */
+  private void noteStateChanged() {
+    if (board != null && board.itemList != null) {
+      board.itemList.noteObjectChanged(this);
     }
   }
 
@@ -1384,7 +1394,7 @@ public abstract class Item
   public String toString() {
     StringBuilder simpleName = new StringBuilder();
 
-    simpleName.append(this.getClass().getSimpleName().toLowerCase());
+    simpleName.append(this.getClass().getSimpleName().toLowerCase(Locale.ROOT));
 
     if (componentId > 0) {
       simpleName.append(" of component #");

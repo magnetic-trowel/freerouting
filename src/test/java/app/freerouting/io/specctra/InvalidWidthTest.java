@@ -59,6 +59,21 @@ class InvalidWidthTest {
     assertEquals(1250, netClass.getTraceHalfWidth(0));
   }
 
+  /** An unreadable number used to abort the whole read with a NullPointerException. */
+  @Test
+  void unreadableNetClassWidthAndClearanceFallBackToTheStructureRules() throws IOException {
+    String dsn =
+        fixture()
+            .replaceFirst(
+                "\\(class kicad_default PERFECT\\s*\\)",
+                "(class kicad_default PERFECT (rule (width xyz) (clearance abc)))");
+    RoutingBoard board = load(dsn);
+
+    int netNumber = board.getPins().iterator().next().getNetNumber(0);
+    NetClass netClass = board.rules.nets.get(netNumber).getNetClass();
+    assertEquals(1250, netClass.getTraceHalfWidth(0));
+  }
+
   @Test
   void zeroWidthWireIsSkippedAndTheRestOfTheSessionIsWritten() throws IOException {
     RoutingBoard board = load(fixture());

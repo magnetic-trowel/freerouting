@@ -10,6 +10,12 @@ import java.io.Serializable;
  */
 public final class IntOctagon extends RegularTileShape implements Serializable {
 
+  /**
+   * The value the JVM computed for this class before {@link #unionArea} was added, so the
+   * serialized form, and with it board copies and board hashes, stays the same.
+   */
+  @java.io.Serial private static final long serialVersionUID = 2520427680353094755L;
+
   /** Reusable instance of an empty octagon. */
   public static final IntOctagon EMPTY =
       new IntOctagon(
@@ -209,6 +215,26 @@ public final class IntOctagon extends RegularTileShape implements Serializable {
 
   @Override
   public double area() {
+    return area(
+        leftX,
+        bottomY,
+        rightX,
+        topY,
+        upperLeftDiagonalX,
+        lowerRightDiagonalX,
+        lowerLeftDiagonalX,
+        upperRightDiagonalX);
+  }
+
+  private static double area(
+      int leftX,
+      int bottomY,
+      int rightX,
+      int topY,
+      int upperLeftDiagonalX,
+      int lowerRightDiagonalX,
+      int lowerLeftDiagonalX,
+      int upperRightDiagonalX) {
 
     // calculate half of the absolute value of
     // x0 (y1 - y7) + x1 (y2 - y0) + x2 (y3 - y1) + ...+ x7( y0 - y6)
@@ -233,6 +259,22 @@ public final class IntOctagon extends RegularTileShape implements Serializable {
             * (double) (lowerLeftDiagonalX - 2 * leftX - topY + bottomY + upperLeftDiagonalX);
 
     return 0.5 * Math.abs(result);
+  }
+
+  /**
+   * Returns the area of the union of a and b, the same value as {@code a.union(b).area()} without
+   * allocating the union. The search tree evaluates it for every level of every insertion.
+   */
+  public static double unionArea(IntOctagon a, IntOctagon b) {
+    return area(
+        Math.min(a.leftX, b.leftX),
+        Math.min(a.bottomY, b.bottomY),
+        Math.max(a.rightX, b.rightX),
+        Math.max(a.topY, b.topY),
+        Math.min(a.upperLeftDiagonalX, b.upperLeftDiagonalX),
+        Math.max(a.lowerRightDiagonalX, b.lowerRightDiagonalX),
+        Math.min(a.lowerLeftDiagonalX, b.lowerLeftDiagonalX),
+        Math.max(a.upperRightDiagonalX, b.upperRightDiagonalX));
   }
 
   @Override

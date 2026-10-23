@@ -9,13 +9,14 @@ import app.freerouting.io.FileFormat;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.sources.CliSettings;
 import app.freerouting.settings.sources.DefaultSettings;
+import app.freerouting.util.AtomicFiles;
 import app.freerouting.util.ReflectionUtil;
 import app.freerouting.util.gson.GsonProvider;
 import com.google.gson.annotations.SerializedName;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Serializable;
-import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,12 +47,19 @@ public class GlobalSettings implements Serializable {
     return currentInstance;
   }
 
+  /** Cached reflective handle to {@code Freerouting.globalSettings}; looked up on first use. */
+  private static volatile java.lang.reflect.Field cachedGlobalSettingsField;
+
   private static GlobalSettings getFreeroutingGlobalSettingsIfAvailable() {
     try {
-      Class<?> freeroutingClass =
-          Class.forName(
-              "app.freerouting.Freerouting", false, GlobalSettings.class.getClassLoader());
-      java.lang.reflect.Field field = freeroutingClass.getField("globalSettings");
+      java.lang.reflect.Field field = cachedGlobalSettingsField;
+      if (field == null) {
+        Class<?> freeroutingClass =
+            Class.forName(
+                "app.freerouting.Freerouting", false, GlobalSettings.class.getClassLoader());
+        field = freeroutingClass.getField("globalSettings");
+        cachedGlobalSettingsField = field;
+      }
       Object val = field.get(null);
       if (val instanceof GlobalSettings gs) {
         return gs;
@@ -471,8 +479,11 @@ public class GlobalSettings implements Serializable {
     globalSettings.version = getReleaseSafeVersion();
 
     // Write the settings to the file
-    try (Writer writer = Files.newBufferedWriter(configurationFilePath)) {
-      GsonProvider.GSON.toJson(globalSettings, writer);
+    // Atomically: a process stopped while saving must not leave a truncated freerouting.json.
+    try {
+      AtomicFiles.write(
+          configurationFilePath,
+          GsonProvider.GSON.toJson(globalSettings).getBytes(StandardCharsets.UTF_8));
     } catch (AccessDeniedException e) {
       throw new AccessDeniedException(
           configurationFilePath.toString(),
@@ -526,7 +537,11 @@ public class GlobalSettings implements Serializable {
     for (var entry : System.getenv().entrySet()) {
       if (entry.getKey().startsWith("FREEROUTING__")) {
         String propertyName =
-            entry.getKey().substring("FREEROUTING__".length()).toLowerCase().replace("__", ".");
+            entry
+                .getKey()
+                .substring("FREEROUTING__".length())
+                .toLowerCase(Locale.ROOT)
+                .replace("__", ".");
 
         // Skip router settings - they're handled by EnvironmentVariablesSource
         // to prevent conflicts with the SettingsMerger
@@ -636,7 +651,7 @@ public class GlobalSettings implements Serializable {
               } else if ("debug.filter_by_net".equals(parts[0])) {
                 String[] nets = parts[1].split(",");
                 for (String net : nets) {
-                  debugSettings.filterByNet.add(net.trim().toLowerCase());
+                  debugSettings.filterByNet.add(net.trim().toLowerCase(Locale.ROOT));
                 }
               }
             } else {
@@ -681,7 +696,7 @@ public class GlobalSettings implements Serializable {
                 continue;
               }
 
-              String lowerFile = file.toLowerCase();
+              String lowerFile = file.toLowerCase(Locale.ROOT);
               if (lowerFile.endsWith(".dsn")) {
                 if (hasDsn) {
                   FRLogger.warn(
@@ -825,7 +840,7 @@ public class GlobalSettings implements Serializable {
           }
         } else if (args[i].startsWith("-is")) {
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            String op = args[i + 1].toLowerCase().trim();
+            String op = args[i + 1].toLowerCase(Locale.ROOT).trim();
             routerSettings.optimizer.itemSelectionStrategy =
                 op.startsWith("prio")
                     ? ItemSelectionStrategy.PRIORITIZED
@@ -835,7 +850,7 @@ public class GlobalSettings implements Serializable {
         } else if ("-l".equals(args[i])) {
           String localeString = "";
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            localeString = args[i + 1].toLowerCase().replace("-", "_");
+            localeString = args[i + 1].toLowerCase(Locale.ROOT).replace("-", "_");
             i++;
           }
 
@@ -946,7 +961,7 @@ public class GlobalSettings implements Serializable {
           // get the log level from the command line arguments
           // and save it to the settings
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            logging.console.level = args[i + 1].toUpperCase();
+            logging.console.level = args[i + 1].toUpperCase(Locale.ROOT);
             i++;
           }
         } else {

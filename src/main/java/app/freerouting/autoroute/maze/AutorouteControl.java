@@ -26,6 +26,12 @@ public class AutorouteControl {
   public final double[] bendCosts;
   public final boolean withNeckdown;
 
+  /**
+   * The narrowest trace half width any neckdown may use, including necks derived from pad widths:
+   * {@link #neckHalfWidth} (0: no limit).
+   */
+  public final int minNeckdownHalfWidth;
+
   /** Defines for each layer, if it may be used for routing. */
   public final boolean[] layerActive;
 
@@ -178,6 +184,7 @@ public class AutorouteControl {
     fanoutStartPinLayer = -1;
     removeUnconnectedVias = true;
     withNeckdown = settings.getAutomaticNeckdown();
+    minNeckdownHalfWidth = neckHalfWidth(board, settings);
     tidyRegionWidth = Integer.MAX_VALUE;
     pullTightAccuracy = 500;
     maxShoveTraceRecursionDepth = 20;
@@ -376,19 +383,15 @@ public class AutorouteControl {
   /**
    * Returns the user's {@code neck_width_um} as a trace half width in board units (clamped to at
    * least {@link app.freerouting.rules.BoardRules#getMinAllowedTraceHalfWidth()}), or the minimum
-   * allowed trace half width (0 when unset) when {@code neck_width_um} is not set. No automatic
-   * narrowing may go below this width.
+   * allowed trace half width ({@code min_trace_width_um}, 0 when unset) when {@code neck_width_um}
+   * is not set. No automatic narrowing may go below this width.
    */
   public static int neckHalfWidth(RoutingBoard board, RouterSettings settings) {
     double neckWidthUm = settings.getNeckWidthUm();
     if (neckWidthUm <= 0) {
       return board.rules.getMinAllowedTraceHalfWidth();
     }
-    int boardResolution = Math.max(1, board.communication.resolution);
-    int neckWidth =
-        (int)
-            Math.round(
-                Unit.scale(neckWidthUm * boardResolution, Unit.UM, board.communication.unit));
+    int neckWidth = (int) Math.round(board.communication.physicalToBoard(neckWidthUm, Unit.UM));
     return Math.max(Math.max(1, neckWidth / 2), board.rules.getMinAllowedTraceHalfWidth());
   }
 }

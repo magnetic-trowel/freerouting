@@ -3,6 +3,7 @@ package app.freerouting.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.settings.RouterSettings;
@@ -87,5 +88,18 @@ class ReflectionUtilArrayTest {
     assertEquals(2, target.planeNets.length);
     assertEquals("VCC", target.planeNets[0]);
     assertEquals("GND", target.planeNets[1]);
+  }
+
+  @Test
+  void copyFieldsDoesNotShareArraysWithTheSource() {
+    RouterSettings source = new RouterSettings();
+    source.planeNets = new String[] {"VCC", "GND"};
+    RouterSettings target = new RouterSettings();
+
+    ReflectionUtil.copyFields(source, target);
+    target.planeNets[0] = "CHANGED";
+
+    assertEquals("VCC", source.planeNets[0]);
+    assertNotSame(source.planeNets, target.planeNets);
   }
 }

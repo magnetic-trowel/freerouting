@@ -15,10 +15,12 @@ import app.freerouting.board.model.structure.AngleRestriction;
 import app.freerouting.board.model.structure.BoardOutline;
 import app.freerouting.board.model.structure.ShapeAndEntrySide;
 import app.freerouting.board.model.structure.ShapeEntrySide;
+import app.freerouting.board.searchtree.SearchTreeChangeGrid;
 import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.board.searchtree.ShapeSearchTree;
 import app.freerouting.board.searchtree.ShapeTraceEntries;
 import app.freerouting.board.trace.PolylineTrace;
+import app.freerouting.datastructures.QueryRegionRecorder;
 import app.freerouting.datastructures.TimeLimit;
 import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.Direction;
@@ -269,9 +271,24 @@ public class TraceShover {
             maxViaRecursionDepth,
             maxSpringOverRecursionDepth,
             false);
-    ShoveCheckCache.Entry hit = cache.tryGet(board, stamp, key);
+    ShoveCheckCache.Entry hit = cache.tryGet(board, key);
     if (hit != null) {
+      if (ShoveCheckCache.VERIFY && cache.lastHitRetained()) {
+        return verifiedCheck(
+            cache,
+            hit,
+            traceShape,
+            fromSide,
+            dir,
+            layer,
+            netNumbers,
+            clearanceClassIndex,
+            maxRecursionDepth,
+            maxViaRecursionDepth,
+            maxSpringOverRecursionDepth);
+      }
       cache.countHit();
+      QueryRegionRecorder.forThread().add(hit.region);
       for (int i = 0; i < hit.ids; i++) {
         board.communication.idGenerator.newId();
       }
@@ -313,10 +330,83 @@ public class TraceShover {
       int maxViaRecursionDepth,
       int maxSpringOverRecursionDepth,
       long stamp) {
-    int ids = board.communication.idGenerator.maxGeneratedId();
-    long obstacleWrites = board.getShoveFailingObstacleWrites();
-    long layerWrites = board.getShoveFailingLayerWrites();
+    SearchTreeChangeGrid grid = board.changeGrid();
+    int sequence = grid.sequence();
+    int generation = grid.generation();
+    final int ids = board.communication.idGenerator.maxGeneratedId();
+    final long obstacleWrites = board.getShoveFailingObstacleWrites();
+    final long layerWrites = board.getShoveFailingLayerWrites();
 
+    QueryRegionRecorder recorder = QueryRegionRecorder.forThread();
+    recorder.begin();
+    boolean result;
+    QueryRegionRecorder.Region region;
+    try {
+      result =
+          checkUncached(
+              traceShape,
+              fromSide,
+              dir,
+              layer,
+              netNumbers,
+              clearanceClassIndex,
+              maxRecursionDepth,
+              maxViaRecursionDepth,
+              maxSpringOverRecursionDepth,
+              null);
+    } finally {
+      region = recorder.end();
+    }
+
+    int idsUsed = board.communication.idGenerator.maxGeneratedId() - ids;
+    boolean wroteObstacle = board.getShoveFailingObstacleWrites() != obstacleWrites;
+    Item obstacle = wroteObstacle ? board.getShoveFailingObstacle() : null;
+
+    if (board.itemList.getContentVersion() != stamp
+        || grid.sequence() != sequence
+        || grid.generation() != generation
+        || idsUsed < 0
+        || (obstacle != null && !obstacle.isOnTheBoard())) {
+      return result;
+    }
+
+    boolean wroteLayer = board.getShoveFailingLayerWrites() != layerWrites;
+    int obstacleIndex =
+        (wroteObstacle && obstacle != null) ? cache.obstacleIndex(board, obstacle) : -1;
+    ShoveCheckCache.Entry entry =
+        new ShoveCheckCache.Entry(
+            result,
+            idsUsed,
+            wroteObstacle,
+            obstacleIndex,
+            wroteLayer,
+            wroteLayer ? board.getShoveFailingLayer() : -1,
+            region,
+            sequence);
+    cache.put(board, key, entry);
+    return result;
+  }
+
+  /** Recomputes a check answered by a retained entry and reports whether the answers agree. */
+  private boolean verifiedCheck(
+      ShoveCheckCache cache,
+      ShoveCheckCache.Entry hit,
+      TileShape traceShape,
+      ShapeEntrySide fromSide,
+      Direction dir,
+      int layer,
+      int[] netNumbers,
+      int clearanceClassIndex,
+      int maxRecursionDepth,
+      int maxViaRecursionDepth,
+      int maxSpringOverRecursionDepth) {
+    Item hitObstacle =
+        hit.wroteObstacle && hit.obstacle >= 0
+            ? board.getShoveCacheObstacles().get(hit.obstacle)
+            : null;
+    final int ids = board.communication.idGenerator.maxGeneratedId();
+    final long obstacleWrites = board.getShoveFailingObstacleWrites();
+    final long layerWrites = board.getShoveFailingLayerWrites();
     boolean result =
         checkUncached(
             traceShape,
@@ -329,29 +419,35 @@ public class TraceShover {
             maxViaRecursionDepth,
             maxSpringOverRecursionDepth,
             null);
-
     int idsUsed = board.communication.idGenerator.maxGeneratedId() - ids;
     boolean wroteObstacle = board.getShoveFailingObstacleWrites() != obstacleWrites;
-    Item obstacle = wroteObstacle ? board.getShoveFailingObstacle() : null;
-
-    if (board.itemList.getContentVersion() != stamp
-        || idsUsed < 0
-        || (obstacle != null && !obstacle.isOnTheBoard())) {
-      return result;
-    }
-
     boolean wroteLayer = board.getShoveFailingLayerWrites() != layerWrites;
-    int obstacleIndex =
-        (wroteObstacle && obstacle != null) ? ShoveCheckCache.obstacleIndex(board, obstacle) : -1;
-    ShoveCheckCache.Entry entry =
-        new ShoveCheckCache.Entry(
-            result,
-            idsUsed,
-            wroteObstacle,
-            obstacleIndex,
-            wroteLayer,
-            wroteLayer ? board.getShoveFailingLayer() : -1);
-    cache.put(board, stamp, key, entry);
+    boolean same =
+        result == hit.result
+            && idsUsed == hit.ids
+            && wroteObstacle == hit.wroteObstacle
+            && (!wroteObstacle || board.getShoveFailingObstacle() == hitObstacle)
+            && wroteLayer == hit.wroteLayer
+            && (!wroteLayer || board.getShoveFailingLayer() == hit.layer);
+    cache.countVerified(same);
+    if (!same && cache.getVerifyMismatches() <= 20) {
+      FRLogger.warn(
+          "Shove check cache: a retained entry differs from the recomputed check (result "
+              + hit.result
+              + " -> "
+              + result
+              + ", ids "
+              + hit.ids
+              + " -> "
+              + idsUsed
+              + ", layer "
+              + layer
+              + ", region "
+              + hit.region
+              + ", shape "
+              + traceShape
+              + ")");
+    }
     return result;
   }
 
@@ -392,7 +488,10 @@ public class TraceShover {
     }
     int tracePieceCount = shapeEntries.substituteTraceCount();
 
-    if (netNumbers != null && netNumbers.length > 0 && !obstacles.isEmpty()) {
+    if (FRLogger.isTraceEnabled()
+        && netNumbers != null
+        && netNumbers.length > 0
+        && !obstacles.isEmpty()) {
       StringBuilder obstacleLog = new StringBuilder();
       obstacleLog
           .append(tracePieceCount > 0 ? "[shove_check_obstacles]" : "[shove_check_obstacles_zero]")
@@ -590,7 +689,10 @@ public class TraceShover {
       return false;
     }
     int tracePieceCount = shapeEntries.substituteTraceCount();
-    if (netNumbers != null && netNumbers.length > 0 && !obstacles.isEmpty()) {
+    if (FRLogger.isTraceEnabled()
+        && netNumbers != null
+        && netNumbers.length > 0
+        && !obstacles.isEmpty()) {
       StringBuilder obstacleLog = new StringBuilder();
       obstacleLog
           .append(

@@ -677,7 +677,7 @@ public class McpControllerV1 extends BaseController {
           if (outputPath.getParent() != null) {
             java.nio.file.Files.createDirectories(outputPath.getParent());
           }
-          java.nio.file.Files.write(outputPath, sesBytes);
+          app.freerouting.util.AtomicFiles.write(outputPath, sesBytes);
 
           body.addProperty("message", "Successfully downloaded output and saved to: " + filePath);
           payload.add("body", body);

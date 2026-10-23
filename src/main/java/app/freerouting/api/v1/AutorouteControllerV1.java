@@ -14,7 +14,9 @@ import app.freerouting.io.FileFormat;
 import app.freerouting.io.MultiOutputGenerator;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.management.CompositeBoardInput;
+import app.freerouting.management.jobs.RoutingJobScheduler;
 import app.freerouting.management.sessions.SessionManager;
+import app.freerouting.util.TextManager;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -54,6 +56,9 @@ import java.util.UUID;
     name = "Autoroute",
     description = "Single-turn composite autorouting endpoints for fast LLM and API workflows")
 public class AutorouteControllerV1 extends BaseController {
+
+  /** Time the router gets to stop after its job clock expires, matching the job monitor. */
+  private static final int STOP_GRACE_SECONDS = 30;
 
   @Context private HttpHeaders httpHeaders;
 
@@ -193,38 +198,65 @@ public class AutorouteControllerV1 extends BaseController {
           .build();
     }
 
-    session.addJob(job);
-    job.state = RoutingJobState.READY_TO_START;
-
     // Timeout calculation
     int timeoutSec =
         (request.timeoutSeconds != null && request.timeoutSeconds > 0)
             ? request.timeoutSeconds
             : 300;
-    job.timeoutAt = Instant.now().plusSeconds(timeoutSec);
+    // The job thread sets its own clock from the job timeout when it starts (and would overwrite a
+    // timeoutAt set here), so the budget goes into the settings: the router then stops at the
+    // deadline and writes its output before the job becomes terminal.
+    Long jobTimeout = TextManager.parseTimespanString(job.routerSettings.jobTimeoutString);
+    if (jobTimeout == null || jobTimeout > timeoutSec) {
+      job.routerSettings.jobTimeoutString = Integer.toString(timeoutSec);
+    }
+
+    session.addJob(job);
+    job.state = RoutingJobState.READY_TO_START;
 
     // 4. Synchronous wait for completion or timeout
     Instant waitStart = Instant.now();
-    while (!isTerminalState(job.state)) {
-      if (Instant.now().isAfter(job.timeoutAt)) {
-        if (job.thread != null) {
-          job.thread.requestStop();
-        }
-        job.state = RoutingJobState.TIMED_OUT;
+    while (!isTerminalState(job.state) || isThreadAlive(job)) {
+      // The job clock starts when the scheduler starts the job, after it has loaded the board.
+      Instant clockStart =
+          job.startedAt != null && job.startedAt.isAfter(waitStart) ? job.startedAt : waitStart;
+      if (Instant.now().isAfter(clockStart.plusSeconds(timeoutSec + STOP_GRACE_SECONDS))) {
         break;
       }
       try {
         Thread.sleep(200);
       } catch (InterruptedException _) {
-        if (job.thread != null) {
-          job.thread.requestStop();
-        }
-        job.state = RoutingJobState.CANCELLED;
-        break;
+        Thread.currentThread().interrupt();
+        RoutingJobScheduler.getInstance().cancelJob(job);
+        return Response.status(Response.Status.SERVICE_UNAVAILABLE)
+            .entity("{\"error\":\"Interrupted while waiting for the routing job.\"}")
+            .build();
       }
     }
 
     double elapsedSeconds = Duration.between(waitStart, Instant.now()).toMillis() / 1000.0;
+
+    if (!isTerminalState(job.state) || isThreadAlive(job)) {
+      // The router has not stopped (or not started); reading its board now would race with it.
+      if (job.thread != null) {
+        job.thread.requestStop();
+      } else {
+        RoutingJobScheduler.getInstance().cancelJob(job);
+      }
+      AutorouteResponse pending = new AutorouteResponse();
+      pending.jobId = job.id.toString();
+      pending.sessionId = session.id.toString();
+      pending.status = job.state;
+      pending.durationSeconds = elapsedSeconds;
+      pending.message =
+          "Routing did not stop within the "
+              + timeoutSec
+              + "s budget; the job was asked to stop. Its output becomes available through"
+              + " the job endpoints.";
+      String pendingJson = GSON.toJson(pending);
+      FRAnalytics.apiEndpointCalled("POST v1/autoroute", "", pendingJson, userId);
+      return Response.status(Response.Status.ACCEPTED).entity(pendingJson).build();
+    }
 
     // 5. Generate requested outputs
     Set<FileFormat> requestedFormats = new HashSet<>();
@@ -300,6 +332,10 @@ public class AutorouteControllerV1 extends BaseController {
       return Response.status(Response.Status.ACCEPTED).entity(responseJson).build();
     }
     return Response.ok(responseJson).build();
+  }
+
+  private static boolean isThreadAlive(RoutingJob job) {
+    return job.thread != null && job.thread.isAlive();
   }
 
   private static boolean isTerminalState(RoutingJobState state) {
