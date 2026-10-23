@@ -258,7 +258,8 @@ public final class RationalPoint extends Point implements Serializable {
     BigInteger vxvx = BigInteger.valueOf((long) v.x * v.x);
     BigInteger vyvy = BigInteger.valueOf((long) v.y * v.y);
     BigInteger vxvy = BigInteger.valueOf((long) v.x * v.y);
-    BigInteger denominator = vxvx.add(vyvy);
+    // This point is (x / z, y / z): scale the IntPoint formula's numerators and denominator by z.
+    BigInteger denominator = vxvx.add(vyvy).multiply(z);
     BigInteger det = BigInteger.valueOf(((IntPoint) line.a).determinant((IntPoint) line.b));
 
     BigInteger tmp1 = vxvx.multiply(x);
@@ -273,7 +274,7 @@ public final class RationalPoint extends Point implements Serializable {
     tmp1 = tmp1.add(tmp2);
     tmp2 = det.multiply(BigInteger.valueOf(v.x));
     tmp2 = tmp2.multiply(z);
-    BigInteger projY = tmp1.add(tmp2);
+    BigInteger projY = tmp1.subtract(tmp2);
 
     int signum = denominator.signum();
     if (signum != 0) {
