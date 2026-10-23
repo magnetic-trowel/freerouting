@@ -8,6 +8,7 @@ import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.board.searchtree.ShapeSearchTree;
 import app.freerouting.geometry.planar.Area;
+import app.freerouting.geometry.planar.AwtAreas;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntPoint;
@@ -174,9 +175,14 @@ public class ConductionArea extends ObstacleArea implements Connectable {
               continue;
             }
 
+            // The spokes must cross the whole clearance ring to reach the pour; along a diagonal
+            // that is the distance to the farthest corner of the item, not its half width.
             IntBox itemBbox = drillItem.boundingBox();
-            double maxDim = Math.max(itemBbox.width(), itemBbox.height());
-            double expansionRadiusBoard = (maxDim / 2.0) + clearanceDist;
+            double reachX =
+                Math.max(Math.abs(itemBbox.ll.x - center.x), Math.abs(itemBbox.ur.x - center.x));
+            double reachY =
+                Math.max(Math.abs(itemBbox.ll.y - center.y), Math.abs(itemBbox.ur.y - center.y));
+            double expansionRadiusBoard = Math.hypot(reachX, reachY) + clearanceDist + 1;
 
             double halfSpoke = spokeWidth / 2.0;
             java.awt.geom.Rectangle2D.Double baseSpoke =
@@ -228,15 +234,18 @@ public class ConductionArea extends ObstacleArea implements Connectable {
         }
       }
 
-      for (java.awt.geom.Area fa : foreignClearances) {
-        fillArea.subtract(fa);
+      // Spokes go in before the foreign clearances come out, and stay inside the pour, so that a
+      // spoke never bridges copper into the clearance of another net or past the pour outline.
+      // Each list is merged first and applied once: one operation per item re-sweeps the whole
+      // growing fill every time, which took minutes on pours with thousands of clearances.
+      java.awt.geom.Area pourOutline =
+          sameNetSpokesList.isEmpty() ? null : new java.awt.geom.Area(fillArea);
+      AwtAreas.subtractAll(fillArea, sameNetClearances);
+      if (pourOutline != null) {
+        fillArea.add(AwtAreas.unionAll(sameNetSpokesList));
+        fillArea.intersect(pourOutline);
       }
-      for (java.awt.geom.Area sa : sameNetClearances) {
-        fillArea.subtract(sa);
-      }
-      for (java.awt.geom.Area sp : sameNetSpokesList) {
-        fillArea.add(sp);
-      }
+      AwtAreas.subtractAll(fillArea, foreignClearances);
     }
     cachedBoardFillArea = fillArea;
     cachedBoardRevision = this.board.getRevision();

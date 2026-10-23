@@ -212,4 +212,31 @@ class ZoneIslandConnectivityTest {
         violations.isEmpty(),
         "A hole inside a pour should be subtracted from the continuous pour, not treated as an isolated island");
   }
+
+  @Test
+  void thermalSpokesJoinASameNetViaToThePour() {
+    // The spokes run at 45 degrees across a square clearance: they must reach its corners.
+    board.insertConductionArea(
+        TileShape.getInstance(0, 0, 4000000, 4000000),
+        0,
+        new int[] {gndNet.netNumber},
+        0,
+        false,
+        FixedState.UNFIXED);
+    board.insertVia(
+        defaultPadstack,
+        new IntPoint(500000, 2000000),
+        new int[] {gndNet.netNumber},
+        0,
+        FixedState.UNFIXED,
+        true);
+    app.freerouting.board.model.items.ConductionArea pour =
+        board.getItems().stream()
+            .filter(app.freerouting.board.model.items.ConductionArea.class::isInstance)
+            .map(app.freerouting.board.model.items.ConductionArea.class::cast)
+            .findFirst()
+            .orElseThrow();
+
+    assertEquals(1, DesignRulesChecker.decomposeAreaIntoIslands(pour.getDetailedFillArea()).size());
+  }
 }

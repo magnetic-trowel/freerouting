@@ -306,13 +306,91 @@ public class DesignRulesChecker {
     return violations;
   }
 
-  /** Decomposes a potentially disjoint java.awt.geom.Area into separate contiguous island Areas. */
-  private List<java.awt.geom.Area> decomposeAreaIntoIslands(java.awt.geom.Area area) {
+  /**
+   * Decomposes a potentially disjoint java.awt.geom.Area into separate contiguous island Areas.
+   *
+   * <p>The contours of an Area do not cross, so each one is either the outline of an island or the
+   * outline of a hole: a contour inside an even number of other contours (none, or an island in a
+   * hole of another island) outlines an island, the others outline holes of the contour directly
+   * around them. Each island is built once from its outline and its holes. Merging contour by
+   * contour with Area operations took minutes on fills with thousands of holes.
+   */
+  static List<java.awt.geom.Area> decomposeAreaIntoIslands(java.awt.geom.Area area) {
     List<java.awt.geom.Area> islands = new ArrayList<>();
     if (area == null || area.isEmpty()) {
       return islands;
     }
+    List<java.awt.geom.Path2D.Double> contours = contoursOf(area);
+    int count = contours.size();
+    java.awt.geom.Rectangle2D[] bounds = new java.awt.geom.Rectangle2D[count];
+    double[] areas = new double[count];
+    double[][] firstPoints = new double[count][];
+    for (int i = 0; i < count; i++) {
+      bounds[i] = contours.get(i).getBounds2D();
+      areas[i] = Math.abs(signedArea(contours.get(i)));
+      firstPoints[i] = firstPoint(contours.get(i));
+    }
+    // depth: the number of contours around a contour; parent: the smallest one of them.
+    int[] depth = new int[count];
+    int[] parent = new int[count];
+    for (int i = 0; i < count; i++) {
+      parent[i] = -1;
+      for (int j = 0; j < count; j++) {
+        if (j != i
+            && areas[j] > areas[i]
+            && bounds[j].contains(bounds[i])
+            && contours.get(j).contains(firstPoints[i][0], firstPoints[i][1])) {
+          depth[i]++;
+          if (parent[i] < 0 || areas[j] < areas[parent[i]]) {
+            parent[i] = j;
+          }
+        }
+      }
+    }
+    // Area cuts one connected region into bands that touch along an edge: outlines that share a
+    // stretch of border belong to the same island.
+    int[] group = new int[count];
+    List<List<double[]>> edges = new ArrayList<>(count);
+    for (int i = 0; i < count; i++) {
+      group[i] = i;
+      edges.add(depth[i] % 2 == 0 ? edgesOf(contours.get(i)) : null);
+    }
+    for (int i = 0; i < count; i++) {
+      for (int j = i + 1; j < count && depth[i] % 2 == 0; j++) {
+        if (depth[j] % 2 == 0
+            && touches(bounds[i], bounds[j])
+            && shareBorder(edges.get(i), edges.get(j), bounds[i].createIntersection(bounds[j]))) {
+          group[findGroup(group, j)] = findGroup(group, i);
+        }
+      }
+    }
+    java.util.Map<Integer, java.awt.geom.Path2D.Double> islandPaths = new java.util.TreeMap<>();
+    for (int i = 0; i < count; i++) {
+      if (depth[i] % 2 == 0) {
+        islandPaths
+            .computeIfAbsent(
+                findGroup(group, i),
+                g -> new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD))
+            .append(contours.get(i), false);
+      }
+    }
+    for (int i = 0; i < count; i++) {
+      if (depth[i] % 2 == 1 && parent[i] >= 0 && depth[parent[i]] % 2 == 0) {
+        islandPaths.get(findGroup(group, parent[i])).append(contours.get(i), false);
+      }
+    }
+    for (java.awt.geom.Path2D.Double path : islandPaths.values()) {
+      java.awt.geom.Area island = new java.awt.geom.Area(path);
+      if (!island.isEmpty()) {
+        islands.add(island);
+      }
+    }
+    return islands;
+  }
 
+  /** The closed contours of an Area, in path order. */
+  private static List<java.awt.geom.Path2D.Double> contoursOf(java.awt.geom.Area area) {
+    List<java.awt.geom.Path2D.Double> contours = new ArrayList<>();
     java.awt.geom.PathIterator it = area.getPathIterator(null);
     java.awt.geom.Path2D.Double currentPolygon = null;
     double[] coords = new double[6];
@@ -322,10 +400,7 @@ public class DesignRulesChecker {
       switch (segType) {
         case java.awt.geom.PathIterator.SEG_MOVETO -> {
           if (currentPolygon != null) {
-            java.awt.geom.Area piece = new java.awt.geom.Area(currentPolygon);
-            if (!piece.isEmpty()) {
-              mergeOrAddIsland(islands, piece);
-            }
+            contours.add(currentPolygon);
           }
           currentPolygon = new java.awt.geom.Path2D.Double();
           currentPolygon.moveTo(coords[0], coords[1]);
@@ -357,45 +432,138 @@ public class DesignRulesChecker {
     }
 
     if (currentPolygon != null) {
-      java.awt.geom.Area piece = new java.awt.geom.Area(currentPolygon);
-      if (!piece.isEmpty()) {
-        mergeOrAddIsland(islands, piece);
-      }
+      contours.add(currentPolygon);
     }
-
-    return islands;
+    return contours;
   }
 
-  private void mergeOrAddIsland(List<java.awt.geom.Area> islands, java.awt.geom.Area piece) {
-    // In java.awt.geom.Area path iteration, an Area can consist of outer contours (additive)
-    // and inner hole contours (subtractive).
-    // If piece is entirely contained within the bounding box/area of an existing island, it
-    // represents
-    // a hole that should be subtracted from that island rather than added as a separate copper
-    // island.
-    boolean incorporated = false;
-    for (int i = 0; i < islands.size(); i++) {
-      java.awt.geom.Area existing = islands.get(i);
-      java.awt.geom.Area intersection = new java.awt.geom.Area(existing);
-      intersection.intersect(piece);
-      if (!intersection.isEmpty()) {
-        // If the piece is contained within the existing island's outline, subtract the hole.
-        // Otherwise, xor or combine overlapping sub-paths belonging to the same component.
-        java.awt.geom.Area testSubtract = new java.awt.geom.Area(piece);
-        testSubtract.subtract(existing);
-        if (testSubtract.isEmpty()) {
-          // 'piece' is completely inside 'existing' -> hole contour, subtract it
-          existing.subtract(piece);
-        } else {
-          existing.exclusiveOr(piece);
-        }
-        incorporated = true;
-        break;
+  /** The signed area of a closed contour, from its flattened corners. */
+  private static double signedArea(java.awt.geom.Path2D path) {
+    java.awt.geom.PathIterator it = path.getPathIterator(null, 1.0);
+    double[] coords = new double[6];
+    double sum = 0;
+    double startX = 0;
+    double startY = 0;
+    double prevX = 0;
+    double prevY = 0;
+    while (!it.isDone()) {
+      int segType = it.currentSegment(coords);
+      if (segType == java.awt.geom.PathIterator.SEG_MOVETO) {
+        startX = coords[0];
+        startY = coords[1];
+        prevX = startX;
+        prevY = startY;
+      } else if (segType == java.awt.geom.PathIterator.SEG_LINETO) {
+        sum += prevX * coords[1] - coords[0] * prevY;
+        prevX = coords[0];
+        prevY = coords[1];
+      }
+      it.next();
+    }
+    sum += prevX * startY - startX * prevY;
+    return sum / 2;
+  }
+
+  private static int findGroup(int[] group, int index) {
+    while (group[index] != index) {
+      group[index] = group[group[index]];
+      index = group[index];
+    }
+    return index;
+  }
+
+  private static boolean touches(java.awt.geom.Rectangle2D a, java.awt.geom.Rectangle2D b) {
+    return a.getMinX() <= b.getMaxX()
+        && b.getMinX() <= a.getMaxX()
+        && a.getMinY() <= b.getMaxY()
+        && b.getMinY() <= a.getMaxY();
+  }
+
+  /** The straight edges of a closed contour as {x1, y1, x2, y2}, curves flattened. */
+  private static List<double[]> edgesOf(java.awt.geom.Path2D path) {
+    List<double[]> result = new ArrayList<>();
+    java.awt.geom.PathIterator it = path.getPathIterator(null, 1.0);
+    double[] coords = new double[6];
+    double startX = 0;
+    double startY = 0;
+    double prevX = 0;
+    double prevY = 0;
+    while (!it.isDone()) {
+      int segType = it.currentSegment(coords);
+      if (segType == java.awt.geom.PathIterator.SEG_MOVETO) {
+        startX = coords[0];
+        startY = coords[1];
+        prevX = startX;
+        prevY = startY;
+      } else if (segType == java.awt.geom.PathIterator.SEG_LINETO) {
+        result.add(new double[] {prevX, prevY, coords[0], coords[1]});
+        prevX = coords[0];
+        prevY = coords[1];
+      }
+      it.next();
+    }
+    if (prevX != startX || prevY != startY) {
+      result.add(new double[] {prevX, prevY, startX, startY});
+    }
+    return result;
+  }
+
+  /**
+   * Returns true if an edge of the first contour and an edge of the second lie on one line and
+   * overlap over a positive length. Only edges reaching into window, where the two contours'
+   * bounding boxes meet, can do so.
+   */
+  private static boolean shareBorder(
+      List<double[]> first, List<double[]> second, java.awt.geom.Rectangle2D window) {
+    double tolerance = 1e-9 * Math.max(1, Math.max(window.getMaxX(), window.getMaxY())) + 1e-9;
+    List<double[]> candidates = new ArrayList<>();
+    for (double[] edge : second) {
+      if (edgeReaches(edge, window, tolerance)) {
+        candidates.add(edge);
       }
     }
-    if (!incorporated) {
-      islands.add(piece);
+    if (candidates.isEmpty()) {
+      return false;
     }
+    for (double[] e : first) {
+      if (!edgeReaches(e, window, tolerance)) {
+        continue;
+      }
+      double dx = e[2] - e[0];
+      double dy = e[3] - e[1];
+      double length = Math.hypot(dx, dy);
+      if (length <= tolerance) {
+        continue;
+      }
+      for (double[] f : candidates) {
+        double offset1 = (dx * (f[1] - e[1]) - dy * (f[0] - e[0])) / length;
+        double offset2 = (dx * (f[3] - e[1]) - dy * (f[2] - e[0])) / length;
+        if (Math.abs(offset1) > tolerance || Math.abs(offset2) > tolerance) {
+          continue;
+        }
+        double t1 = (dx * (f[0] - e[0]) + dy * (f[1] - e[1])) / length;
+        double t2 = (dx * (f[2] - e[0]) + dy * (f[3] - e[1])) / length;
+        double overlap = Math.min(length, Math.max(t1, t2)) - Math.max(0, Math.min(t1, t2));
+        if (overlap > tolerance) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static boolean edgeReaches(
+      double[] edge, java.awt.geom.Rectangle2D window, double tolerance) {
+    return Math.max(edge[0], edge[2]) >= window.getMinX() - tolerance
+        && Math.min(edge[0], edge[2]) <= window.getMaxX() + tolerance
+        && Math.max(edge[1], edge[3]) >= window.getMinY() - tolerance
+        && Math.min(edge[1], edge[3]) <= window.getMaxY() + tolerance;
+  }
+
+  private static double[] firstPoint(java.awt.geom.Path2D path) {
+    double[] coords = new double[6];
+    path.getPathIterator(null).currentSegment(coords);
+    return new double[] {coords[0], coords[1]};
   }
 
   /**
