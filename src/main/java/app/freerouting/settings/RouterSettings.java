@@ -102,6 +102,14 @@ public class RouterSettings implements Serializable, Cloneable {
   public Double neckWidthUm;
 
   /**
+   * The narrowest trace width, in micrometers, that automatic narrowing may produce: neckdown into
+   * pads, the micro-neckdown retry and the neck-width retries. Set it to the board's minimum track
+   * width, which a Specctra DSN does not carry. 0/absent = no minimum.
+   */
+  @SerializedName("min_trace_width_um")
+  public Double minTraceWidthUm;
+
+  /**
    * When true, a routed connection whose newly inserted traces/vias carry clearance violations is
    * ripped up again and counted as not routed for that pass, instead of being kept with the
    * violations (v1 limitation: violations between two pre-existing foreign items pushed by a shove
@@ -672,6 +680,7 @@ public class RouterSettings implements Serializable, Cloneable {
     result.planeNets = this.planeNets != null ? this.planeNets.clone() : null;
     result.planeAsObstacle = this.planeAsObstacle;
     result.neckWidthUm = this.neckWidthUm;
+    result.minTraceWidthUm = this.minTraceWidthUm;
     result.strictDrc = this.strictDrc;
     result.tracePullTightAccuracy = this.tracePullTightAccuracy;
     result.viasAllowed = this.viasAllowed;
@@ -703,6 +712,11 @@ public class RouterSettings implements Serializable, Cloneable {
   /** Sets the configured necking width in micrometres. */
   public void setNeckWidthUm(double width) {
     this.neckWidthUm = width;
+  }
+
+  /** Returns the minimum trace width in micrometres, or zero when none is set. */
+  public double getMinTraceWidthUm() {
+    return minTraceWidthUm != null && minTraceWidthUm > 0 ? minTraceWidthUm : 0;
   }
 
   /** Returns whether direct pin routing strategy is configured for fanout. */
