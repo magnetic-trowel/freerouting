@@ -30,21 +30,25 @@ The primary way to configure Freerouting is through a JSON settings file. This f
     "dialog_confirmation_timeout": 5
   },
   "router": {
-    "default_preferred_direction_trace_cost": 1.0,
-    "default_undesired_direction_trace_cost": 2.5,
     "autorouter": {
       "enabled": true,
       "max_passes": 100
     },
+    "optimizer": {
+      "improvement_threshold": 2.5
+    },
+    "scoring": {
+      "default_preferred_direction_trace_cost": 1.0,
+      "default_undesired_direction_trace_cost": 2.5,
+      "via_costs": 50,
+      "plane_via_costs": 5,
+      "start_ripup_costs": 100
+    },
     "max_threads": 11,
-    "improvement_threshold": 2.5,
     "trace_pull_tight_accuracy": 500,
     "allowed_via_types": true,
-    "via_costs": 50,
-    "plane_via_costs": 5,
     "plane_nets": ["GND", "VCC"],
     "plane_as_obstacle": false,
-    "start_ripup_costs": 100,
     "automatic_neckdown": true,
     "meander_min_amplitude_mm": 0.2,
     "meander_max_amplitude_mm": 1.0,
@@ -151,14 +155,17 @@ The primary way to configure Freerouting is through a JSON settings file. This f
   value into both `autorouter.max_threads` and `optimizer.max_threads`. Prefer the nested CLI
   flags (`--router.autorouter.max_threads`, `--router.optimizer.max_threads`) when the two pools
   must differ. `-mt` sets **optimizer** threads only.
-- **`improvement_threshold`**: Minimum improvement required to continue routing.
+- **`optimizer.improvement_threshold`**: Minimum relative improvement, in percent, an optimizer
+  pass must reach for the optimizer to continue (`--router.optimizer.improvement_threshold`).
 - **`trace_pull_tight_accuracy`**: Accuracy for pulling traces tight.
 - **`allowed_via_types`**: Enables or disables the use of different via types.
-- **`via_costs`**: Cost factor for using vias.
-- **`plane_via_costs`**: Cost factor for using vias on plane layers.
+- **`scoring.via_costs`**: Cost factor for using vias (`--router.scoring.via_costs`).
+- **`scoring.plane_via_costs`**: Cost factor for using vias on plane nets
+  (`--router.scoring.plane_via_costs`).
 - **`plane_nets`**: Explicit array of net names to treat as power-plane nets, enabling plane-routing mode and discounted plane via costs for these nets.
 - **`plane_as_obstacle`**: Boolean controlling whether conduction areas (copper pours) act as obstacles blocking foreign traces from passing through. Default is `false` (foreign traces may route through fills).
-- **`start_ripup_costs`**: Cost factor for ripping up existing traces.
+- **`scoring.start_ripup_costs`**: Cost factor for ripping up existing traces
+  (`--router.scoring.start_ripup_costs`).
 - **`automatic_neckdown`**: Enables or disables automatic neckdown of traces.
 - **`meander_min_amplitude_mm`**: Minimum excursion amplitude for trace length tuning meanders in millimeters. Default is `0.2`.
 - **`meander_max_amplitude_mm`**: Maximum excursion amplitude for trace length tuning meanders in millimeters. Default is `1.0`.

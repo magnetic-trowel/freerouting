@@ -200,7 +200,7 @@ java -jar freerouting.jar --setting_name=value
 - **Adjust the via cost:**
 
   ```bash
-  java -jar freerouting.jar --router.via_costs=150
+  java -jar freerouting.jar --router.scoring.via_costs=150
   ```
 
 ### List-valued settings
