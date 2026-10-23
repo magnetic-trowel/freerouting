@@ -98,6 +98,9 @@ public class DefaultSettings implements SettingsSource {
    */
   public static final double DEFAULT_NECK_WIDTH_UM = 0.0;
 
+  /** Default minimum trace width in micrometres (0 um: no minimum). */
+  public static final double DEFAULT_MIN_TRACE_WIDTH_UM = 0.0;
+
   /** Default minimum amplitude for trace length tuning meanders in millimeters. */
   public static final double DEFAULT_MEANDER_MIN_AMPLITUDE_MM = 0.2;
 
@@ -207,6 +210,7 @@ public class DefaultSettings implements SettingsSource {
     settings.planeNets = new String[0];
     settings.planeAsObstacle = false;
     settings.neckWidthUm = DEFAULT_NECK_WIDTH_UM;
+    settings.minTraceWidthUm = DEFAULT_MIN_TRACE_WIDTH_UM;
     settings.strictDrc = false;
     settings.fixKicadFootprints = false;
 

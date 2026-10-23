@@ -505,20 +505,16 @@ public final class FoundConnectionInserter {
     if (endPin != null && endPin.isOnLayer(layer)) {
       candidateHalfWidths.add(endPin.getTraceNeckdownHalfwidth(layer));
     }
-    // neck_width_um is the narrowest trace the user allows; the necked retry already routes at
-    // that width, so percentage narrowing below it would produce traces the board house cannot
-    // make. Pin-neckdown candidates above stay consistent with insertNeckdown so a trace can still
-    // enter a pad whose neckdown width is below neck_width_um.
-    int minHalfWidth = AutorouteControl.neckHalfWidth(board, ctrl.settings);
-    for (int pctHalfWidth :
-        new int[] {
-          Math.max(1, (baseHalfWidth * 3) / 4),
-          Math.max(1, (baseHalfWidth * 3) / 5),
-          Math.max(1, baseHalfWidth / 2)
-        }) {
-      if (pctHalfWidth >= minHalfWidth) {
-        candidateHalfWidths.add(pctHalfWidth);
-      }
+    candidateHalfWidths.add(Math.max(1, (baseHalfWidth * 3) / 4));
+    candidateHalfWidths.add(Math.max(1, (baseHalfWidth * 3) / 5));
+    candidateHalfWidths.add(Math.max(1, baseHalfWidth / 2));
+    // neck_width_um and min_trace_width_um set the narrowest trace allowed: no candidate goes below
+    // it, pin-width ones included, and the minimum itself is tried last. Without them (0) the
+    // candidates are unchanged.
+    int minHalfWidth = ctrl.minNeckdownHalfWidth;
+    candidateHalfWidths.removeIf(halfWidth -> halfWidth < minHalfWidth);
+    if (minHalfWidth > 0) {
+      candidateHalfWidths.add(minHalfWidth);
     }
 
     for (int candidateHalfWidth : candidateHalfWidths) {
@@ -600,7 +596,8 @@ public final class FoundConnectionInserter {
       return null;
     }
 
-    int neckDownHalfwidth = pin.getTraceNeckdownHalfwidth(layer);
+    int neckDownHalfwidth =
+        Math.max(pin.getTraceNeckdownHalfwidth(layer), ctrl.minNeckdownHalfWidth);
     if (neckDownHalfwidth >= ctrl.traceHalfWidth[layer]) {
       return null;
     }

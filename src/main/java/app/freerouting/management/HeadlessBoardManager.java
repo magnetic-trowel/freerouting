@@ -373,6 +373,7 @@ public class HeadlessBoardManager implements BoardManager {
     this.edgeClearanceAppliedByOverride = false;
     applyCopperToEdgeClearanceOverride();
     applyHoleClearanceOverride();
+    applyMinTraceWidthOverride();
     applyPlaneNetsOverride();
     applyPlaneAsObstacleOverride();
     applyClearanceToleranceOverride();
@@ -422,6 +423,38 @@ public class HeadlessBoardManager implements BoardManager {
               + configuredClearanceBoardUnits
               + " board units)"
               + (holeKeepouts > 0 ? ", " + holeKeepouts + " hole keepouts reclassified." : "."));
+    }
+  }
+
+  /**
+   * Makes {@code router.min_trace_width_um} the board's minimum trace half width, which every
+   * automatic narrowing respects. Rounded up, so a trace at the minimum is never narrower than the
+   * configured width.
+   */
+  private void applyMinTraceWidthOverride() {
+    if (this.board == null
+        || this.board.rules == null
+        || this.routingJob == null
+        || this.routingJob.routerSettings == null
+        || this.routingJob.routerSettings.minTraceWidthUm == null) {
+      return;
+    }
+    double minTraceWidthUm = this.routingJob.routerSettings.minTraceWidthUm;
+    if (minTraceWidthUm < 0) {
+      FRLogger.warn(
+          "Ignoring router.min_trace_width_um because it is negative: " + minTraceWidthUm);
+      return;
+    }
+    double width = this.board.communication.physicalToBoard(minTraceWidthUm, Unit.UM);
+    int halfWidth = (int) Math.ceil(width / 2 - 1e-6);
+    this.board.rules.setMinAllowedTraceHalfWidth(halfWidth);
+    if (halfWidth > 0) {
+      FRLogger.info(
+          "Applied minimum trace width: "
+              + minTraceWidthUm
+              + " um ("
+              + 2 * halfWidth
+              + " board units).");
     }
   }
 
@@ -960,6 +993,7 @@ public class HeadlessBoardManager implements BoardManager {
       this.routingJob.routerSettings.applyNetClassExclusions(this.board);
       applyCopperToEdgeClearanceOverride();
       applyHoleClearanceOverride();
+      applyMinTraceWidthOverride();
       applyPlaneNetsOverride();
       applyPlaneAsObstacleOverride();
       applyClearanceToleranceOverride();

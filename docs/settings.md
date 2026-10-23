@@ -166,7 +166,8 @@ The primary way to configure Freerouting is through a JSON settings file. This f
 - **`plane_as_obstacle`**: Boolean controlling whether conduction areas (copper pours) act as obstacles blocking foreign traces from passing through. Default is `false` (foreign traces may route through fills).
 - **`scoring.start_ripup_costs`**: Cost factor for ripping up existing traces
   (`--router.scoring.start_ripup_costs`).
-- **`automatic_neckdown`**: Enables or disables automatic neckdown of traces.
+- **`automatic_neckdown`**: Enables or disables automatic neckdown of traces. When enabled, a trace may narrow to enter a pad that is narrower than the trace, and a segment that does not fit at its class width may be retried at 3/4, 3/5 or 1/2 of that width, never below `min_trace_width_um` or `neck_width_um` when they are set. When disabled, neither happens, also during fanout.
+- **`min_trace_width_um`**: The narrowest trace width, in micrometres, that automatic narrowing may produce: neckdown into pads, the narrower retry of a segment, and the `neck_width_um` retries. Set it to the board's minimum track width (in KiCad, the board setup's minimum track width), because a Specctra DSN does not carry one. Default `0` (no minimum), which leaves routing unchanged. Example: `--router.min_trace_width_um=200`.
 - **`meander_min_amplitude_mm`**: Minimum excursion amplitude for trace length tuning meanders in millimeters. Default is `0.2`.
 - **`meander_max_amplitude_mm`**: Maximum excursion amplitude for trace length tuning meanders in millimeters. Default is `1.0`.
 - **`meander_spacing_mm`**: Spacing between parallel meander traces in millimeters. Default is `0.6` (for single track and diff-pair skew; diff-pair preset spacing is `1.0`).
