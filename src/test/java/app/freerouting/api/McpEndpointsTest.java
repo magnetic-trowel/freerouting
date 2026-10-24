@@ -343,10 +343,16 @@ class McpEndpointsTest {
             authenticatedMcpRequest(initializeRequest), HttpResponse.BodyHandlers.ofString());
     assertEquals(200, response.statusCode());
 
-    java.lang.reflect.Field field = McpControllerV1.class.getDeclaredField("detectedClientInfo");
+    // The client info is kept for its caller only, not shared by every client.
+    java.lang.reflect.Field field = McpControllerV1.class.getDeclaredField("CLIENT_INFO");
     field.setAccessible(true);
-    String detected = (String) field.get(null);
-    assertEquals("ClaudeDesktop/4.6.1", detected);
+    @SuppressWarnings("unchecked")
+    var byOwner = (java.util.Map<String, String>) field.get(null);
+    String owners;
+    synchronized (byOwner) {
+      owners = String.valueOf(byOwner);
+    }
+    assertTrue(owners.contains(TEST_USER_ID + "/=ClaudeDesktop/4.6.1"), owners);
   }
 
   @Test

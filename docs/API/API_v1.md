@@ -569,6 +569,8 @@ MCP and A2A routes are explicitly wired into the OpenAPI generator so they appea
 | `GET /v1/mcp/events` | MCP activity stream over SSE |
 | `WS /v1/mcp/ws` | MCP activity stream over WebSocket (`ws://` or `wss://`) |
 
+The activity streams carry only the events of their own caller: the same `Freerouting-Profile-ID` and, with authentication enabled, the same API key. The WebSocket handshake therefore needs a `Freerouting-Profile-ID` UUID.
+
 `mcp_server.target_api_base_url` must point to the REST API base URL (for example
 `http://127.0.0.1:37864`) and must not target MCP endpoints (`/v1/mcp*` or `/.well-known/*`).
 

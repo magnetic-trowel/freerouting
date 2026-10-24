@@ -191,7 +191,7 @@ To prevent confusion, both **single underscore** (convention in Python CLI) and 
 
 #### Environment Host (`Freerouting-Environment-Host`)
 1. Resolves first to environment variables if provided.
-2. If not defined, it is **dynamically detected** from the MCP client's `initialize` handshake details (e.g. `Cursor/0.45.0` or `Roo-Cline/3.2.0`), working seamlessly in both modes.
+2. If not defined, it is **dynamically detected** from the MCP client's `initialize` handshake details (e.g. `Cursor/0.45.0` or `Roo-Cline/3.2.0`), working seamlessly in both modes. The detected value belongs to the caller that sent the `initialize` request (its profile ID and, with authentication enabled, its API key); other clients are not affected.
 3. Falls back to `MCP-Client/1.0`.
 
 ---

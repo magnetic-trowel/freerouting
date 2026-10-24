@@ -56,22 +56,47 @@ public class McpControllerV1 extends BaseController {
           .version(HttpClient.Version.HTTP_1_1)
           .connectTimeout(Duration.ofSeconds(10))
           .build();
-  private static volatile String detectedClientInfo = "MCP-Client/1.0";
+  private static final String DEFAULT_CLIENT_INFO = "MCP-Client/1.0";
+
+  /**
+   * The {@code clientInfo} each caller sent with {@code initialize}, by owner (see {@link
+   * McpRealtimeBridge#owner}); used as the Freerouting-Environment-Host of a caller that sends
+   * none. One value shared by all clients reported one client's name for every other client. The
+   * oldest entries are dropped beyond 1024 callers.
+   */
+  private static final Map<String, String> CLIENT_INFO =
+      java.util.Collections.synchronizedMap(
+          new java.util.LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+              return size() > 1024;
+            }
+          });
 
   @Context private Application application;
 
   @Context private HttpHeaders headers;
 
+  // The caller of this request (resources are created per request), set once it is authenticated.
+  private String owner;
+
   private static String resolvePath(String rawPath, JsonObject pathArgs) {
     String resolved = rawPath;
     for (Map.Entry<String, JsonElement> entry : pathArgs.entrySet()) {
       String placeholder = "{" + entry.getKey() + "}";
-      String encoded =
-          URLEncoder.encode(entry.getValue().getAsString(), StandardCharsets.UTF_8)
-              .replace("+", "%20");
-      resolved = resolved.replace(placeholder, encoded);
+      resolved = resolved.replace(placeholder, encodePathSegment(entry.getValue().getAsString()));
     }
     return resolved;
+  }
+
+  /** Encodes a value as one URL path segment: a "/" or ".." in it cannot change the path. */
+  private static String encodePathSegment(String value) {
+    return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+  }
+
+  private String clientInfo() {
+    String info = owner != null ? CLIENT_INFO.get(owner) : null;
+    return info != null ? info : DEFAULT_CLIENT_INFO;
   }
 
   private static boolean requiresBody(String method) {
@@ -173,6 +198,7 @@ public class McpControllerV1 extends BaseController {
     UUID userId;
     try {
       userId = authenticateUser();
+      owner = McpRealtimeBridge.owner(userId, callerApiKeyHash());
     } catch (Exception e) {
       FRLogger.warn(
           "[mcp][cid="
@@ -215,11 +241,9 @@ public class McpControllerV1 extends BaseController {
 
     String envHost = headers.getHeaderString("Freerouting-Environment-Host");
     if (envHost == null || envHost.isBlank()) {
-      envHost = detectedClientInfo;
+      envHost = clientInfo();
     }
-    if (envHost != null && !envHost.isBlank()) {
-      app.freerouting.analytics.AnalyticsRequestContext.setEnvironmentHost(envHost);
-    }
+    app.freerouting.analytics.AnalyticsRequestContext.setEnvironmentHost(envHost);
 
     String apiMethodTag = "POST v1/mcp";
     if ("tools/call".equals(method)
@@ -260,15 +284,15 @@ public class McpControllerV1 extends BaseController {
   @Path("/events")
   @Produces(MediaType.SERVER_SENT_EVENTS)
   public void events(@Context SseEventSink sink, @Context Sse sse) {
-    authenticateUser();
+    owner = McpRealtimeBridge.owner(authenticateUser(), callerApiKeyHash());
 
     if (sink == null || sse == null) {
       return;
     }
-    McpRealtimeBridge.registerSseClient(sink, sse);
+    McpRealtimeBridge.registerSseClient(sink, sse, owner);
     JsonObject hello = new JsonObject();
     hello.addProperty("message", "MCP SSE stream connected");
-    McpRealtimeBridge.broadcast("mcp.sse.connected", hello);
+    McpRealtimeBridge.broadcast(owner, "mcp.sse.connected", hello);
   }
 
   private JsonObject handleInitialize(JsonElement id, JsonObject params) {
@@ -278,7 +302,7 @@ public class McpControllerV1 extends BaseController {
         String name = clientInfo.has("name") ? clientInfo.get("name").getAsString() : "Unknown";
         String version =
             clientInfo.has("version") ? clientInfo.get("version").getAsString() : "1.0";
-        detectedClientInfo = name + "/" + version;
+        CLIENT_INFO.put(owner, name + "/" + version);
         FRAnalytics.setExecutionContext(PipelineType.MCP, ActorType.AGENT, name, version);
       } catch (Exception e) {
         FRLogger.warn("Failed to parse clientInfo from initialize params: " + e.getMessage());
@@ -356,7 +380,7 @@ public class McpControllerV1 extends BaseController {
     JsonObject eventPayload = new JsonObject();
     eventPayload.addProperty("tool", tool.toolName());
     eventPayload.addProperty("status", response.statusCode());
-    McpRealtimeBridge.broadcast("mcp.tool.called", eventPayload);
+    McpRealtimeBridge.broadcast(owner, "mcp.tool.called", eventPayload);
 
     JsonArray content = new JsonArray();
     JsonObject text = new JsonObject();
@@ -452,10 +476,7 @@ public class McpControllerV1 extends BaseController {
       envHost = System.getenv("FREEROUTING__ENVIRONMENT__HOST");
     }
     if (envHost == null || envHost.isBlank()) {
-      envHost = McpControllerV1.detectedClientInfo;
-    }
-    if (envHost == null || envHost.isBlank()) {
-      envHost = "MCP-Client/1.0";
+      envHost = clientInfo();
     }
     builder.header("Freerouting-Environment-Host", envHost);
 
@@ -616,7 +637,8 @@ public class McpControllerV1 extends BaseController {
         byte[] fileBytes = java.nio.file.Files.readAllBytes(inputPath);
         String base64Data = java.util.Base64.getEncoder().encodeToString(fileBytes);
 
-        URI uri = buildUriWithQuery("/v1/jobs/" + jobId + "/input", new JsonObject());
+        URI uri =
+            buildUriWithQuery("/v1/jobs/" + encodePathSegment(jobId) + "/input", new JsonObject());
         JsonObject requestBodyObj = new JsonObject();
         requestBodyObj.addProperty("job_id", jobId);
         requestBodyObj.addProperty("data", base64Data);
@@ -653,7 +675,8 @@ public class McpControllerV1 extends BaseController {
 
       try {
         final java.nio.file.Path outputPath = validateSandboxPath(filePath);
-        URI uri = buildUriWithQuery("/v1/jobs/" + jobId + "/output", new JsonObject());
+        URI uri =
+            buildUriWithQuery("/v1/jobs/" + encodePathSegment(jobId) + "/output", new JsonObject());
         HttpRequest.Builder builder =
             HttpRequest.newBuilder(uri).version(HttpClient.Version.HTTP_1_1);
         forwardHeaders(builder, correlationId);
@@ -699,7 +722,7 @@ public class McpControllerV1 extends BaseController {
     JsonObject eventPayload = new JsonObject();
     eventPayload.addProperty("tool", toolName);
     eventPayload.addProperty("status", payload.get("status").getAsInt());
-    McpRealtimeBridge.broadcast("mcp.tool.called", eventPayload);
+    McpRealtimeBridge.broadcast(owner, "mcp.tool.called", eventPayload);
 
     return success(id, result);
   }

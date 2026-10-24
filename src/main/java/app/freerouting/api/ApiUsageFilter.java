@@ -60,7 +60,8 @@ public class ApiUsageFilter implements ContainerRequestFilter, ContainerResponse
     return sha256Hex(token);
   }
 
-  static String sha256Hex(String value) {
+  /** Returns the hex SHA-256 of the UTF-8 bytes of a value (API keys are stored only hashed). */
+  public static String sha256Hex(String value) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       byte[] hash = digest.digest(value.getBytes(StandardCharsets.UTF_8));
