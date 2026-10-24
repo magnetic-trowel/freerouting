@@ -24,6 +24,13 @@ public class PolygonShape extends PolylineShape {
   private transient IntOctagon precalculatedBoundingOctagon;
   private transient TileShape[] precalculatedConvexPieces;
 
+  /**
+   * True once splitting this polygon into convex pieces has failed, for example because the polygon
+   * intersects itself. The failure is remembered, so that the costly recursive split is not
+   * retried, and its warning not logged again, on every point query.
+   */
+  private transient boolean convexSplitFailed;
+
   /** Creates a new instance of PolygonShape. */
   public PolygonShape(Polygon polygon) {
     Polygon currentPolygon = polygon;
@@ -120,6 +127,10 @@ public class PolygonShape extends PolylineShape {
     if (shape instanceof PolygonShape other) {
       TileShape[] convexPieces = splitToConvex();
       TileShape[] otherPieces = other.splitToConvex();
+      if (convexPieces == null || otherPieces == null) {
+        // no convex decomposition: approximate conservatively by the bounding octagons
+        return boundingOctagon().intersects(other.boundingOctagon());
+      }
       for (TileShape piece : convexPieces) {
         for (TileShape otherPiece : otherPieces) {
           if (piece.intersects(otherPiece)) {
@@ -135,6 +146,10 @@ public class PolygonShape extends PolylineShape {
   @Override
   public boolean intersects(Circle circle) {
     TileShape[] convexPieces = splitToConvex();
+    if (convexPieces == null) {
+      // no convex decomposition: approximate conservatively by the bounding octagon
+      return boundingOctagon().intersects(circle);
+    }
     for (int i = 0; i < convexPieces.length; i++) {
       if (convexPieces[i].intersects(circle)) {
         return true;
@@ -146,6 +161,10 @@ public class PolygonShape extends PolylineShape {
   @Override
   public boolean intersects(Simplex simplex) {
     TileShape[] convexPieces = splitToConvex();
+    if (convexPieces == null) {
+      // no convex decomposition: approximate conservatively by the bounding octagon
+      return boundingOctagon().intersects(simplex);
+    }
     for (int i = 0; i < convexPieces.length; i++) {
       if (convexPieces[i].intersects(simplex)) {
         return true;
@@ -157,6 +176,10 @@ public class PolygonShape extends PolylineShape {
   @Override
   public boolean intersects(IntOctagon oct) {
     TileShape[] convexPieces = splitToConvex();
+    if (convexPieces == null) {
+      // no convex decomposition: approximate conservatively by the bounding octagon
+      return boundingOctagon().intersects(oct);
+    }
     for (int i = 0; i < convexPieces.length; i++) {
       if (convexPieces[i].intersects(oct)) {
         return true;
@@ -168,6 +191,10 @@ public class PolygonShape extends PolylineShape {
   @Override
   public boolean intersects(IntBox box) {
     TileShape[] convexPieces = splitToConvex();
+    if (convexPieces == null) {
+      // no convex decomposition: approximate conservatively by the bounding octagon
+      return boundingOctagon().intersects(box);
+    }
     for (int i = 0; i < convexPieces.length; i++) {
       if (convexPieces[i].intersects(box)) {
         return true;
@@ -214,6 +241,9 @@ public class PolygonShape extends PolylineShape {
   @Override
   public boolean contains(FloatPoint point) {
     TileShape[] convexPieces = splitToConvex();
+    if (convexPieces == null) {
+      return containsByWinding(point);
+    }
     for (int i = 0; i < convexPieces.length; i++) {
       if (convexPieces[i].contains(point)) {
         return true;
@@ -238,6 +268,9 @@ public class PolygonShape extends PolylineShape {
   @Override
   public boolean isOutside(Point point) {
     TileShape[] convexPieces = splitToConvex();
+    if (convexPieces == null) {
+      return !containsByWinding(point.toFloat());
+    }
     for (int i = 0; i < convexPieces.length; i++) {
       if (!convexPieces[i].isOutside(point)) {
         return false;
@@ -492,6 +525,24 @@ public class PolygonShape extends PolylineShape {
     double minDist = Double.MAX_VALUE;
     FloatPoint result = null;
     TileShape[] convexShapes = splitToConvex();
+    if (convexShapes == null) {
+      if (containsByWinding(fromPoint)) {
+        return fromPoint;
+      }
+      FloatPoint prevCorner = corners[corners.length - 1].toFloat();
+      for (Point corner : corners) {
+        FloatPoint currentCorner = corner.toFloat();
+        FloatPoint currentNearestPoint =
+            new FloatLine(prevCorner, currentCorner).nearestSegmentPoint(fromPoint);
+        double currentDistance = currentNearestPoint.distanceSquare(fromPoint);
+        if (currentDistance < minDist) {
+          minDist = currentDistance;
+          result = currentNearestPoint;
+        }
+        prevCorner = currentCorner;
+      }
+      return result;
+    }
     for (int i = 0; i < convexShapes.length; i++) {
       FloatPoint currentNearestPoint = convexShapes[i].nearestPointApprox(fromPoint);
       double currentDistance = currentNearestPoint.distanceSquare(fromPoint);
@@ -550,11 +601,15 @@ public class PolygonShape extends PolylineShape {
   @Override
   public TileShape[] splitToConvex() {
     if (this.precalculatedConvexPieces == null) {
+      if (this.convexSplitFailed) {
+        return null;
+      }
       // not yet precalculated
       // a fixed seed per split gives a reproducible result, also across threads
       Collection<PolygonShape> convexPieces = splitToConvexRecu(new Random(seed));
       if (convexPieces == null) {
-        // split failed, maybe the polygon has selfontersections
+        // split failed, maybe the polygon has self intersections
+        this.convexSplitFailed = true;
         return null;
       }
       precalculatedConvexPieces = new TileShape[convexPieces.size()];
@@ -565,6 +620,37 @@ public class PolygonShape extends PolylineShape {
       }
     }
     return this.precalculatedConvexPieces;
+  }
+
+  /**
+   * Point in polygon test that does not need the convex pieces, used when the polygon could not be
+   * split into them (for example because it intersects itself). A point on the border is contained,
+   * as it is for the convex pieces; elsewhere the nonzero winding rule decides.
+   */
+  private boolean containsByWinding(FloatPoint point) {
+    int windingNumber = 0;
+    FloatPoint prev = corners[corners.length - 1].toFloat();
+    for (Point corner : corners) {
+      FloatPoint curr = corner.toFloat();
+      double cross =
+          (curr.x - prev.x) * (point.y - prev.y) - (point.x - prev.x) * (curr.y - prev.y);
+      if (cross == 0
+          && Math.min(prev.x, curr.x) <= point.x
+          && point.x <= Math.max(prev.x, curr.x)
+          && Math.min(prev.y, curr.y) <= point.y
+          && point.y <= Math.max(prev.y, curr.y)) {
+        return true;
+      }
+      if (prev.y <= point.y) {
+        if (curr.y > point.y && cross > 0) {
+          ++windingNumber;
+        }
+      } else if (curr.y <= point.y && cross < 0) {
+        --windingNumber;
+      }
+      prev = curr;
+    }
+    return windingNumber != 0;
   }
 
   /** Private recursive part of split_to_convex. Returns a collection of polygon shape pieces. */
