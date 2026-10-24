@@ -410,7 +410,7 @@ public class DesignRulesChecker {
    * around them. Each island is built once from its outline and its holes. Merging contour by
    * contour with Area operations took minutes on fills with thousands of holes.
    */
-  static List<java.awt.geom.Area> decomposeAreaIntoIslands(java.awt.geom.Area area) {
+  public static List<java.awt.geom.Area> decomposeAreaIntoIslands(java.awt.geom.Area area) {
     List<java.awt.geom.Area> islands = new ArrayList<>();
     if (area == null || area.isEmpty()) {
       return islands;

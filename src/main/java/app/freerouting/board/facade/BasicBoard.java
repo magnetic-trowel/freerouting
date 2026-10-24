@@ -45,9 +45,11 @@ import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.ConcurrentModificationException;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
@@ -106,6 +108,10 @@ public class BasicBoard implements Serializable {
 
   private transient Set<Integer> normalizeSuppressedNetNos = new HashSet<>();
   private transient int revision;
+
+  /** Insertions and removals of traces per net, counted into the revision as well. */
+  private transient Map<Integer, Integer> traceChangesOfNet;
+
   private transient long netAssignmentChangeCount;
   private transient BoardItemRepository itemRepository;
   private transient BoardConnectivityQueries connectivityQueries;
@@ -178,6 +184,29 @@ public class BasicBoard implements Serializable {
   /** Increment revision. */
   public void incrementRevision() {
     revision++;
+  }
+
+  /** Increments the revision for an inserted or removed item. */
+  void incrementRevision(Item changedItem) {
+    revision++;
+    if (changedItem instanceof Trace) {
+      if (traceChangesOfNet == null) {
+        traceChangesOfNet = new HashMap<>();
+      }
+      for (int i = 0; i < changedItem.netCount(); i++) {
+        traceChangesOfNet.merge(changedItem.getNetNumber(i), 1, Integer::sum);
+      }
+    }
+  }
+
+  /**
+   * Returns a number that changes with the revision, except when a trace of the net is inserted or
+   * removed. The pours of the net ignore their own net's traces, so their fill keys on it.
+   */
+  public int revisionIgnoringTracesOf(int netNumber) {
+    return traceChangesOfNet == null
+        ? revision
+        : revision - traceChangesOfNet.getOrDefault(netNumber, 0);
   }
 
   /**

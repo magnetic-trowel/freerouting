@@ -18,9 +18,12 @@ import app.freerouting.rules.Net;
 import app.freerouting.rules.Nets;
 import app.freerouting.util.TextManager;
 import java.io.Serializable;
+import java.util.BitSet;
 import java.util.Collection;
-import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -287,12 +290,21 @@ public abstract class Trace extends Item implements Connectable, Serializable {
     return this.containsNet(netNumber);
   }
 
-  /** Looks, if this trace is connected to the same object at its start and its end point. */
+  /**
+   * Looks, if this trace is connected to the same object at its start and its end point. A pour is
+   * that object only if one island of its fill contains both points ({@link ConductionArea#joins}).
+   */
   @Override
   public boolean isOverlap() {
-    Set<Item> startContacts = this.getStartContacts();
     Set<Item> endContacts = this.getEndContacts();
-    return !Collections.disjoint(startContacts, endContacts);
+    for (Item startContact : this.getStartContacts()) {
+      if (endContacts.contains(startContact)
+          && (!(startContact instanceof ConductionArea area)
+              || area.joins(this.firstCorner(), this.lastCorner()))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -332,11 +344,25 @@ public abstract class Trace extends Item implements Connectable, Serializable {
     return result;
   }
 
-  /** Checks, if this trace can be reached by other items via more than one path. */
+  /**
+   * Checks, if this trace can be reached by other items via more than one path. A pour (a
+   * conduction area without a component) is a path between two of its contacts only if its fill
+   * joins them ({@link ConductionArea#fillIslandsMetBy}): a trace that connects copper which
+   * foreign tracks cut off from the rest of the fill is no cycle and stays on the board.
+   */
   public boolean isCycle() {
     if (this.isOverlap()) {
       return true;
     }
+    boolean ignoreAreas = this.ignoresCyclesWithAreas();
+    if (!isCycle(ignoreAreas)) {
+      return false;
+    }
+    // The fill is computed only for a cycle that may run through a pour.
+    return ignoreAreas || isCycle(true) || isCycleThroughFill();
+  }
+
+  private boolean isCycle(boolean ignoreAreas) {
     Collection<Item> startContacts = this.getStartContacts();
     // a cycle exists if through expanding the start contact we reach
     // this trace again via an end contact
@@ -344,13 +370,115 @@ public abstract class Trace extends Item implements Connectable, Serializable {
     // expanded from here, to block coming back to
     // this trace via a start contact.
     Set<Item> visitedItems = new TreeSet<>(startContacts);
-    boolean ignoreAreas = this.ignoresCyclesWithAreas();
     for (Item currentContact : startContacts) {
       if (currentContact.isCycleRecu(visitedItems, this, this, ignoreAreas)) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * The search of {@link #isCycle(boolean)} with every pour split into its fill islands: it enters
+   * a pour at the islands its predecessor meets and leaves it to the contacts that meet one of
+   * them.
+   */
+  private boolean isCycleThroughFill() {
+    FillCycleSearch search = new FillCycleSearch(this);
+    Collection<Item> startContacts = this.getStartContacts();
+    Map<ConductionArea, BitSet> startIslands = new LinkedHashMap<>();
+    for (Item currentContact : startContacts) {
+      if (FillCycleSearch.isPour(currentContact)) {
+        BitSet islands = new BitSet();
+        ((ConductionArea) currentContact).setFillIslandAt(this.firstCorner(), islands);
+        startIslands.put((ConductionArea) currentContact, islands);
+        search.visitedIslands(currentContact).or(islands);
+      } else {
+        search.visitedItems.add(currentContact);
+      }
+    }
+    for (Item currentContact : startContacts) {
+      BitSet islands = startIslands.get(currentContact);
+      boolean found =
+          islands == null
+              ? search.fromItem(currentContact, this)
+              : search.fromPour((ConductionArea) currentContact, islands, this);
+      if (found) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The state of {@link #isCycleThroughFill}. */
+  private static final class FillCycleSearch {
+    private final Trace searchTrace;
+    private final Set<Item> visitedItems = new TreeSet<>();
+    private final Map<ConductionArea, BitSet> visitedIslands = new HashMap<>();
+    private final Map<ConductionArea, Set<Item>> pourContacts = new HashMap<>();
+
+    FillCycleSearch(Trace searchTrace) {
+      this.searchTrace = searchTrace;
+    }
+
+    static boolean isPour(Item item) {
+      return item instanceof ConductionArea area && area.isPour();
+    }
+
+    BitSet visitedIslands(Item pour) {
+      return visitedIslands.computeIfAbsent((ConductionArea) pour, k -> new BitSet());
+    }
+
+    /** Expands the contacts of item, which the search reached from comeFrom. */
+    boolean fromItem(Item item, Item comeFrom) {
+      Collection<Item> contactList = item.getNormalContacts();
+      if (contactList == null) {
+        return false;
+      }
+      for (Item currentContact : contactList) {
+        if (isPour(currentContact)) {
+          // Not skipped when the search came from it: item may meet another of its islands.
+          ConductionArea pour = (ConductionArea) currentContact;
+          BitSet newIslands = pour.fillIslandsMetBy(item);
+          newIslands.andNot(visitedIslands(pour));
+          if (!newIslands.isEmpty()) {
+            visitedIslands(pour).or(newIslands);
+            if (fromPour(pour, newIslands, item)) {
+              return true;
+            }
+          }
+          continue;
+        }
+        if (currentContact == comeFrom) {
+          continue;
+        }
+        if (currentContact == searchTrace) {
+          return true;
+        }
+        if (visitedItems.add(currentContact) && fromItem(currentContact, item)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /** Expands the contacts of the pour that meet one of the islands, entered from comeFrom. */
+    boolean fromPour(ConductionArea pour, BitSet islands, Item comeFrom) {
+      Set<Item> contactList = pourContacts.computeIfAbsent(pour, ConductionArea::getNormalContacts);
+      for (Item currentContact : contactList) {
+        if (currentContact == comeFrom
+            || !pour.fillIslandsMetBy(currentContact).intersects(islands)) {
+          continue;
+        }
+        if (currentContact == searchTrace) {
+          return true;
+        }
+        if (visitedItems.add(currentContact) && fromItem(currentContact, pour)) {
+          return true;
+        }
+      }
+      return false;
+    }
   }
 
   /**

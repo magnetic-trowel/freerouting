@@ -2,14 +2,9 @@ package app.freerouting.drc;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.items.ConductionArea;
-import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
-import app.freerouting.board.model.items.Trace;
-import app.freerouting.geometry.planar.FloatPoint;
-import java.awt.geom.Area;
-import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -38,7 +33,8 @@ import java.util.TreeSet;
  * reported although the host tool connects it.
  *
  * <p>The cost is that of the zone-island check of the DRC: one fill and one island decomposition
- * per pour. It is too slow to run at every connectivity query of the router.
+ * per pour and change of its fill ({@link ConductionArea#fillIslandsMetBy}). It is too slow to run
+ * at every connectivity query of the router.
  */
 public final class PlaneFillConnectivity {
 
@@ -70,7 +66,7 @@ public final class PlaneFillConnectivity {
 
   /** Returns true for a pour: a conduction area that does not belong to a component. */
   static boolean isPour(Item item) {
-    return item instanceof ConductionArea && item.getComponentId() <= 0;
+    return item instanceof ConductionArea area && area.isPour();
   }
 
   /** Returns the numbers of the nets that own a pour, in ascending order. */
@@ -142,33 +138,14 @@ public final class PlaneFillConnectivity {
       parent[i] = i;
     }
     for (ConductionArea pour : pours) {
-      Area fill = pour.getConnectingFill();
-      if (fill == null || fill.isEmpty()) {
-        continue;
-      }
-      List<Area> islands = DesignRulesChecker.decomposeAreaIntoIslands(fill);
-      List<Rectangle2D> bounds = new ArrayList<>(islands.size());
-      for (Area island : islands) {
-        bounds.add(island.getBounds2D());
-      }
-      int[] firstGroupInIsland = new int[islands.size()];
-      Arrays.fill(firstGroupInIsland, -1);
+      Map<Integer, Integer> firstGroupInIsland = new HashMap<>();
       for (Item item : items) {
-        if (!item.sharesLayer(pour)) {
-          continue;
-        }
-        for (FloatPoint point : contactPoints(item)) {
-          for (int i = 0; i < islands.size(); i++) {
-            if (bounds.get(i).contains(point.x, point.y)
-                && islands.get(i).contains(point.x, point.y)) {
-              int group = groupOf.get(item);
-              if (firstGroupInIsland[i] < 0) {
-                firstGroupInIsland[i] = group;
-              } else {
-                union(parent, firstGroupInIsland[i], group);
-              }
-              break; // the islands do not overlap
-            }
+        BitSet islands = pour.fillIslandsMetBy(item);
+        for (int i = islands.nextSetBit(0); i >= 0; i = islands.nextSetBit(i + 1)) {
+          int group = groupOf.get(item);
+          Integer first = firstGroupInIsland.putIfAbsent(i, group);
+          if (first != null) {
+            union(parent, first, group);
           }
         }
       }
@@ -207,17 +184,6 @@ public final class PlaneFillConnectivity {
     List<Set<Item>> cutOffGroups = new ArrayList<>(cutOff.values());
     cutOffGroups.sort(Comparator.comparingInt(group -> group.iterator().next().getId()));
     return new Result(mainGroup, cutOffGroups);
-  }
-
-  /** The points at which an item meets the fill: drill centres and trace ends. */
-  private static List<FloatPoint> contactPoints(Item item) {
-    if (item instanceof DrillItem drillItem) {
-      return drillItem.getCenter() == null ? List.of() : List.of(drillItem.getCenter().toFloat());
-    }
-    if (item instanceof Trace trace) {
-      return List.of(trace.firstCorner().toFloat(), trace.lastCorner().toFloat());
-    }
-    return List.of();
   }
 
   private static int find(int[] parent, int i) {

@@ -7,6 +7,7 @@ import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.board.searchtree.ShapeSearchTree;
+import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.geometry.planar.Area;
 import app.freerouting.geometry.planar.AwtAreas;
 import app.freerouting.geometry.planar.FloatPoint;
@@ -18,6 +19,9 @@ import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.geometry.planar.Vector;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.util.TextManager;
+import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
@@ -42,6 +46,10 @@ public class ConductionArea extends ObstacleArea implements Connectable {
 
   private transient int cachedBoardRevision = -1;
   private transient java.awt.geom.Area cachedBoardFillArea;
+
+  private transient int cachedIslandsRevision = -1;
+  private transient List<java.awt.geom.Area> cachedFillIslands;
+  private transient List<java.awt.geom.Rectangle2D> cachedFillIslandBounds;
 
   /** Creates a new instance of ConductionArea. */
   public ConductionArea(
@@ -79,6 +87,9 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     super.clearDerivedData();
     this.cachedBoardRevision = -1;
     this.cachedBoardFillArea = null;
+    this.cachedIslandsRevision = -1;
+    this.cachedFillIslands = null;
+    this.cachedFillIslandBounds = null;
   }
 
   /** Pre-computes detailed plane-fill geometry off the EDT so zoom-in paints stay responsive. */
@@ -112,6 +123,78 @@ public class ConductionArea extends ObstacleArea implements Connectable {
    */
   public java.awt.geom.Area getConnectingFill() {
     return computeFill(maxClearanceLookup(), this.getLayer(), false);
+  }
+
+  /** Returns true for a pour: a conduction area that does not belong to a component. */
+  public boolean isPour() {
+    return this.getComponentId() <= 0;
+  }
+
+  /**
+   * Returns true if this area joins the two points through its copper: an area of a component
+   * wherever they lie in it, a pour only if one island of its fill contains both ({@link
+   * #fillIslandsMetBy}).
+   */
+  public boolean joins(Point first, Point second) {
+    if (!isPour()) {
+      return true;
+    }
+    BitSet firstIsland = new BitSet();
+    setFillIslandAt(first, firstIsland);
+    if (firstIsland.isEmpty()) {
+      return false;
+    }
+    BitSet secondIsland = new BitSet();
+    setFillIslandAt(second, secondIsland);
+    return firstIsland.equals(secondIsland);
+  }
+
+  /**
+   * Returns the indices of the islands of {@link #getConnectingFill()} that the item meets: those
+   * that contain its drill centre or one of its trace ends. These are the points at which {@link
+   * #getNormalContacts()} connects an item to this area, so the area joins two of its contacts
+   * through its copper exactly if they meet a common island.
+   */
+  public BitSet fillIslandsMetBy(Item item) {
+    BitSet result = new BitSet();
+    if (!item.sharesLayer(this)) {
+      return result;
+    }
+    if (item instanceof DrillItem drillItem && drillItem.getCenter() != null) {
+      setFillIslandAt(drillItem.getCenter(), result);
+    } else if (item instanceof Trace trace) {
+      setFillIslandAt(trace.firstCorner(), result);
+      setFillIslandAt(trace.lastCorner(), result);
+    }
+    return result;
+  }
+
+  /**
+   * Sets the index of the island of {@link #getConnectingFill()} that contains the point, if one
+   * does. The islands are computed again only after a change of the board that can change the fill:
+   * the traces of the area's own net leave it unchanged.
+   */
+  void setFillIslandAt(Point point, BitSet islands) {
+    int fillRevision =
+        this.netCount() > 0
+            ? this.board.revisionIgnoringTracesOf(this.getNetNumber(0))
+            : this.board.getRevision();
+    if (cachedFillIslands == null || cachedIslandsRevision != fillRevision) {
+      cachedFillIslands = DesignRulesChecker.decomposeAreaIntoIslands(getConnectingFill());
+      cachedFillIslandBounds = new ArrayList<>(cachedFillIslands.size());
+      for (java.awt.geom.Area island : cachedFillIslands) {
+        cachedFillIslandBounds.add(island.getBounds2D());
+      }
+      cachedIslandsRevision = fillRevision;
+    }
+    FloatPoint floatPoint = point.toFloat();
+    for (int i = 0; i < cachedFillIslands.size(); i++) {
+      if (cachedFillIslandBounds.get(i).contains(floatPoint.x, floatPoint.y)
+          && cachedFillIslands.get(i).contains(floatPoint.x, floatPoint.y)) {
+        islands.set(i);
+        return; // the islands do not overlap
+      }
+    }
   }
 
   /**

@@ -198,7 +198,7 @@ public final class BoardItemRepository {
       board.communication.observers.notifyNew(item);
     }
     board.additionalUpdateAfterChange(item);
-    board.incrementRevision();
+    board.incrementRevision(item);
     board.routingLedger().noteInserted(item);
   }
 
@@ -230,7 +230,7 @@ public final class BoardItemRepository {
     if (board.communication != null && board.communication.observers != null) {
       board.communication.observers.notifyDeleted(item);
     }
-    board.incrementRevision();
+    board.incrementRevision(item);
     board.routingLedger().noteRemoved(item);
   }
 
