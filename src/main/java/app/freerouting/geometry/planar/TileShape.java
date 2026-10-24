@@ -898,6 +898,16 @@ public abstract sealed class TileShape extends PolylineShape implements ConvexSh
    * size.
    */
   public TileShape[] divideIntoSections(double maxSectionWidth) {
+    return divideIntoSections(maxSectionWidth, null);
+  }
+
+  /**
+   * Divides this shape into sections like {@link #divideIntoSections(double)}, but leaves out the
+   * sections whose grid box does not overlap {@code keepRegion}. The kept sections are exactly the
+   * ones {@link #divideIntoSections(double)} returns for those grid boxes. A null {@code
+   * keepRegion} keeps every section.
+   */
+  public TileShape[] divideIntoSections(double maxSectionWidth, IntBox keepRegion) {
     if (this.isEmpty()) {
       TileShape[] result = new TileShape[1];
       result[0] = this;
@@ -906,6 +916,9 @@ public abstract sealed class TileShape extends PolylineShape implements ConvexSh
     TileShape[] sectionBoxes = this.boundingBox().divideIntoSections(maxSectionWidth);
     Collection<TileShape> sectionList = new LinkedList<>();
     for (int i = 0; i < sectionBoxes.length; i++) {
+      if (keepRegion != null && !((IntBox) sectionBoxes[i]).intersects(keepRegion)) {
+        continue;
+      }
       TileShape currentSection = this.intersectionWithSimplify(sectionBoxes[i]);
       if (currentSection.dimension() == 2) {
         sectionList.add(currentSection);

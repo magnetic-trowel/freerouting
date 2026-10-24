@@ -1246,6 +1246,19 @@ public class ShapeSearchTree extends MinAreaTree {
           Math.min(500 * this.board.communication.getResolution(Unit.MIL), maxTreeShapeWidth);
     }
 
+    // Routing and DRC queries stay near the board outline, so sections far outside it are left
+    // out: an obstacle much larger than the board (keepout circles of 500 mm on Issue208) was
+    // otherwise cut into hundreds of thousands of tree shapes, which took minutes to build and
+    // could not be interrupted by a job timeout.
+    IntBox keepRegion = null;
+    BoardOutline outline = this.board.getOutline();
+    if (outline != null) {
+      IntBox outlineBox = outline.boundingBox();
+      if (outlineBox != null && !outlineBox.isEmpty()) {
+        keepRegion = outlineBox.offset(4 * maxTreeShapeWidth);
+      }
+    }
+
     Collection<TileShape> treeShapeList = new LinkedList<>();
     for (int i = 0; i < convexShapes.length; i++) {
       TileShape currentConvexShape = convexShapes[i];
@@ -1253,7 +1266,8 @@ public class ShapeSearchTree extends MinAreaTree {
           this.clearanceCompensationValue(
               obstacleArea.clearanceClassIndex(), obstacleArea.getLayer());
       currentConvexShape = (TileShape) currentConvexShape.enlarge(offsetWidth);
-      TileShape[] currentTreeShapes = currentConvexShape.divideIntoSections(maxTreeShapeWidth);
+      TileShape[] currentTreeShapes =
+          currentConvexShape.divideIntoSections(maxTreeShapeWidth, keepRegion);
       treeShapeList.addAll(Arrays.asList(currentTreeShapes));
     }
     TileShape[] obstacleResult = new TileShape[treeShapeList.size()];
