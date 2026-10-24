@@ -35,7 +35,6 @@ class SesReloadOntoDesignTest {
     SesWriter.write(design, session, "Issue153-wavefolder.dsn");
 
     RoutingBoard reloaded = DsnTestFixtures.loadBoard("Issue153-wavefolder.dsn");
-    SesReader.removeSessionRouting(reloaded);
     SesReader.read(new ByteArrayInputStream(session.toByteArray()), reloaded);
 
     assertEquals(viaCount, viaCount(reloaded));

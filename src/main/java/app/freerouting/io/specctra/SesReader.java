@@ -46,6 +46,10 @@ public final class SesReader {
   /**
    * Reads a SES file and imports the routing data into {@code board}.
    *
+   * <p>A session carries all routing, the design's own wiring included ({@link SesWriter} writes
+   * every wire and via that is not system fixed). Its {@code network_out} scope therefore replaces
+   * that copper on the board instead of adding a second copy of it.
+   *
    * <p>The stream is always closed by this method on return (success or failure).
    *
    * @param in the SES input stream — closed by this method on completion
@@ -91,14 +95,11 @@ public final class SesReader {
 
   /**
    * Removes the copper that a Specctra session replaces: every wire and via with a net that is not
-   * {@link FixedState#SYSTEM_FIXED}. {@link SesWriter} exports exactly these items, including the
-   * ones that were already present in the design's wiring, so reading a session onto a freshly
-   * loaded design without this step duplicates all pre-existing routing.
+   * {@link FixedState#SYSTEM_FIXED}, which is exactly what {@link SesWriter} exports.
    *
-   * @param board the board whose session-owned routing is removed
    * @return the number of removed items
    */
-  public static int removeSessionRouting(BasicBoard board) {
+  private static int removeSessionRouting(BasicBoard board) {
     java.util.List<app.freerouting.board.model.items.Item> sessionRouting =
         new java.util.ArrayList<>();
     for (app.freerouting.board.model.items.Item item : board.getItems()) {
@@ -249,6 +250,10 @@ public final class SesReader {
 
   /** Processes the {@code (network_out ...)} scope containing individual nets. */
   private void processNetworkScope() throws IOException {
+    int replaced = removeSessionRouting(board);
+    if (replaced > 0) {
+      FRLogger.info("Removed " + replaced + " design wires/vias that the SES file replaces");
+    }
     Object nextToken = null;
     for (; ; ) {
       final Object prevToken = nextToken;
