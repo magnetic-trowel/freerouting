@@ -22,8 +22,8 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
 /**
- * A found connection that ends on a trace is joined to it by a short stub on the trace's layer.
- * The stub must have that layer's width, also when the connection started on another layer.
+ * A found connection that ends on a trace is joined to it by a short stub on the trace's layer. The
+ * stub must have that layer's width, also when the connection started on another layer.
  */
 class ConnectToTraceStubWidthTest {
 
@@ -51,8 +51,7 @@ class ConnectToTraceStubWidthTest {
     assertInstanceOf(BoardReadResult.Success.class, result);
     RoutingBoard board = (RoutingBoard) ((BoardReadResult.Success) result).board();
     int signal = board.rules.nets.get("SIG").iterator().next().netNumber;
-    Pin pin =
-        board.getPins().stream().filter(p -> p.containsNet(signal)).findFirst().orElseThrow();
+    Pin pin = board.getPins().stream().filter(p -> p.containsNet(signal)).findFirst().orElseThrow();
     // The target: a vertical SIG trace on the bottom layer.
     board.insertTrace(
         new Point[] {new IntPoint(100000, 20000), new IntPoint(100000, 80000)},
@@ -81,8 +80,7 @@ class ConnectToTraceStubWidthTest {
           new IntPoint[] {new IntPoint(40000, 50000), (IntPoint) pin.getCenter()}, 0)
     };
 
-    assertNotNull(
-        FoundConnectionInserter.insertSegments(board, ctrl, pin, target, 0, 1, segments));
+    assertNotNull(FoundConnectionInserter.insertSegments(board, ctrl, pin, target, 0, 1, segments));
 
     for (Trace trace : board.getTraces()) {
       if (trace.containsNet(signal)) {
