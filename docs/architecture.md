@@ -589,23 +589,27 @@ an interior segment of a longer path. Real point copper keeps its width and two 
 endpoints in the standard `path` syntax accepted by KiCad.
 
 `SesReader` applies the session's unit and resolution before constructing board objects.
-`SesPathGeometry` reconstructs the existing integer supporting-line representation;
-Apache Commons Numbers Fraction recovers rational intersections within four ULPs of
-serialization noise, with bounded convergence. Approximation is restricted to the
-fractional part so large legal board coordinates do not exceed the library's convergent
-numerator limit. The main and standalone CLI runtime classpaths both include this
-dependency. The executable JAR preserves the core and fraction modules' licence and
-notice files under distinct `META-INF/licenses/commons-numbers-*` paths. Corners may
-share a projective denominator only when both original coordinates
-remain within that tolerance. Integer congruence bases are reduced with at most 128
-steps to reconstruct short supporting lines, so a large intersection denominator is not
-mistaken for an out-of-range board coordinate. Only basis combinations with coprime
-components are integer lines, so combinations with coefficients up to 16 are tried in
-order of size. This is SES representation recovery;
-no routing decision or board grid is changed.
+`SesPathGeometry` restores the board's integer-line representation of each path. A
+corner on the board is the intersection of two integer lines and can have a denominator
+far beyond what a 17-digit decimal identifies, so the reader recovers lines, not corners:
+each segment's line is the first convergent of its slope (exact arithmetic with Apache
+Commons Numbers Fraction) that has an integer line through both corners within four ULPs
+of serialization noise, and each interior corner is the intersection of two such lines.
+An end corner is a grid point, or the meeting point with another wire of the same net
+(the router splits a trace where a branch leaves it, so each piece ends on the other
+piece's line; the wires of a net are therefore restored together), or else the simplest
+rational position on its segment within the tolerance. A rational end or point copper
+needs a crossing integer line: a reduced basis of the corner's line lattice is searched
+for combinations with coprime components. The main and standalone CLI runtime classpaths
+both include the fraction dependency, and the executable JAR preserves the core and
+fraction modules' licence and notice files under distinct
+`META-INF/licenses/commons-numbers-*` paths. This is SES representation recovery; no
+routing decision or board grid is changed. A path with one corner (point copper as
+v2.5.0 wrote it) is read as point copper.
 
 The reader checks actual insertion before counting an imported wire. It rejects widths,
-coordinates and supporting lines outside the board representation, distinct endpoints
+coordinates and segments with no integer line within the tolerance (for example decimal
+corners from another tool between which no integer line runs), distinct endpoints
 that collapse at serialization precision, and collinear reversals that `Polyline` would
 otherwise shorten. Monotone collinear simplification is allowed because it preserves the
 same copper. Rejected wires are reported as errors rather than moved, removed or counted

@@ -4,7 +4,6 @@ import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.core.library.Padstack;
 import app.freerouting.geometry.planar.Point;
-import app.freerouting.geometry.planar.Polyline;
 import app.freerouting.io.specctra.parser.IJFlexScanner;
 import app.freerouting.io.specctra.parser.Keyword;
 import app.freerouting.io.specctra.parser.LayerStructure;
@@ -323,28 +322,54 @@ public final class SesReader {
     int netNumber = net.netNumber;
     int[] netNumbers = new int[] {netNumber};
 
+    // The wires of a net are restored together: a wire's end is often where another one meets it.
+    List<Object> entries = new ArrayList<>();
     for (; ; ) {
       final Object prevToken = nextToken;
       nextToken = this.scanner.nextToken();
-      if (nextToken == null) {
-        return;
-      }
-      if (nextToken == Keyword.CLOSED_BRACKET) {
+      if (nextToken == null || nextToken == Keyword.CLOSED_BRACKET) {
         break;
       }
 
       if (prevToken == Keyword.OPEN_BRACKET) {
         if (nextToken == Keyword.WIRE) {
-          if (!processWireScope(netNumbers)) {
-            errorsEncountered++;
+          PolygonPath wire = readWireScope();
+          if (wire != null) {
+            entries.add(wire);
           }
         } else if (nextToken == Keyword.VIA) {
-          if (!processViaScope(netNumbers)) {
+          ViaEntry via = readViaScope();
+          if (via != null) {
+            entries.add(via);
+          } else {
             errorsEncountered++;
           }
         } else {
           ScopeKeyword.skipScope(this.scanner);
         }
+      }
+    }
+    importEntries(entries, netNumbers);
+  }
+
+  /** Inserts the wires and vias of a net in the order of the file. */
+  private void importEntries(List<Object> entries, int[] netNumbers) {
+    List<double[]> wireCoordinates = new ArrayList<>();
+    for (Object entry : entries) {
+      if (entry instanceof PolygonPath wire) {
+        wireCoordinates.add(wire.coordinateArr);
+      }
+    }
+    List<SesPathGeometry.Restored> restored =
+        SesPathGeometry.read(wireCoordinates, sessionToBoardScale);
+    int wireIndex = 0;
+    for (Object entry : entries) {
+      boolean imported =
+          entry instanceof PolygonPath wire
+              ? insertWire(wire, restored.get(wireIndex++), netNumbers)
+              : insertVia((ViaEntry) entry, netNumbers);
+      if (!imported) {
+        errorsEncountered++;
       }
     }
   }
@@ -352,12 +377,12 @@ public final class SesReader {
   // ---------------------------------------------------------------------------
 
   /**
-   * Processes a {@code (wire ...)} scope and inserts the trace into the board.
+   * Reads a {@code (wire ...)} scope.
    *
-   * @return {@code true} if the wire was successfully imported; {@code false} on a parse or
-   *     geometry error (the caller increments {@link #errorsEncountered})
+   * @return its path, or null if it has none (conduction areas) or the file ends inside it, which
+   *     counts as an error
    */
-  private boolean processWireScope(int[] netNumbers) throws IOException {
+  private PolygonPath readWireScope() throws IOException {
     PolygonPath wirePath = null;
     Object nextToken = null;
     for (; ; ) {
@@ -365,34 +390,40 @@ public final class SesReader {
       nextToken = this.scanner.nextToken();
       if (nextToken == null) {
         FRLogger.warn(
-            "SesReader.processWireScope: unexpected end of file at '"
+            "SesReader.readWireScope: unexpected end of file at '"
                 + this.scanner.getScopeIdentifier()
                 + "'");
-        return false;
+        errorsEncountered++;
+        return null;
       }
       if (nextToken == Keyword.CLOSED_BRACKET) {
-        break;
+        return wirePath;
       }
       if (prevToken == Keyword.OPEN_BRACKET) {
         if (nextToken == Keyword.POLYGON_PATH) {
-          wirePath = Shape.readPolygonPathScope(this.scanner, this.specctraLayerStructure);
+          wirePath = Shape.readPolygonPathScope(this.scanner, this.specctraLayerStructure, 1);
         } else {
           ScopeKeyword.skipScope(this.scanner);
         }
       }
     }
+  }
 
-    if (wirePath == null) {
-      // conduction areas have no polygon_path — silently skip
-      return true;
-    }
-
+  /**
+   * Inserts a wire whose geometry {@link SesPathGeometry} restored.
+   *
+   * @return {@code true} if the wire was imported
+   */
+  private boolean insertWire(
+      PolygonPath wirePath, SesPathGeometry.Restored restored, int[] netNumbers) {
     try {
       int layerIndex = wirePath.layer.no;
       if (layerIndex < 0 || layerIndex >= board.getLayerCount()) {
         throw new IOException("Invalid SES wire layer");
       }
-      Polyline polyline = SesPathGeometry.read(wirePath.coordinateArr, sessionToBoardScale);
+      if (restored.failure() != null) {
+        throw restored.failure();
+      }
       int halfWidth = SesPathGeometry.halfWidth(wirePath.width, sessionToBoardScale);
 
       int clearanceClass =
@@ -403,7 +434,12 @@ public final class SesReader {
       // Import fixed copper exactly; normalization must not erase point copper or short segments.
       var trace =
           board.insertTraceWithoutCleaning(
-              polyline, layerIndex, halfWidth, netNumbers, clearanceClass, FixedState.USER_FIXED);
+              restored.polyline(),
+              layerIndex,
+              halfWidth,
+              netNumbers,
+              clearanceClass,
+              FixedState.USER_FIXED);
       if (trace == null) {
         return false;
       }
@@ -411,25 +447,27 @@ public final class SesReader {
       return true;
 
     } catch (Exception e) {
-      FRLogger.warn("SesReader.processWireScope: failed to import wire — " + e.getMessage());
+      FRLogger.warn("SesReader.insertWire: failed to import wire — " + e.getMessage());
       return false;
     }
   }
 
+  /** A via as read from its scope. */
+  private record ViaEntry(String padstackName, double[] location) {}
+
   /**
-   * Processes a {@code (via ...)} scope and inserts the via into the board.
+   * Reads a {@code (via ...)} scope.
    *
-   * @return {@code true} if the via was successfully imported; {@code false} on a parse or geometry
-   *     error (the caller increments {@link #errorsEncountered})
+   * @return the via, or null on a parse error
    */
-  private boolean processViaScope(int[] netNumbers) throws IOException {
+  private ViaEntry readViaScope() throws IOException {
     Object nextToken = this.scanner.nextToken();
     if (!(nextToken instanceof String padstackName)) {
       FRLogger.warn(
-          "SesReader.processViaScope: padstack name expected at '"
+          "SesReader.readViaScope: padstack name expected at '"
               + this.scanner.getScopeIdentifier()
               + "'");
-      return false;
+      return null;
     }
     this.scanner.setScopeIdentifier(padstackName);
 
@@ -442,10 +480,10 @@ public final class SesReader {
         location[i] = integer;
       } else {
         FRLogger.warn(
-            "SesReader.processViaScope: number expected at '"
+            "SesReader.readViaScope: number expected at '"
                 + this.scanner.getScopeIdentifier()
                 + "'");
-        return false;
+        return null;
       }
     }
 
@@ -458,12 +496,22 @@ public final class SesReader {
 
     if (nextToken != Keyword.CLOSED_BRACKET) {
       FRLogger.warn(
-          "SesReader.processViaScope: closing bracket expected at '"
+          "SesReader.readViaScope: closing bracket expected at '"
               + this.scanner.getScopeIdentifier()
               + "'");
-      return false;
+      return null;
     }
+    return new ViaEntry(padstackName, location);
+  }
 
+  /**
+   * Inserts a via into the board.
+   *
+   * @return {@code true} if the via was imported
+   */
+  private boolean insertVia(ViaEntry via, int[] netNumbers) {
+    String padstackName = via.padstackName();
+    double[] location = via.location();
     try {
       Padstack viaPadstack = this.board.library.padstacks.get(padstackName);
       if (viaPadstack == null && padstackName != null) {
@@ -479,7 +527,7 @@ public final class SesReader {
         }
       }
       if (viaPadstack == null) {
-        FRLogger.warn("SesReader.processViaScope: via padstack not found: " + padstackName);
+        FRLogger.warn("SesReader.insertVia: via padstack not found: " + padstackName);
         return false;
       }
 
@@ -519,7 +567,7 @@ public final class SesReader {
       return true;
 
     } catch (Exception e) {
-      FRLogger.warn("SesReader.processViaScope: failed to import via — " + e.getMessage());
+      FRLogger.warn("SesReader.insertVia: failed to import via — " + e.getMessage());
       return false;
     }
   }

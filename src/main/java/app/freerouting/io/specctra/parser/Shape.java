@@ -468,6 +468,15 @@ public abstract class Shape {
   /** Reads an object of type Path from the dsn-file. */
   public static PolygonPath readPolygonPathScope(
       IJFlexScanner scanner, LayerStructure layerStructure) {
+    return readPolygonPathScope(scanner, layerStructure, 2);
+  }
+
+  /**
+   * Reads an object of type Path with at least {@code minimumCorners} corners. A session wire may
+   * have one: point copper, as v2.5.0 wrote it.
+   */
+  public static PolygonPath readPolygonPathScope(
+      IJFlexScanner scanner, LayerStructure layerStructure, int minimumCorners) {
     try {
       String layerName = scanner.nextString();
       Layer layer = getLayer(layerStructure, layerName);
@@ -496,11 +505,12 @@ public abstract class Shape {
       }
 
       // cornerList contains width + coordinate pairs
-      if (cornerList.size() < 5) {
-        // Single-point paths are not valid traces, skip them
+      if (cornerList.size() < 1 + 2 * minimumCorners) {
         FRLogger.debug(
             "Shape.read_polygon_path_scope: skipping path with too few coordinates "
-                + "(need at least 2 points) at '"
+                + "(need at least "
+                + minimumCorners
+                + " points) at '"
                 + scanner.getScopeIdentifier()
                 + "'");
         return null;

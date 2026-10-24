@@ -309,6 +309,65 @@ class SesGeometryRoundTripTest {
     assertEquals(List.of(original.polyline().corners()), List.of(imported.polyline().corners()));
   }
 
+  /**
+   * Two any-angle lines cross at a corner whose denominator (45992834) is far beyond what a
+   * 17-digit coordinate identifies. Inside a wire the corner is the intersection of its two segment
+   * lines; where the router split the trace there, each piece ends on the other piece's line. Both
+   * must come back exactly (Issue157-TeamAdapt and Issue297-myboard dropped such wires).
+   */
+  @ParameterizedTest
+  @CsvSource({"false", "true"})
+  void cornerOfTwoLongLinesRoundTripsInsideWireAndWhereSplit(boolean split) throws Exception {
+    BasicBoard source = board(Unit.UM, 10, 10);
+    Line first = new Line(1000000, -1000000, 1000000 + 10007, -1000000 + 2003);
+    Line second = new Line(1050000, -980000, 1050000 + 7919, -980000 - 3011);
+    Line start = new Line(1000000, -1000000, 1000000 - 2003, -1000000 + 10007);
+    Line end =
+        new Line(
+            1050000 + 3 * 7919,
+            -980000 - 3 * 3011,
+            1050000 + 3 * 7919 + 3011,
+            -980000 - 3 * 3011 + 7919);
+    List<Polyline> wires =
+        split
+            ? List.of(
+                new Polyline(new Line[] {start, first, second}),
+                new Polyline(new Line[] {first, second, end}))
+            : List.of(new Polyline(new Line[] {start, first, second, end}));
+    for (Polyline wire : wires) {
+      insert(source, wire);
+    }
+    BasicBoard target = board(Unit.UM, 10, 10);
+    SesImportSummary summary = SesReader.read(new ByteArrayInputStream(write(source)), target);
+    assertEquals(0, summary.errorsEncountered());
+    assertEquals(wires.size(), summary.wiresImported());
+    assertEquals(cornerLists(traces(source)), cornerLists(traces(target)));
+  }
+
+  /** A path with one corner is point copper, as v2.5.0 wrote it. */
+  @Test
+  void pathWithOneCornerIsPointCopper() throws Exception {
+    BasicBoard target = board(Unit.UM, 10, 10);
+    String session =
+        "(session point (routes (resolution um 10) (network_out (net TEST (wire (path F.Cu 20"
+            + " 100 100))))))";
+    SesImportSummary summary =
+        SesReader.read(new ByteArrayInputStream(session.getBytes(StandardCharsets.UTF_8)), target);
+    assertEquals(0, summary.errorsEncountered());
+    assertEquals(1, summary.wiresImported());
+    PolylineTrace imported = traces(target).getFirst();
+    assertEquals(imported.firstCorner(), imported.lastCorner());
+    assertEquals(100, imported.firstCorner().toFloat().x);
+    assertEquals(10, imported.getHalfWidth());
+  }
+
+  private static List<List<Point>> cornerLists(List<PolylineTrace> traces) {
+    return traces.stream()
+        .sorted(java.util.Comparator.comparingDouble(trace -> trace.firstCorner().toFloat().x))
+        .map(trace -> List.of(trace.polyline().corners()))
+        .toList();
+  }
+
   private static byte[] write(BasicBoard board) throws Exception {
     try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
       SesWriter.write(board, output, "geometry.dsn");
