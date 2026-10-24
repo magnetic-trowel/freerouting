@@ -1184,12 +1184,9 @@ public class HeadlessBoardManager implements BoardManager {
    *   <li>CAD tool imports SES to update design with routing
    * </ol>
    *
-   * <p><strong>Post-Save Operations:</strong> On successful save:
-   *
-   * <ul>
-   *   <li>Updates {@link #originalBoardChecksum} to reflect the saved state
-   *   <li>Marks the board as having no unsaved changes
-   * </ul>
+   * <p>Only the GUI tracks unsaved changes; it updates {@link #originalBoardChecksum} after its own
+   * saves. A headless save writes the session only: the checksum is computed from a full DSN
+   * export, which cost about twice the session itself on every interim output of a routing job.
    *
    * <p><strong>Note:</strong> The output stream is NOT closed by this method. The caller is
    * responsible for closing it.
@@ -1201,20 +1198,13 @@ public class HeadlessBoardManager implements BoardManager {
    * @see #loadFromSpecctraDsn
    */
   public boolean saveAsSpecctraSessionSes(OutputStream outputStream, String designName) {
-    boolean wasSaveSuccessful;
     try {
       SesWriter.write(this.getRoutingBoard(), outputStream, designName);
-      wasSaveSuccessful = true;
+      return true;
     } catch (IOException e) {
       FRLogger.error("unable to write session file", e);
-      wasSaveSuccessful = false;
+      return false;
     }
-
-    if (wasSaveSuccessful) {
-      originalBoardChecksum = calculateCrc32();
-    }
-
-    return wasSaveSuccessful;
   }
 
   /**
