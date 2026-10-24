@@ -55,12 +55,11 @@ byte-identical unless the package says otherwise.
 
 - Until the rules-precedence fix (commit `c9cea243`), the `(autoroute_settings ...)` scope of
   a `<design>.rules` file next to the DSN overrode the command line. Two campaign boards ship such
-  a file: `Issue029-hw48na` and `Issue107-freq_teiler_200kHz_kicad`. Their earlier runs with
-  `--router.optimizer.enabled=false` still ran the optimizer. Compare them only between runs of
-  the same jar generation.
+  a file. On `Issue107-freq_teiler_200kHz_kicad`, runs with `--router.optimizer.enabled=false`
+  still ran the optimizer (176.9 s CPU against 70.2 s with the fix). `Issue029-hw48na` gives the
+  same SES before and after, because it ends with open connections at 25 passes and the optimizer
+  is skipped anyway. Compare Issue107 only between runs of the same jar generation.
 - Boards that hit the timeout depend on machine load; leave them out of comparisons.
-- The smoke runs of E11-E13 used Issue029-hw48na before that fix, so their optimizer settings
-  came partly from the board's rules file.
 - Wire lengths quoted from the earlier campaign summaries came from a script that skipped SES
   paths with fractional coordinates and under-counted length (Issue297-myboard: 3208.7 mm against
   3499.7 mm). Via and completion counts are not affected; `scripts/experiments/paired_campaign.py`
