@@ -51,4 +51,35 @@ class KiCadJsonWriterUnitsTest {
       assertEquals(600.0, via.drill, 1e-6);
     }
   }
+
+  @Test
+  void fractionalResolutionIsReadExactly() {
+    // 0.1 board units per mil (an inch board at 0.01 inch); truncated to 1 the board was 10 times
+    // too large
+    String json =
+        """
+        {
+          "designName": "Fractional",
+          "unit": "MIL",
+          "resolution": 0.1,
+          "layers": [{"index": 0, "name": "F.Cu", "type": "signal"}],
+          "outline": {
+            "corners": [{"x": 0.0, "y": 0.0}, {"x": 1000.0, "y": 0.0},
+                        {"x": 1000.0, "y": 500.0}, {"x": 0.0, "y": 500.0}]
+          }
+        }
+        """;
+    RoutingBoard board =
+        (RoutingBoard)
+            ((app.freerouting.io.BoardReadResult.Success)
+                    KiCadJsonReader.readBoard(new java.io.StringReader(json), null, null))
+                .board();
+    assertEquals(100, board.getOutline().boundingBox().width());
+    KiCadBoardJson written =
+        GsonProvider.GSON.fromJson(KiCadJsonWriter.write(board, "units"), KiCadBoardJson.class);
+    assertEquals(KiCadBoardJson.UnitJson.MIL, written.unit);
+    assertEquals(0.1, written.resolution, 1e-12);
+    assertEquals(
+        1000.0, written.outline.corners.stream().mapToDouble(p -> p.x).max().orElseThrow(), 1e-9);
+  }
 }
