@@ -570,6 +570,10 @@ public final class BatchAutorouter extends NamedAlgorithm {
     }
   }
 
+  void startPassLoop() {
+    this.passRunner.startPassLoop();
+  }
+
   @Override
   public String getId() {
     return "freerouting-router";

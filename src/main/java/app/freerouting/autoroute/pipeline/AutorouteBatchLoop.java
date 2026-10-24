@@ -75,7 +75,7 @@ final class AutorouteBatchLoop {
     // Capture initial state for session summary
     router.sessionStartTime = Instant.now();
     router.initialUnroutedCount = calculateIncompleteCount(router.board);
-    router.resetAntiOscillationState();
+    router.startPassLoop();
     router.lastStopReason = null;
     router.lastPassFailure = null;
 

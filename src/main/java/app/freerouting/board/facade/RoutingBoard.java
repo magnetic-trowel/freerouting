@@ -67,8 +67,6 @@ import java.util.TreeSet;
  */
 public class RoutingBoard extends BasicBoard implements Serializable {
 
-  public final app.freerouting.autoroute.RoutingFailureLog failureLog;
-
   /** The area marked for optimizing the route. */
   public transient ChangedArea changedArea;
 
@@ -98,7 +96,6 @@ public class RoutingBoard extends BasicBoard implements Serializable {
       BoardRules rules,
       Communication boardCommunication) {
     super(boundingBox, layerStructure, outlineShapes, outlineClClassNo, rules, boardCommunication);
-    this.failureLog = new app.freerouting.autoroute.RoutingFailureLog();
   }
 
   /** Maintains the auto-router database after item is inserted, changed, or deleted. */

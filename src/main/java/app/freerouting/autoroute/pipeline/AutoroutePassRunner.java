@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +41,12 @@ final class AutoroutePassRunner {
   private Set<Integer> previousIncompleteNets = Collections.emptySet();
   private int previousIncompleteCount = -1;
   private int stagnationCount = 0;
+
+  /**
+   * Failed routing attempts per item id in the current pass loop. A pass loop starts with none, so
+   * a later loop on the same or a copied board does not inherit the failures of an earlier one.
+   */
+  private final Map<Integer, Integer> failureCounts = new HashMap<>();
 
   AutoroutePassRunner(BatchAutorouter router) {
     this.router = router;
@@ -165,10 +172,8 @@ final class AutoroutePassRunner {
           } else {
             Net net = router.board.rules.nets.get(currentItem.getNetNumber(i));
             String netName = net != null ? net.name : "net#" + currentItem.getNetNumber(i);
-            router.board.failureLog.recordFailure(
-                currentItem, passNo, autorouterResult.state, autorouterResult.details);
             router.job.logDebug("Autorouter " + autorouterResult.details);
-            int failureCount = router.board.failureLog.getFailureCount(currentItem);
+            int failureCount = failureCounts.merge(currentItem.getId(), 1, Integer::sum);
             int netNo = currentItem.getNetNumber(i);
             if (failureCount >= 2 && !designBlocked(router.board, currentItem, netNo)) {
               List<Item> tracesToRip = failedNetRipItems(router.board, currentItem, netNo);
@@ -331,6 +336,12 @@ final class AutoroutePassRunner {
     this.stagnationCount = 0;
   }
 
+  /** Starts a pass loop: no anti-oscillation state and no failure counts carried over. */
+  void startPassLoop() {
+    resetAntiOscillationState();
+    this.failureCounts.clear();
+  }
+
   private void logIncompleteDetails(int passNo, int itemsToGoCount, RouterCounters counters) {
     if (counters.incompleteCount <= 0) {
       return;
@@ -467,7 +478,7 @@ final class AutoroutePassRunner {
     Set<Integer> ruleBlockedNets = ruleBlockedNets(router.board);
     items.removeIf(
         item ->
-            (router.board.failureLog.getFailureCount(item) > 0
+            (failureCounts.containsKey(item.getId())
                     || (ruleBlockedNets != null
                         && item.netCount() == 1
                         && ruleBlockedNets.contains(item.getNetNumber(0))))

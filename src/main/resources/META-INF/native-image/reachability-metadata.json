@@ -61,10 +61,6 @@
       "type": "app.freerouting.analytics.dto.Traits"
     },
     {
-      "type": "app.freerouting.autoroute.RoutingFailureLog",
-      "serializable": true
-    },
-    {
       "type": "app.freerouting.board.actions.ItemIdGenerator",
       "serializable": true
     },
