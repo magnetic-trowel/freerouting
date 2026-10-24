@@ -206,7 +206,7 @@ class ProcessOnlySettingsPersistenceTest {
   }
 
   private static GlobalSettings startGuiSession(String... args) {
-    return GlobalSettingsBootstrap.initialize(args, "", true);
+    return GlobalSettingsBootstrap.loadSettings(args);
   }
 
   private static JsonObject readConfigurationFile() throws IOException {

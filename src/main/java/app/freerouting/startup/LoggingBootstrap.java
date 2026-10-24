@@ -2,19 +2,29 @@ package app.freerouting.startup;
 
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.AppPaths;
+import app.freerouting.settings.GlobalSettings;
+import app.freerouting.settings.LoggingSettings;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Locale;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
 
 /**
- * Parses logging parameters from environment variables and command-line arguments, configures
- * Log4j2 system properties, and reconfigures Log4j2.
+ * Configures Log4j2 from the {@code logging} settings, which {@code freerouting.json}, {@code
+ * FREEROUTING__LOGGING__*} environment variables and {@code --logging.*} command-line arguments set
+ * like any other section (see {@link GlobalSettingsBootstrap#loadSettings}).
+ *
+ * <p>The settings are loaded before they can be applied, so {@link #initializeForStartup} first
+ * logs to the console only: messages from loading the settings appear on the console, not in the
+ * log file.
  */
 public final class LoggingBootstrap {
+
+  private static final String DEFAULT_CONSOLE_LEVEL = "INFO";
+  private static final String DEFAULT_FILE_LEVEL = "DEBUG";
+  private static final String LOG_FILE_NAME = "freerouting.log";
 
   /** Configuration snapshot produced by logging initialization. */
   public record LoggingConfig(
@@ -27,111 +37,77 @@ public final class LoggingBootstrap {
 
   private LoggingBootstrap() {}
 
+  /** Logs to the console at the default level until {@link #initialize} applies the settings. */
+  public static void initializeForStartup() {
+    apply(new LoggingConfig(false, true, DEFAULT_FILE_LEVEL, DEFAULT_CONSOLE_LEVEL, "", null));
+  }
+
   /**
-   * Initializes Log4j2 based on environment variables, CLI arguments, and resolved user data path.
+   * Configures Log4j2 from the loaded settings.
    *
-   * @param args command line arguments
+   * @param settings the settings, with the file, the environment and the command line applied
    * @param userdataPath resolved user data directory
    * @param userdataPathSource source of the user data directory
    * @return the active logging configuration
    */
   public static LoggingConfig initialize(
-      String[] args, Path userdataPath, String userdataPathSource) {
-    boolean fileLoggingEnabled = true;
-    boolean consoleLoggingEnabled = true;
-    String fileLoggingLevel = "DEBUG";
-
-    if (System.getenv("FREEROUTING__LOGGING__FILE__ENABLED") != null) {
-      fileLoggingEnabled =
-          Boolean.parseBoolean(System.getenv("FREEROUTING__LOGGING__FILE__ENABLED"));
+      GlobalSettings settings, Path userdataPath, String userdataPathSource) {
+    LoggingSettings logging = settings.logging;
+    String fileLevel = valueOr(logging.file.level, DEFAULT_FILE_LEVEL);
+    if (settings.debugSettings.enableDetailedLogging) {
+      fileLevel = "TRACE";
+      FRLogger.granularTraceEnabled = true;
     }
-    String consoleLoggingLevel = "INFO";
-    if (System.getenv("FREEROUTING__LOGGING__CONSOLE__ENABLED") != null) {
-      consoleLoggingEnabled =
-          Boolean.parseBoolean(System.getenv("FREEROUTING__LOGGING__CONSOLE__ENABLED"));
-    }
-    if (System.getenv("FREEROUTING__LOGGING__FILE__LEVEL") != null) {
-      fileLoggingLevel = System.getenv("FREEROUTING__LOGGING__FILE__LEVEL");
-    }
-    if (System.getenv("FREEROUTING__LOGGING__CONSOLE__LEVEL") != null) {
-      consoleLoggingLevel = System.getenv("FREEROUTING__LOGGING__CONSOLE__LEVEL");
-    }
-    String fileLoggingLocation = null;
-    if (System.getenv("FREEROUTING__LOGGING__FILE__LOCATION") != null) {
-      fileLoggingLocation = System.getenv("FREEROUTING__LOGGING__FILE__LOCATION");
-    }
-    String fileLoggingPattern = null;
-    if (System.getenv("FREEROUTING__LOGGING__FILE__PATTERN") != null) {
-      fileLoggingPattern = System.getenv("FREEROUTING__LOGGING__FILE__PATTERN");
-    }
-
-    if (args != null && args.length > 0) {
-      for (String arg : args) {
-        if (arg.startsWith("--logging.file.enabled=")) {
-          fileLoggingEnabled =
-              Boolean.parseBoolean(arg.substring("--logging.file.enabled=".length()));
-        } else if (arg.startsWith("--logging.console.enabled=")) {
-          consoleLoggingEnabled =
-              Boolean.parseBoolean(arg.substring("--logging.console.enabled=".length()));
-        } else if (arg.startsWith("--logging.file.level=")) {
-          fileLoggingLevel = arg.substring("--logging.file.level=".length());
-        } else if (arg.startsWith("--logging.console.level=")) {
-          consoleLoggingLevel = arg.substring("--logging.console.level=".length());
-        } else if (arg.startsWith("--logging.file.location=")) {
-          fileLoggingLocation = arg.substring("--logging.file.location=".length());
-        } else if (arg.startsWith("--logging.file.pattern=")) {
-          fileLoggingPattern = arg.substring("--logging.file.pattern=".length());
-        } else if (arg.startsWith("--debug.enable_detailed_logging=")) {
-          boolean detailed =
-              Boolean.parseBoolean(arg.substring("--debug.enable_detailed_logging=".length()));
-          if (detailed) {
-            fileLoggingLevel = "TRACE";
-            FRLogger.granularTraceEnabled = true;
-          }
-        } else if ("-dl".equals(arg)) {
-          fileLoggingEnabled = false;
-        } else if ("-ll".equals(arg)) {
-          int index = Arrays.asList(args).indexOf("-ll");
-          if (index >= 0 && index < args.length - 1) {
-            consoleLoggingLevel = args[index + 1];
-          }
-        }
-      }
-    }
-
     Path defaultLogDir =
         (userdataPathSource != null && userdataPathSource.startsWith("default"))
             ? AppPaths.getDefaultLogDirectory()
             : userdataPath;
-    if (fileLoggingLocation == null || fileLoggingLocation.isBlank()) {
-      fileLoggingLocation = resolveLogPath(null, defaultLogDir).toString();
-    } else {
-      fileLoggingLocation = resolveLogPath(fileLoggingLocation, defaultLogDir).toString();
-    }
+    LoggingConfig config =
+        new LoggingConfig(
+            valueOr(logging.file.enabled, true),
+            valueOr(logging.console.enabled, true),
+            fileLevel,
+            valueOr(logging.console.level, DEFAULT_CONSOLE_LEVEL),
+            resolveLogPath(logging.file.location, defaultLogDir).toString(),
+            logging.file.pattern);
+    apply(config);
+    return config;
+  }
 
+  private static void apply(LoggingConfig config) {
     System.setProperty("log4j2.disableJndi", "true");
     System.setProperty(
         "log4j2.configurationFactory", "app.freerouting.logger.Log4j2ConfigurationFactory");
     System.setProperty(
-        "freerouting.logging.console.enabled", String.valueOf(consoleLoggingEnabled));
-    System.setProperty("freerouting.logging.console.level", consoleLoggingLevel);
-    System.setProperty("freerouting.logging.file.enabled", String.valueOf(fileLoggingEnabled));
-    System.setProperty("freerouting.logging.file.level", fileLoggingLevel);
-    System.setProperty("freerouting.logging.file.location", fileLoggingLocation);
-
-    if (fileLoggingPattern != null) {
-      System.setProperty("freerouting.logging.file.pattern", fileLoggingPattern);
+        "freerouting.logging.console.enabled", String.valueOf(config.consoleLoggingEnabled()));
+    System.setProperty("freerouting.logging.console.level", config.consoleLoggingLevel());
+    System.setProperty(
+        "freerouting.logging.file.enabled", String.valueOf(config.fileLoggingEnabled()));
+    System.setProperty("freerouting.logging.file.level", config.fileLoggingLevel());
+    System.setProperty("freerouting.logging.file.location", config.fileLoggingLocation());
+    if (config.fileLoggingPattern() != null) {
+      System.setProperty("freerouting.logging.file.pattern", config.fileLoggingPattern());
+    } else {
+      System.clearProperty("freerouting.logging.file.pattern");
     }
 
     ((LoggerContext) LogManager.getContext(false)).reconfigure();
+  }
 
-    return new LoggingConfig(
-        fileLoggingEnabled,
-        consoleLoggingEnabled,
-        fileLoggingLevel,
-        consoleLoggingLevel,
-        fileLoggingLocation,
-        fileLoggingPattern);
+  private static <T> T valueOr(T value, T defaultValue) {
+    return value != null ? value : defaultValue;
+  }
+
+  /**
+   * Returns the directory that a log location names: the location itself, or its parent when it
+   * names a file ({@code *.log}).
+   *
+   * @param location a log file or directory
+   * @return the normalized absolute directory
+   */
+  public static Path logDirectory(String location) {
+    Path path = absolute(location);
+    return isLogFile(path) && path.getParent() != null ? path.getParent() : path;
   }
 
   /**
@@ -143,22 +119,15 @@ public final class LoggingBootstrap {
    */
   public static Path resolveLogPath(String input, Path defaultDir) {
     if (input == null || input.isBlank()) {
-      return defaultDir.resolve("freerouting.log").normalize().toAbsolutePath();
+      return defaultDir.resolve(LOG_FILE_NAME).normalize().toAbsolutePath();
     }
 
-    // In Windows the leading "." character means current directory
-    if (input.startsWith(".")) {
-      var currentDir = Path.of(System.getProperty("user.dir"));
-      input = currentDir + input.substring(1);
-    }
-
-    Path path = Path.of(input).normalize().toAbsolutePath();
-    boolean isFile = path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".log");
-    String filename = isFile ? path.getFileName().toString() : "freerouting.log";
-    Path folderPath = isFile ? path.getParent() : path;
+    Path path = absolute(input);
+    String filename = isLogFile(path) ? path.getFileName().toString() : LOG_FILE_NAME;
+    Path folderPath = logDirectory(input);
 
     // Check if the directory exists, and create it if needed
-    if (folderPath != null && !folderPath.toFile().exists()) {
+    if (!folderPath.toFile().exists()) {
       try {
         Files.createDirectories(folderPath);
       } catch (IOException e) {
@@ -167,8 +136,19 @@ public final class LoggingBootstrap {
       }
     }
 
-    return folderPath != null
-        ? folderPath.resolve(filename).normalize().toAbsolutePath()
-        : defaultDir.resolve(filename).normalize().toAbsolutePath();
+    return folderPath.resolve(filename).normalize().toAbsolutePath();
+  }
+
+  private static Path absolute(String location) {
+    // In Windows the leading "." character means current directory
+    if (location.startsWith(".")) {
+      location = Path.of(System.getProperty("user.dir")) + location.substring(1);
+    }
+    return Path.of(location).normalize().toAbsolutePath();
+  }
+
+  private static boolean isLogFile(Path path) {
+    return path.getFileName() != null
+        && path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".log");
   }
 }

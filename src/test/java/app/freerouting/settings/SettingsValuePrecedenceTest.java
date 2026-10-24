@@ -130,7 +130,7 @@ class SettingsValuePrecedenceTest {
             .formatted(GlobalSettings.getReleaseSafeVersion()),
         StandardCharsets.UTF_8);
 
-    GlobalSettings globalSettings = GlobalSettingsBootstrap.initialize(new String[0], "", true);
+    GlobalSettings globalSettings = GlobalSettingsBootstrap.loadSettings(new String[0]);
 
     String userId = globalSettings.userProfileSettings.userId;
     assertNotNull(userId);

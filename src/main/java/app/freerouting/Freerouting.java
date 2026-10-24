@@ -28,7 +28,6 @@ import java.awt.Dimension;
 import java.awt.Toolkit;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
@@ -493,10 +492,6 @@ public class Freerouting {
         .collect(Collectors.toSet());
   }
 
-  private static Path resolveLogPath(String input, Path defaultDir) {
-    return app.freerouting.startup.LoggingBootstrap.resolveLogPath(input, defaultDir);
-  }
-
   private static boolean compareBoardFiles(String file1Path, String file2Path) {
     return app.freerouting.cli.BenchmarkAndCompareCommands.compareBoardFiles(file1Path, file2Path);
   }
@@ -529,12 +524,14 @@ public class Freerouting {
       System.setOut(System.err);
     }
 
-    // Set up user-data path and logging configuration BEFORE any logging occurs
+    // Set up the user-data path, then load the settings (logging to the console only), then
+    // configure logging from them.
     UserDataPathResolver.ResolvedUserDataPath userdataPath =
         UserDataPathResolver.resolveAndLock(args);
-
-    LoggingBootstrap.LoggingConfig loggingConfig =
-        LoggingBootstrap.initialize(args, userdataPath.path(), userdataPath.source());
+    LoggingBootstrap.initializeForStartup();
+    globalSettings = GlobalSettingsBootstrap.loadSettings(args);
+    final LoggingBootstrap.LoggingConfig loggingConfig =
+        LoggingBootstrap.initialize(globalSettings, userdataPath.path(), userdataPath.source());
 
     // NOW we can start logging - log4j2 will initialize with our configuration
     FRLogger.traceEntry("MainApplication.main()");
@@ -559,7 +556,7 @@ public class Freerouting {
     FRLogger.debug("[startup] log file       : " + loggingConfig.fileLoggingLocation());
     Thread.setDefaultUncaughtExceptionHandler(new DefaultExceptionHandler());
 
-    globalSettings = GlobalSettingsBootstrap.initialize(args, loggingConfig.fileLoggingLocation());
+    GlobalSettingsBootstrap.recordRuntimeEnvironment(globalSettings, args, false);
 
     // Warn if mcp_server.stdio was set in freerouting.json but not via CLI/env.
     if (!isStdioMode

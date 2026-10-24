@@ -5,6 +5,7 @@ import app.freerouting.settings.GlobalSettings;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Map;
 
 /**
  * Resolves the user-data path according to OS defaults, environment variables, and command-line
@@ -24,26 +25,9 @@ public final class UserDataPathResolver {
    * @return the resolved path and description
    */
   public static ResolvedUserDataPath resolveAndLock(String[] args) {
-    Path userdataPath = AppPaths.getDefaultUserDataPath();
-    String userdataPathSource = "default (OS standard user-data path)";
-
-    if (System.getenv("FREEROUTING__USER_DATA_PATH") != null) {
-      userdataPath = Path.of(System.getenv("FREEROUTING__USER_DATA_PATH"));
-      userdataPathSource = "environment variable FREEROUTING__USER_DATA_PATH";
-    } else if (System.getenv("FREEROUTING__LOGGING__FILE__LOCATION") != null) {
-      userdataPath = Path.of(System.getenv("FREEROUTING__LOGGING__FILE__LOCATION"));
-      userdataPathSource =
-          "environment variable FREEROUTING__LOGGING__FILE__LOCATION (deprecated fallback)";
-    }
-
-    if (args != null && args.length > 0) {
-      var userDataPathArg =
-          Arrays.stream(args).filter(s -> s.startsWith("--user_data_path=")).findFirst();
-      if (userDataPathArg.isPresent()) {
-        userdataPath = Path.of(userDataPathArg.get().substring("--user_data_path=".length()));
-        userdataPathSource = "CLI argument --user_data_path";
-      }
-    }
+    ResolvedUserDataPath resolved = resolve(args, System.getenv());
+    Path userdataPath = resolved.path();
+    String userdataPathSource = resolved.source();
 
     File dir = userdataPath.toFile();
     if (!dir.exists()) {
@@ -85,6 +69,41 @@ public final class UserDataPathResolver {
     GlobalSettings.setUserDataPath(userdataPath);
     GlobalSettings.lockUserDataPath();
 
-    return new ResolvedUserDataPath(userdataPath, userdataPathSource);
+    return resolved;
+  }
+
+  /**
+   * Resolves the user data path: the {@code --user_data_path} argument, else the {@code
+   * FREEROUTING__USER_DATA_PATH} environment variable, else the directory of the log location in
+   * {@code FREEROUTING__LOGGING__FILE__LOCATION} (deprecated: the directory, also when the location
+   * names a log file), else the OS default.
+   *
+   * @param args command line arguments
+   * @param environment environment variables by name
+   * @return the path and a description of where it came from
+   */
+  static ResolvedUserDataPath resolve(String[] args, Map<String, String> environment) {
+    if (args != null) {
+      var userDataPathArg =
+          Arrays.stream(args).filter(s -> s.startsWith("--user_data_path=")).findFirst();
+      if (userDataPathArg.isPresent()) {
+        return new ResolvedUserDataPath(
+            Path.of(userDataPathArg.get().substring("--user_data_path=".length())),
+            "CLI argument --user_data_path");
+      }
+    }
+    String userDataPath = environment.get("FREEROUTING__USER_DATA_PATH");
+    if (userDataPath != null) {
+      return new ResolvedUserDataPath(
+          Path.of(userDataPath), "environment variable FREEROUTING__USER_DATA_PATH");
+    }
+    String logLocation = environment.get("FREEROUTING__LOGGING__FILE__LOCATION");
+    if (logLocation != null && !logLocation.isBlank()) {
+      return new ResolvedUserDataPath(
+          LoggingBootstrap.logDirectory(logLocation),
+          "environment variable FREEROUTING__LOGGING__FILE__LOCATION (deprecated fallback)");
+    }
+    return new ResolvedUserDataPath(
+        AppPaths.getDefaultUserDataPath(), "default (OS standard user-data path)");
   }
 }

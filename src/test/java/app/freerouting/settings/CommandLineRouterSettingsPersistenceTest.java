@@ -159,7 +159,7 @@ class CommandLineRouterSettingsPersistenceTest {
   }
 
   private static GlobalSettings startGuiSession(String[] args) {
-    return GlobalSettingsBootstrap.initialize(args, "", true);
+    return GlobalSettingsBootstrap.loadSettings(args);
   }
 
   private static RouterSettings mergeForThisRun(String[] args) {

@@ -118,13 +118,16 @@ The primary way to configure Freerouting is through a JSON settings file. This f
 
 #### **`logging` Section**
 
+Like every other section, these values come from `freerouting.json`, `FREEROUTING__LOGGING__*` environment variables and `--logging.*` command-line arguments, in that order of precedence. Messages logged while the settings load go to the console only. Versions before 2.5.1 wrote this section without reading it, so the values in a file written by them are ignored.
+
 - **`console`**:
     - **`enabled`**: Enables or disables console logging. Default is `true`.
     - **`level`**: Sets the console log level (OFF, FATAL, ERROR, WARN, INFO, DEBUG, TRACE, ALL). Default is `INFO`.
 - **`file`**:
     - **`enabled`**: Enables or disables file logging. Default is `true`.
-    - **`level`**: Sets the file log level. Default is `INFO`.
-    - **`location`**: Directory path for the log file. If empty, defaults to the user data path.
+    - **`level`**: Sets the file log level. Default is `DEBUG`.
+    - **`location`**: The directory of `freerouting.log`, or the log file itself when it ends in `.log`. If empty, the log is written to the user data path when one is set, otherwise to the platform log directory.
+    - **`pattern`**: The Log4j pattern of the log lines. Default is `%d{yyyy-MM-dd HH:mm:ss.SSS} %-6level %msg%n`.
 
 #### **`gui` Section**
 

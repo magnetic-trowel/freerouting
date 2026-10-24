@@ -41,6 +41,9 @@ public class GlobalSettings implements Serializable {
    */
   private static final Set<String> STARTUP_PROPERTIES = Set.of("user_data_path");
 
+  /** The first version that applies the {@code logging} section of {@code freerouting.json}. */
+  static final String FIRST_VERSION_READING_LOGGING = "2.5.1";
+
   /**
    * Router flags of the command line, read by {@link CliSettings}; those in {@link
    * #ROUTER_FLAGS_WITH_VALUE} take a value.
@@ -388,6 +391,12 @@ public class GlobalSettings implements Serializable {
         }
       }
 
+      // Earlier versions never read the logging section: they wrote their defaults and the
+      // resolved log file into it. Those values are not the user's choices, so they are dropped.
+      if (fileVersion == null || Versions.compare(fileVersion, FIRST_VERSION_READING_LOGGING) < 0) {
+        loadedSettings.logging.clear();
+      }
+
       // Always record the current release-safe version in the in-memory object and
       // on disk.  Using the release-safe version (no -SNAPSHOT) means SNAPSHOT
       // rebuilds of the same release never trigger a spurious re-save / migration.
@@ -727,19 +736,10 @@ public class GlobalSettings implements Serializable {
             continue;
           }
           if ((parts.length == 2) && !STARTUP_PROPERTIES.contains(parts[0])) {
-            if (parts[0].startsWith("debug.")) {
-              // handle debug settings
-              if ("debug.enable_detailed_logging".equals(parts[0])) {
-                debugSettings.enableDetailedLogging = Boolean.parseBoolean(parts[1]);
-              } else if ("debug.single_step_execution".equals(parts[0])) {
-                debugSettings.singleStepExecution = Boolean.parseBoolean(parts[1]);
-              } else if ("debug.trace_insertion_delay".equals(parts[0])) {
-                debugSettings.traceInsertionDelay = Integer.parseInt(parts[1]);
-              } else if ("debug.filter_by_net".equals(parts[0])) {
-                String[] nets = parts[1].split(",");
-                for (String net : nets) {
-                  debugSettings.filterByNet.add(net.trim().toLowerCase(Locale.ROOT));
-                }
+            if ("debug.filter_by_net".equals(parts[0])) {
+              String[] nets = parts[1].split(",");
+              for (String net : nets) {
+                debugSettings.filterByNet.add(net.trim().toLowerCase(Locale.ROOT));
               }
             } else {
               setValue(parts[0], parts[1]);

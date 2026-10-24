@@ -20,28 +20,28 @@ public final class GlobalSettingsBootstrap {
   private GlobalSettingsBootstrap() {}
 
   /**
-   * Loads GlobalSettings from disk or defaults, initializes hardware parameters, and applies CLI
-   * arguments.
+   * Loads the settings ({@link #loadSettings}) and records the runtime environment ({@link
+   * #recordRuntimeEnvironment}).
    *
    * @param args command line arguments
-   * @param fileLoggingLocation active log file path
-   * @return initialized GlobalSettings object
-   */
-  public static GlobalSettings initialize(String[] args, String fileLoggingLocation) {
-    return initialize(args, fileLoggingLocation, false);
-  }
-
-  /**
-   * Loads GlobalSettings from disk or defaults, initializes hardware parameters, and applies CLI
-   * arguments.
-   *
-   * @param args command line arguments
-   * @param fileLoggingLocation active log file path
    * @param deferCpuCalibration whether to defer synthetic CPU benchmark calibration
    * @return initialized GlobalSettings object
    */
-  public static GlobalSettings initialize(
-      String[] args, String fileLoggingLocation, boolean deferCpuCalibration) {
+  public static GlobalSettings initialize(String[] args, boolean deferCpuCalibration) {
+    GlobalSettings globalSettings = loadSettings(args);
+    recordRuntimeEnvironment(globalSettings, args, deferCpuCalibration);
+    return globalSettings;
+  }
+
+  /**
+   * Loads GlobalSettings from {@code freerouting.json} (or the defaults), then applies the {@code
+   * FREEROUTING__} environment variables and the command-line arguments, and makes them the {@link
+   * GlobalSettings#current() current} settings.
+   *
+   * @param args command line arguments
+   * @return the loaded settings
+   */
+  public static GlobalSettings loadSettings(String[] args) {
     GlobalSettings globalSettings = null;
 
     try {
@@ -71,27 +71,6 @@ public final class GlobalSettingsBootstrap {
               + ". Freerouting will start with default settings.");
     }
 
-    if (globalSettings != null
-        && globalSettings.logging.file.location != null
-        && !globalSettings.logging.file.location.isBlank()
-        && !globalSettings.logging.file.location.equals(fileLoggingLocation)) {
-      FRLogger.warn(
-          "[startup] freerouting.json contains a stale 'logging.file.location' value: '"
-              + globalSettings.logging.file.location
-              + "'. "
-              + "The actual log file is being written to '"
-              + fileLoggingLocation
-              + "' (as resolved at startup). "
-              + "The stale value will be corrected in freerouting.json on next save. "
-              + "If you see this in Docker, the old JSON was written by an earlier version that "
-              + "stored the host path; the fix is to delete freerouting.json so it is regenerated "
-              + "with the correct path.");
-    }
-
-    if (globalSettings != null) {
-      globalSettings.logging.file.location = fileLoggingLocation;
-    }
-
     // A freerouting.json without a valid profile id (for example one written by hand with only
     // router options) loads with a null id, which the CLI and API pass to UUID.fromString.
     if (globalSettings != null && !isValidUserId(globalSettings.userProfileSettings.userId)) {
@@ -117,7 +96,6 @@ public final class GlobalSettingsBootstrap {
       globalSettings = new GlobalSettings();
       globalSettings.userProfileSettings.userId = userId;
       globalSettings.version = GlobalSettings.getReleaseSafeVersion();
-      globalSettings.logging.file.location = fileLoggingLocation;
 
       try {
         GlobalSettings.saveAsJson(globalSettings);
@@ -144,7 +122,21 @@ public final class GlobalSettingsBootstrap {
     }
 
     globalSettings.applyNonRouterEnvironmentVariables();
+    globalSettings.applyCommandLineArguments(args);
+    GlobalSettings.setCurrent(globalSettings);
+    return globalSettings;
+  }
 
+  /**
+   * Records the version, the command line and the hardware in the runtime environment of the
+   * settings, and logs the hardware.
+   *
+   * @param globalSettings the loaded settings
+   * @param args command line arguments
+   * @param deferCpuCalibration whether to defer synthetic CPU benchmark calibration
+   */
+  public static void recordRuntimeEnvironment(
+      GlobalSettings globalSettings, String[] args, boolean deferCpuCalibration) {
     globalSettings.runtimeEnvironment.freeroutingVersion =
         Constants.FREEROUTING_VERSION + "," + Constants.FREEROUTING_BUILD_DATE;
     globalSettings.runtimeEnvironment.appStartedAt = Instant.now();
@@ -181,11 +173,6 @@ public final class GlobalSettingsBootstrap {
               + " MB RAM");
     }
     FRLogger.debug("UTC Time: " + globalSettings.runtimeEnvironment.appStartedAt);
-
-    globalSettings.applyCommandLineArguments(args);
-    GlobalSettings.setCurrent(globalSettings);
-
-    return globalSettings;
   }
 
   private static boolean isValidUserId(String userId) {
