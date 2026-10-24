@@ -31,6 +31,18 @@ public class RulesFileSettings implements SettingsSource {
   }
 
   /**
+   * Creates a RulesFileSettings source from router settings that were already read from a RULES
+   * file, for example by {@link RulesReader#read} with the board's layer structure.
+   *
+   * @param settings the router settings the RULES file provides; only those fields may be non-null
+   * @param fileName Name of the RULES file (for logging)
+   */
+  public RulesFileSettings(RouterSettings settings, String fileName) {
+    this.fileName = fileName;
+    this.settings = settings != null ? settings : new RouterSettings();
+  }
+
+  /**
    * Creates a RulesFileSettings source from a File.
    *
    * @param file the RULES file

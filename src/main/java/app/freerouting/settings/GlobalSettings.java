@@ -668,6 +668,7 @@ public class GlobalSettings implements Serializable {
    */
   private Boolean setValue(String propertyName, String newValue, RouterSettings routerTarget) {
     try {
+      propertyName = CliSettings.normalizeRouterSeparators(propertyName);
       if (propertyName.startsWith("router.")) {
         String relative = propertyName.substring("router.".length());
         String canonical = LegacyRouterSettingsBridge.canonicalCliPath(relative);

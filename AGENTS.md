@@ -92,7 +92,7 @@ You are a Senior Java Engineer specialized in Computational Geometry and EDA (El
 
 # Settings & Configuration System
 
-Router configuration is resolved at runtime by `SettingsMerger`, which layers nine `SettingsSource` implementations in ascending priority order (0 = defaults → 70 = API). The merger calls `RouterSettings.applyNewValuesFrom(source)`, which uses `ReflectionUtil.copyFields()` to copy a field only when the source value is **non-null and not the Java language default** for that type.
+Router configuration is resolved at runtime by `SettingsMerger`, which layers nine `SettingsSource` implementations in ascending priority order (0 = defaults → 70 = API). The merger calls `RouterSettings.applyNewValuesFrom(source)`, which uses `ReflectionUtil.copyFields()` to copy a field only when the source value is **non-null** (a primitive field cannot be unset, so it is always copied).
 
 This design has one critical invariant: **all fields in `RouterSettings` (and its nested `RouterOptimizerSettings` / `RouterScoringSettings`) must be nullable reference types with no default initializers.** If a field were initialised to a non-null value (e.g. `public Integer maxPasses = 9999;`), every source object would carry that value and the merger could no longer distinguish "this source sets this field" from "this source has no opinion". A low-priority source would then silently override a higher-priority one. All hardcoded defaults belong exclusively in `DefaultSettings.getSettings()`, which is always applied first as the base layer.
 

@@ -144,14 +144,7 @@ public final class ReflectionUtil {
       return Double.parseDouble(value.toString());
     }
     if (targetType == boolean.class || targetType == Boolean.class) {
-      // convert "0" and "1" into their boolean values
-      if ("0".equals(value.toString())) {
-        value = "false";
-      } else if ("1".equals(value.toString())) {
-        value = "true";
-      }
-
-      return Boolean.parseBoolean(value.toString());
+      return parseBoolean(value.toString());
     }
     if (targetType == float.class || targetType == Float.class) {
       return Float.parseFloat(value.toString());
@@ -206,7 +199,23 @@ public final class ReflectionUtil {
   }
 
   /**
-   * Copy all non-null, and non-default fields from one object to another recursively.
+   * Parses a boolean setting value: {@code true}/{@code false}, {@code 1}/{@code 0}, {@code
+   * yes}/{@code no} and {@code on}/{@code off}, ignoring case and surrounding whitespace.
+   *
+   * @throws IllegalArgumentException for any other value, instead of reading it as {@code false}
+   */
+  static boolean parseBoolean(String value) {
+    return switch (value.trim().toLowerCase(Locale.ROOT)) {
+      case "true", "1", "yes", "on" -> true;
+      case "false", "0", "no", "off" -> false;
+      default ->
+          throw new IllegalArgumentException(
+              "'" + value + "' is not a boolean value (expected true or false)");
+    };
+  }
+
+  /**
+   * Copy all non-null fields from one object to another recursively.
    *
    * @param source The source object
    * @param target The target object
@@ -232,11 +241,11 @@ public final class ReflectionUtil {
         Object sourceValue = field.get(source);
 
         // For nullable wrappers (Boolean/Integer/...), non-null already means "explicitly set".
-        // Keep default-value suppression only for primitive fields.
+        // A primitive cannot be unset, so its value is always copied: skipping the Java default
+        // (false, 0) dropped explicit values such as "enabled": false or a timeout of 0 whenever
+        // the target's initializer held a different value. Settings that must be able to stay
+        // unset in a source (all RouterSettings fields) are nullable wrappers.
         boolean shouldCopy = sourceValue != null;
-        if (shouldCopy && field.getType().isPrimitive()) {
-          shouldCopy = !sourceValue.equals(getDefaultValue(field));
-        }
 
         if (shouldCopy) {
           // Check if the field is a primitive, wrapper type, or a string
@@ -253,7 +262,6 @@ public final class ReflectionUtil {
             // check if the target field is null or its default value
             var targetValue = field.get(target);
 
-            // if ((targetValue == null) || targetValue.equals(getDefaultValue(field)))
             if (targetValue != sourceValue) {
               field.set(target, sourceValue);
               numberOfFieldsChanged++;
@@ -338,40 +346,5 @@ public final class ReflectionUtil {
     }
 
     return numberOfFieldsChanged;
-  }
-
-  private static Object getDefaultValue(Field field) {
-    Object result = null;
-
-    try {
-      result = field.getType().getConstructor().newInstance();
-    } catch (NoSuchMethodException _) {
-      // The field does not have a default constructor, this can usually the case if
-      // the type is a primitive type
-      if (field.getType() == int.class || field.getType() == Integer.class) {
-        result = 0;
-      } else if (field.getType() == long.class || field.getType() == Long.class) {
-        result = 0L;
-      } else if (field.getType() == float.class || field.getType() == Float.class) {
-        result = 0.0f;
-      } else if (field.getType() == double.class || field.getType() == Double.class) {
-        result = 0.0;
-      } else if (field.getType() == boolean.class || field.getType() == Boolean.class) {
-        result = false;
-      } else if (field.getType().isArray()) {
-        // create an empty array of the original type
-        result = java.lang.reflect.Array.newInstance(field.getType().getComponentType(), 0);
-      } else if (field.getType().isEnum()) {
-        result = field.getType().getEnumConstants()[0];
-      } else if (Modifier.isTransient(field.getModifiers())) {
-        result = null;
-      } else {
-        FRLogger.debug("No default constructor found for field: " + field.getName());
-      }
-    } catch (Exception e) {
-      FRLogger.error("Error getting default value for field: " + field.getName(), e);
-    }
-
-    return result;
   }
 }

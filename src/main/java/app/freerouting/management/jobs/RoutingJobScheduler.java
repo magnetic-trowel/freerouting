@@ -6,10 +6,10 @@ import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.io.FileFormat;
-import app.freerouting.io.specctra.RulesReader;
 import app.freerouting.io.specctra.SesImportSummary;
 import app.freerouting.io.specctra.SesReader;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.management.CompositeBoardInput;
 import app.freerouting.management.HeadlessBoardManager;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
@@ -18,7 +18,6 @@ import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.ApiSettings;
 import app.freerouting.settings.sources.DefaultSettings;
 import app.freerouting.settings.sources.DsnFileSettings;
-import app.freerouting.settings.sources.RulesFileSettings;
 import app.freerouting.util.TextManager;
 import app.freerouting.util.gson.GsonProvider;
 import java.io.ByteArrayInputStream;
@@ -185,10 +184,16 @@ public final class RoutingJobScheduler {
                                 }
                               }
 
+                              // The rules apply onto the board here, and their autoroute settings
+                              // merge at RULES-file priority, below the environment, the command
+                              // line and the caller.
                               if (rulesData != null) {
                                 settingsMerger.addOrReplaceSources(
-                                    new RulesFileSettings(
-                                        new ByteArrayInputStream(rulesData), rulesFilename));
+                                    CompositeBoardInput.readRulesOntoBoard(
+                                        rulesData,
+                                        rulesFilename,
+                                        job.name != null ? job.name : "board",
+                                        job.board));
                               }
 
                               // Keep per-job overrides (e.g. tests toggling fanout/optimizer) by
@@ -201,20 +206,6 @@ public final class RoutingJobScheduler {
                               // Apply the final merged settings to the job and optimize them for
                               // the board
                               job.routerSettings = settingsMerger.merge();
-
-                              // Apply rules from rules file onto the board and routerSettings
-                              if (rulesData != null && job.board != null) {
-                                try {
-                                  String designName = job.name != null ? job.name : "board";
-                                  RulesReader.read(
-                                      new ByteArrayInputStream(rulesData),
-                                      designName,
-                                      job.board,
-                                      job.routerSettings);
-                                } catch (Exception e) {
-                                  FRLogger.error("Failed to apply rules from rules file", e);
-                                }
-                              }
 
                               job.routerSettings.applyBoardSpecificOptimizations(job.board);
                               job.routerSettings.applyNetClassExclusions(job.board);

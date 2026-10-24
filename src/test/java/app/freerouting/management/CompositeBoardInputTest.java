@@ -125,4 +125,32 @@ class CompositeBoardInputTest extends RoutingFixtureTest {
     assertNotNull(job.initialSession, "session must reach the scheduler");
     assertEquals(sesBytes.length, job.initialSession.getData().readAllBytes().length);
   }
+
+  /**
+   * The autoroute settings of a RULES file have RULES-file priority (40): a value the API caller
+   * set (70) wins, and the RULES file only fills in what the caller left unset. They used to be
+   * applied on top of the merged settings, so a rules file written by Freerouting, which always
+   * says {@code (postroute on)} and {@code (vias on)}, re-enabled the optimizer and vias.
+   */
+  @Test
+  void callerSettingsOutrankRulesFileAutorouteSettings() throws Exception {
+    RoutingJob job = new RoutingJob(UUID.randomUUID());
+    job.routerSettings.optimizer.enabled = false;
+    job.routerSettings.viasAllowed = false;
+    job.routerSettings.scoring.startRipupCosts = 7;
+
+    byte[] dsnBytes = getRoutingJob("Issue508-DAC2020_bm01.dsn").input.getData().readAllBytes();
+    String rulesContent =
+        "(rules PCB test (autoroute_settings (autoroute on) (postroute on) (vias on)"
+            + " (via_costs 51) (start_ripup_costs 103)))";
+    new CompositeBoardInput()
+        .setDesign(dsnBytes, "test.dsn")
+        .setRules(rulesContent.getBytes(StandardCharsets.UTF_8), "test.rules")
+        .assembleBoard(job);
+
+    assertFalse(job.routerSettings.optimizer.enabled, "caller disabled the optimizer");
+    assertFalse(job.routerSettings.viasAllowed, "caller disallowed vias");
+    assertEquals(7, job.routerSettings.scoring.startRipupCosts, "caller set the ripup costs");
+    assertEquals(51, job.routerSettings.scoring.viaCosts, "the rules file sets the via costs");
+  }
 }

@@ -46,7 +46,7 @@ public class CliSettings implements SettingsSource {
         // Handle --property=value format
         if (arg.contains("=")) {
           String[] parts = arg.substring(2).split("=", 2);
-          String propertyName = parts[0];
+          String propertyName = normalizeRouterSeparators(parts[0]);
           String value = parts.length > 1 ? parts[1] : "";
 
           if ("router.enabled".equals(propertyName)
@@ -155,6 +155,25 @@ public class CliSettings implements SettingsSource {
       case "v3", "equivalent_length", "equivalent-length" -> "V3_EQUIVALENT_LENGTH";
       default -> value;
     };
+  }
+
+  /**
+   * Returns a {@code router} or {@code optimizer} property name with its {@code -} and {@code :}
+   * level separators replaced by {@code .}, which the settings documentation allows (for example
+   * {@code router-autorouter-max_passes} becomes {@code router.autorouter.max_passes}). The {@code
+   * router-scoring-version} and {@code optimizer-scoring-version} aliases and all other names are
+   * returned unchanged.
+   */
+  public static String normalizeRouterSeparators(String propertyName) {
+    if (propertyName == null
+        || "router-scoring-version".equals(propertyName)
+        || "optimizer-scoring-version".equals(propertyName)) {
+      return propertyName;
+    }
+    if (propertyName.matches("(router|optimizer)[.:-].*")) {
+      return propertyName.replace(':', '.').replace('-', '.');
+    }
+    return propertyName;
   }
 
   private void applyRouterSetting(RouterSettings settings, String propertyName, String value) {

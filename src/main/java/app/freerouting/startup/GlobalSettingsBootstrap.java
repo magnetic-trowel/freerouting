@@ -92,6 +92,21 @@ public final class GlobalSettingsBootstrap {
       globalSettings.logging.file.location = fileLoggingLocation;
     }
 
+    // A freerouting.json without a valid profile id (for example one written by hand with only
+    // router options) loads with a null id, which the CLI and API pass to UUID.fromString.
+    if (globalSettings != null && !isValidUserId(globalSettings.userProfileSettings.userId)) {
+      globalSettings.userProfileSettings.userId = UUID.randomUUID().toString();
+      try {
+        GlobalSettings.saveAsJson(globalSettings);
+      } catch (IOException e) {
+        FRLogger.warn(
+            "Failed to save the new profile id to '"
+                + GlobalSettings.getConfigurationFilePath()
+                + "': "
+                + e.getMessage());
+      }
+    }
+
     if ((globalSettings == null)
         || !GlobalSettings.getReleaseSafeVersion().equals(globalSettings.version)) {
       String userId =
@@ -171,5 +186,17 @@ public final class GlobalSettingsBootstrap {
     GlobalSettings.setCurrent(globalSettings);
 
     return globalSettings;
+  }
+
+  private static boolean isValidUserId(String userId) {
+    if (userId == null || userId.isBlank()) {
+      return false;
+    }
+    try {
+      UUID.fromString(userId);
+      return true;
+    } catch (IllegalArgumentException _) {
+      return false;
+    }
   }
 }

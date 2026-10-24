@@ -16,8 +16,8 @@ import java.util.List;
  * Every subsequent source calls {@link RouterSettings#applyNewValuesFrom}, which delegates to
  * {@link app.freerouting.util.ReflectionUtil#copyFields}. That method iterates the public,
  * non-static fields of the incoming {@code RouterSettings} object and copies a field into the
- * target <em>only when the source value is non-null and not equal to the field's Java default
- * value</em>.
+ * target <em>only when the source value is non-null</em> (a primitive field cannot be unset, so it
+ * is always copied).
  *
  * <h2>Why all {@code RouterSettings} fields must be nullable (no default initializers)</h2>
  *

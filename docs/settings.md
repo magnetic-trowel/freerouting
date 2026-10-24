@@ -343,6 +343,8 @@ Tuning guidance:
 
 Freerouting can also be configured using command-line arguments. These arguments override the settings specified in the JSON configuration file. You must use `--{property-name}={property-value}` format, where `property-name` is the hierarchical definition of the property you want to change and the `property-value` is its desired value. You can use `.`, `-` and `:` characters to separate the hierarchical levels in the `property-name` parameter.
 
+Boolean values accept `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off` (in any case). Any other value is rejected and logged, and the setting keeps the value it has from the lower-priority sources.
+
 Command-line arguments and `FREEROUTING__*` environment variables apply to that run only, for every section (for example `--router.autorouter.max_passes=3`, `-mt 1`, `--api_server.authentication.enabled=false` or `-di <dir>`). When the GUI saves its settings during the session, `freerouting.json` keeps its own values for them, so they do not become defaults for later runs. A value the user changes in the GUI during the session is still saved, even if it was first given on the command line. The one exception is the analytics opt-out (`-da`, `--usage_and_diagnostic_data.disable_analytics=true` or the matching environment variable): it is kept, so that opting out once is not undone by a later run. To make any other option permanent, put it in `freerouting.json`.
 
 **Scalar example:**
@@ -428,7 +430,7 @@ You can override the base configuration/data root directory using `--user_data_p
 
 `RouterSettings` intentionally declares all its fields as nullable reference types (e.g. `Integer`, `Boolean`, `String`) **with no default initializers**. This is a deliberate architectural constraint required by the merge mechanism:
 
-`SettingsMerger.merge()` calls `RouterSettings.applyNewValuesFrom(source)`, which delegates to `ReflectionUtil.copyFields()`. That method copies a field from the incoming source into the accumulated result **only when the source field is non-null and differs from the Java language default for that type**.
+`SettingsMerger.merge()` calls `RouterSettings.applyNewValuesFrom(source)`, which delegates to `ReflectionUtil.copyFields()`. That method copies a field from the incoming source into the accumulated result **only when the source field is non-null**. A primitive field cannot be unset, so it is always copied; this is why every `RouterSettings` field is a nullable wrapper.
 
 If any field were initialised to a non-null value inside the `RouterSettings` constructor (e.g. `public Integer maxPasses = 9999;`), every source's settings object would carry that value, and the merger would incorrectly treat it as an explicit override. A low-priority source (such as the JSON file) would then silently win over a higher-priority source (such as the API) whenever the user left that field unspecified in the high-priority source.
 

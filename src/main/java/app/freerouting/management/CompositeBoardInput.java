@@ -137,10 +137,35 @@ public class CompositeBoardInput {
   }
 
   /**
+   * Applies a RULES file onto {@code board} and returns the router settings of its {@code
+   * (autoroute_settings ...)} scope as the RULES-file settings source. The settings are read with
+   * the board's layer structure and merged at RULES-file priority, below the environment, the
+   * command line, the GUI and the API caller, instead of being applied on top of the merged result.
+   *
+   * @param rulesData the RULES file content
+   * @param rulesFilename the RULES file name (for logging)
+   * @param designName the design name the RULES file is expected to name
+   * @param board the board that receives the design rules, or {@code null}
+   * @return the RULES-file settings source
+   */
+  public static RulesFileSettings readRulesOntoBoard(
+      byte[] rulesData, String rulesFilename, String designName, RoutingBoard board) {
+    if (board == null) {
+      return new RulesFileSettings(new ByteArrayInputStream(rulesData), rulesFilename);
+    }
+    RouterSettings rulesSettings = new RouterSettings();
+    try {
+      RulesReader.read(new ByteArrayInputStream(rulesData), designName, board, rulesSettings);
+    } catch (Exception e) {
+      FRLogger.error("Failed to apply rules from rules file onto board", e);
+    }
+    return new RulesFileSettings(rulesSettings, rulesFilename);
+  }
+
+  /**
    * Assembles the composite inputs into the provided routing job: 1. Loads design data into
-   * job.board. 2. Merges settings layers (Default -> DSN -> Rules -> API overrides). 3. Applies
-   * design rules onto board and router settings. 4. Imports initial session (SES or KiCad JSON) if
-   * present.
+   * job.board and applies the design rules onto it. 2. Merges settings layers (Default -> DSN ->
+   * Rules -> API overrides). 3. Imports initial session (SES or KiCad JSON) if present.
    *
    * @param job Target routing job
    * @throws Exception If design loading or parsing fails
@@ -234,8 +259,11 @@ public class CompositeBoardInput {
         job.rules.setFilename(effectiveRulesFilename);
       }
       settingsMerger.addOrReplaceSources(
-          new RulesFileSettings(
-              new ByteArrayInputStream(effectiveRulesData), effectiveRulesFilename));
+          readRulesOntoBoard(
+              effectiveRulesData,
+              effectiveRulesFilename,
+              job.name != null ? job.name : "board",
+              job.board));
     }
 
     // API settings (from caller / job settings overrides)
@@ -244,20 +272,6 @@ public class CompositeBoardInput {
     }
 
     job.routerSettings = settingsMerger.merge();
-
-    // Apply rules onto the board and routerSettings
-    if (effectiveRulesData != null && job.board != null) {
-      try {
-        String designNameStr = job.name != null ? job.name : "board";
-        RulesReader.read(
-            new ByteArrayInputStream(effectiveRulesData),
-            designNameStr,
-            job.board,
-            job.routerSettings);
-      } catch (Exception e) {
-        FRLogger.error("Failed to apply rules from rules file onto board", e);
-      }
-    }
 
     job.routerSettings.applyBoardSpecificOptimizations(job.board);
     job.routerSettings.applyNetClassExclusions(job.board);
