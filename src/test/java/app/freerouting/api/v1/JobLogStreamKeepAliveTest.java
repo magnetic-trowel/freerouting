@@ -94,7 +94,7 @@ class JobLogStreamKeepAliveTest {
     SessionManager sessions = mock(SessionManager.class);
     Session session = mock(Session.class);
     when(scheduler.getJob(job.id.toString())).thenReturn(job);
-    when(sessions.getSession(job.sessionId.toString(), userId)).thenReturn(session);
+    when(sessions.getSession(job.sessionId.toString(), userId, null)).thenReturn(session);
     try (var schedulerScope = mockStatic(RoutingJobScheduler.class);
         var sessionScope = mockStatic(SessionManager.class)) {
       schedulerScope.when(RoutingJobScheduler::getInstance).thenReturn(scheduler);

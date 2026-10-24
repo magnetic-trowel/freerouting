@@ -68,24 +68,16 @@ public final class SessionManager {
   }
 
   /**
-   * Returns a session when it belongs to the specified user.
+   * Returns a session when it belongs to the caller (see {@link Session#isOwnedBy}).
    *
    * @param sessionId the session identifier
-   * @param userId the expected user identifier
-   * @return the matching session, or {@code null} when it is absent or owned by another user
+   * @param userId the caller's profile id
+   * @param apiKeyHash the hash of the caller's validated API key, or {@code null}
+   * @return the matching session, or {@code null} when it is absent or owned by another caller
    */
-  public Session getSession(String sessionId, UUID userId) {
+  public Session getSession(String sessionId, UUID userId, String apiKeyHash) {
     Session session = getSession(sessionId);
-
-    if (session == null) {
-      return null;
-    }
-
-    if (!session.userId.equals(userId)) {
-      return null;
-    }
-
-    return session;
+    return session != null && session.isOwnedBy(userId, apiKeyHash) ? session : null;
   }
 
   /**
@@ -199,13 +191,14 @@ public final class SessionManager {
   }
 
   /**
-   * Lists the identifiers of all sessions owned by a user.
+   * Lists the identifiers of all sessions owned by the caller (see {@link Session#isOwnedBy}).
    *
-   * @param userId the session owner's identifier
+   * @param userId the caller's profile id
+   * @param apiKeyHash the hash of the caller's validated API key, or {@code null}
    * @return the matching session identifiers
    */
-  public String[] listSessionIds(UUID userId) {
-    return Arrays.stream(getSessions(null, userId))
+  public String[] listSessionIds(UUID userId, String apiKeyHash) {
+    return Arrays.stream(getOwnedSessions(userId, apiKeyHash))
         .map(s -> s.id.toString())
         .toArray(String[]::new);
   }
@@ -261,20 +254,15 @@ public final class SessionManager {
   }
 
   /**
-   * Returns sessions visible to a user.
+   * Returns the sessions owned by the caller (see {@link Session#isOwnedBy}).
    *
-   * @param sessionId a specific session identifier, or {@code null} to list all of the user's
-   *     sessions
-   * @param userId the session owner's identifier
+   * @param userId the caller's profile id
+   * @param apiKeyHash the hash of the caller's validated API key, or {@code null}
    * @return the matching sessions
    */
-  public Session[] getSessions(String sessionId, UUID userId) {
-    if (sessionId == null) {
-      return sessions.values().stream()
-          .filter(s -> s.userId.equals(userId))
-          .toArray(Session[]::new);
-    } else {
-      return new Session[] {sessions.get(sessionId)};
-    }
+  public Session[] getOwnedSessions(UUID userId, String apiKeyHash) {
+    return sessions.values().stream()
+        .filter(s -> s.isOwnedBy(userId, apiKeyHash))
+        .toArray(Session[]::new);
   }
 }

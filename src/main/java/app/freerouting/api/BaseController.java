@@ -129,11 +129,21 @@ public class BaseController {
   }
 
   /**
+   * Returns the SHA-256 hash of the caller's validated API key, or {@code null} when the request is
+   * not authenticated (authentication disabled). Sessions are bound to the key that created them,
+   * so a valid key cannot reach another key's sessions by sending their profile id.
+   */
+  protected String callerApiKeyHash() {
+    java.security.Principal principal = getAuthenticatedPrincipal();
+    return principal != null ? ApiUsageFilter.sha256Hex(principal.getName()) : null;
+  }
+
+  /**
    * Returns the session when it exists and belongs to the caller, or {@code null}. Another caller's
    * session is answered like an absent one.
    */
   protected Session findOwnedSession(String sessionId, UUID userId) {
-    return SessionManager.getInstance().getSession(sessionId, userId);
+    return SessionManager.getInstance().getSession(sessionId, userId, callerApiKeyHash());
   }
 
   /**

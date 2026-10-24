@@ -53,6 +53,8 @@ If authentication is enabled, requests to protected endpoints must include a val
 Authorization: Bearer <API_KEY>
 ```
 
+With authentication enabled, a session belongs to its `Freerouting-Profile-ID` **and** to the API key that created it: requests with another key cannot list or reach that session or its jobs, even with the same profile ID.
+
 For complete details on how to configure and enable authentication on your own server, please see the [API Authentication System Documentation](API_authentication.md).
 
 ## Required headers

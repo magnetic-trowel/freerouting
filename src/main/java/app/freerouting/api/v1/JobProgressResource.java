@@ -86,7 +86,7 @@ public class JobProgressResource extends BaseController {
     RoutingJob[] result;
     // If the session does not exist, list all jobs
     if ((session == null) || (sessionId.isEmpty()) || ("all".equals(sessionId))) {
-      result = RoutingJobScheduler.getInstance().listJobs(null, userId);
+      result = RoutingJobScheduler.getInstance().listOwnedJobs(userId, callerApiKeyHash());
     } else {
       result = RoutingJobScheduler.getInstance().listJobs(sessionId);
     }

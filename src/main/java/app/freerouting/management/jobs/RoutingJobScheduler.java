@@ -783,37 +783,18 @@ public final class RoutingJobScheduler {
   }
 
   /**
-   * Returns jobs visible to a user, optionally restricted to one session.
+   * Returns the jobs of all sessions the caller owns (see {@link Session#isOwnedBy}).
    *
-   * @param sessionId a session identifier, or {@code null} for all sessions owned by the user
-   * @param userId the session owner's identifier
+   * @param userId the caller's profile id
+   * @param apiKeyHash the hash of the caller's validated API key, or {@code null}
    * @return a snapshot of the matching jobs
    */
-  public RoutingJob[] listJobs(String sessionId, UUID userId) {
-    SessionManager sessionManager = SessionManager.getInstance();
-
-    if (sessionId == null) {
-      // Get all sessions that belong to the user
-      Session[] sessions = sessionManager.getSessions(null, userId);
-
-      // Iterate through the sessions and list all jobs belonging to them
-      List<RoutingJob> result = new LinkedList<>();
-      for (Session session : sessions) {
-        // List all jobs belonging to the user in the session
-        result.addAll(List.of(listJobs(session.id.toString())));
-      }
-
-      return result.toArray(RoutingJob[]::new);
-    } else {
-      Session session = sessionManager.getSession(sessionId, userId);
-
-      if (session != null) {
-        // List all jobs belonging to the user in the session
-        return listJobs(session.id.toString());
-      }
+  public RoutingJob[] listOwnedJobs(UUID userId, String apiKeyHash) {
+    List<RoutingJob> result = new LinkedList<>();
+    for (Session session : SessionManager.getInstance().getOwnedSessions(userId, apiKeyHash)) {
+      result.addAll(List.of(listJobs(session.id.toString())));
     }
-
-    return new RoutingJob[0];
+    return result.toArray(RoutingJob[]::new);
   }
 
   /**

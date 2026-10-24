@@ -68,6 +68,20 @@ public class Session implements Serializable {
   }
 
   /**
+   * Returns whether the caller owns this session: the same profile and, for an authenticated
+   * caller, the API key that created the session. The profile comes from a request header the
+   * client chooses, so without the key check any valid key could act as any profile.
+   *
+   * @param userId the caller's profile id
+   * @param apiKeyHash the SHA-256 hash of the caller's validated API key, or {@code null} when
+   *     authentication is disabled
+   * @return whether the caller owns this session
+   */
+  public boolean isOwnedBy(UUID userId, String apiKeyHash) {
+    return this.userId.equals(userId) && (apiKeyHash == null || apiKeyHash.equals(this.apiKeyHash));
+  }
+
+  /**
    * Adds a job to the session.
    *
    * @param routingJob The job to add.

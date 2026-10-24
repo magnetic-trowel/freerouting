@@ -67,7 +67,8 @@ class JobOwnershipTest {
     RoutingJobScheduler scheduler = mock(RoutingJobScheduler.class);
     SessionManager sessions = mock(SessionManager.class);
     when(scheduler.getJob(job.id.toString())).thenReturn(job);
-    when(sessions.getSession(job.sessionId.toString(), owner)).thenReturn(mock(Session.class));
+    when(sessions.getSession(job.sessionId.toString(), owner, null))
+        .thenReturn(mock(Session.class));
     try (var schedulerScope = mockStatic(RoutingJobScheduler.class);
         var sessionScope = mockStatic(SessionManager.class)) {
       schedulerScope.when(RoutingJobScheduler::getInstance).thenReturn(scheduler);

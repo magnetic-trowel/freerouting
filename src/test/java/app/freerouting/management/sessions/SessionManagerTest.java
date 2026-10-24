@@ -86,8 +86,28 @@ public class SessionManagerTest {
     sessionManager.createSession(userId, "Freerouting/" + Freerouting.VERSION_NUMBER_STRING);
     sessionManager.createSession(userId, "Freerouting/" + Freerouting.VERSION_NUMBER_STRING);
 
-    String[] sessionIds = sessionManager.listSessionIds(userId);
+    String[] sessionIds = sessionManager.listSessionIds(userId, null);
     assertTrue(sessionIds.length >= 2, "Session ID list should contain at least two IDs.");
+  }
+
+  /**
+   * The profile id is a header the client chooses, so a session also belongs to the API key that
+   * created it: another valid key sending the same profile id does not reach it.
+   */
+  @Test
+  void sessionBelongsToItsProfileAndToTheKeyThatCreatedIt() {
+    SessionManager sessionManager = SessionManager.getInstance();
+    UUID userId = UUID.randomUUID();
+    Session session = sessionManager.createSession(userId, "Test/1.0", "hash-of-key-a");
+    String id = session.id.toString();
+
+    assertSame(session, sessionManager.getSession(id, userId, "hash-of-key-a"));
+    assertNull(sessionManager.getSession(id, userId, "hash-of-key-b"));
+    assertNull(sessionManager.getSession(id, UUID.randomUUID(), "hash-of-key-a"));
+    // Authentication disabled: the profile alone decides.
+    assertSame(session, sessionManager.getSession(id, userId, null));
+    assertEquals(0, sessionManager.listSessionIds(userId, "hash-of-key-b").length);
+    assertEquals(List.of(id), List.of(sessionManager.listSessionIds(userId, "hash-of-key-a")));
   }
 
   @Test

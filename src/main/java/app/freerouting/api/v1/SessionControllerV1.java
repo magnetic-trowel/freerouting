@@ -95,7 +95,8 @@ public class SessionControllerV1 extends BaseController {
 
     // filter the list of sessions to only include the ones that the user has access
     // to
-    var response = GSON.toJson(SessionManager.getInstance().listSessionIds(userId));
+    var response =
+        GSON.toJson(SessionManager.getInstance().listSessionIds(userId, callerApiKeyHash()));
     FRAnalytics.apiEndpointCalled("GET v1/sessions/list", "", response, userId);
     return Response.ok(response).build();
   }
@@ -212,7 +213,7 @@ public class SessionControllerV1 extends BaseController {
     UUID userId = authenticateUser();
 
     // Return one session with the id of sessionId
-    Session session = SessionManager.getInstance().getSession(sessionId, userId);
+    Session session = findOwnedSession(sessionId, userId);
     if (session == null) {
       return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
     } else {
@@ -258,7 +259,7 @@ public class SessionControllerV1 extends BaseController {
     UUID userId = authenticateUser();
 
     // Return one session with the id of sessionId
-    Session session = SessionManager.getInstance().getSession(sessionId, userId);
+    Session session = findOwnedSession(sessionId, userId);
     if (session == null) {
       return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
     }
@@ -310,7 +311,7 @@ public class SessionControllerV1 extends BaseController {
                   java.util.Map.of("error", "GUI is not running, cannot monitor session visually")))
           .build();
     }
-    Session session = SessionManager.getInstance().getSession(sessionId, userId);
+    Session session = findOwnedSession(sessionId, userId);
     if (session == null) {
       return Response.status(Response.Status.NOT_FOUND)
           .entity(GSON.toJson(java.util.Map.of("error", "Session not found")))
