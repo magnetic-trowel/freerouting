@@ -2,7 +2,6 @@ package app.freerouting.autoroute.pipeline;
 
 import app.freerouting.autoroute.AutorouteAttemptResult;
 import app.freerouting.autoroute.AutorouteAttemptState;
-import app.freerouting.autoroute.BoardHistory;
 import app.freerouting.autoroute.maze.AutorouteControl;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.ConductionArea;
@@ -35,11 +34,9 @@ import java.util.TreeSet;
 /** Handles the sequencing of the auto-router passes. */
 public final class BatchAutorouter extends NamedAlgorithm {
 
-  // The lowest rank of the board to be selected to go back to.
-  // Must not exceed BoardHistory.MAX_HISTORY_SIZE so the check can actually fire.
-  static final int BOARD_RANK_LIMIT = BoardHistory.MAX_HISTORY_SIZE;
-  // Maximum number of tries on the same board
-  static final int MAXIMUM_TRIES_ON_THE_SAME_BOARD = 3;
+  // How often the pass loop goes back to one history board at most: the budget it always had,
+  // when the limit was 3 and compared with <=.
+  static final int MAX_RESTORES_OF_A_BOARD = 4;
   static final int TIME_LIMIT_TO_PREVENT_ENDLESS_LOOP = 1000;
   // The minimum number of passes to complete the board, unless all items are
   // routed

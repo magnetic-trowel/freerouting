@@ -1,11 +1,10 @@
 package app.freerouting.autoroute.pipeline;
 
-import static app.freerouting.autoroute.pipeline.BatchAutorouter.BOARD_RANK_LIMIT;
 import static app.freerouting.autoroute.pipeline.BatchAutorouter.FANOUT_RECOVERY_STAGNATION_PASSES;
 import static app.freerouting.autoroute.pipeline.BatchAutorouter.LAST_MILE_INCOMPLETE_LIMIT;
 import static app.freerouting.autoroute.pipeline.BatchAutorouter.LAST_MILE_MAX_ATTEMPTS;
 import static app.freerouting.autoroute.pipeline.BatchAutorouter.LAST_MILE_STAGNATION_PASSES;
-import static app.freerouting.autoroute.pipeline.BatchAutorouter.MAXIMUM_TRIES_ON_THE_SAME_BOARD;
+import static app.freerouting.autoroute.pipeline.BatchAutorouter.MAX_RESTORES_OF_A_BOARD;
 import static app.freerouting.autoroute.pipeline.BatchAutorouter.STAGNATION_PASS_LIMIT;
 import static app.freerouting.autoroute.pipeline.BatchAutorouter.STAGNATION_SCORE_THRESHOLD;
 import static app.freerouting.autoroute.pipeline.BatchAutorouter.STOP_AT_PASS_MINIMUM;
@@ -389,18 +388,11 @@ final class AutorouteBatchLoop {
           // ">=" test would restore on every check cycle, growing the history unboundedly
           // and never stopping.
           if (bh.getMaxScore() > boardScoreAfter) {
-            var boardToRestore = bh.restoreBoard(MAXIMUM_TRIES_ON_THE_SAME_BOARD);
+            var boardToRestore = bh.restoreBoard(MAX_RESTORES_OF_A_BOARD);
             if (boardToRestore == null) {
               job.logInfo(
                   "The router was not able to improve the board, stopping the auto-router.");
               stopFor(BatchAutorouter.StopReason.NO_IMPROVEMENT);
-              break;
-            }
-
-            int boardToRestoreRank = bh.getRank(boardToRestore);
-
-            if (boardToRestoreRank > BOARD_RANK_LIMIT) {
-              stopFor(BatchAutorouter.StopReason.STAGNATION);
               break;
             }
 

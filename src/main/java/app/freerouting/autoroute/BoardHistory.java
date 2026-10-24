@@ -167,12 +167,13 @@ public class BoardHistory {
   }
 
   /**
-   * Returns the best board in the history that has a restore count less than or equal to
-   * maxAllowedRestoreCount. Returns null if no such board exists.
+   * Returns a copy of the best board in the history that was restored fewer than maxRestores times
+   * (no limit if maxRestores is 0 or less), and counts the restore. Returns null if no such board
+   * exists.
    */
-  public synchronized RoutingBoard restoreBoard(int maxAllowedRestoreCount) {
-    if (maxAllowedRestoreCount <= 0) {
-      maxAllowedRestoreCount = Integer.MAX_VALUE;
+  public synchronized RoutingBoard restoreBoard(int maxRestores) {
+    if (maxRestores <= 0) {
+      maxRestores = Integer.MAX_VALUE;
     }
 
     rwLock.readLock().lock();
@@ -182,7 +183,7 @@ public class BoardHistory {
       boards.sort((o1, o2) -> Float.compare(o2.score, o1.score));
 
       for (BoardHistoryEntry entry : boards) {
-        if (entry.restoreCount <= maxAllowedRestoreCount) {
+        if (entry.restoreCount < maxRestores) {
           entry.restoreCount++;
           return (RoutingBoard) BasicBoard.deserialize(entry.board);
         }
@@ -203,22 +204,6 @@ public class BoardHistory {
     rwLock.readLock().lock();
     try {
       return boards.size();
-    } finally {
-      rwLock.readLock().unlock();
-    }
-  }
-
-  /** Returns the rank (1-indexed) of the specified board, or -1 if not found. */
-  public int getRank(RoutingBoard board) {
-    String hash = board.getHash();
-    rwLock.readLock().lock();
-    try {
-      for (int i = 0; i < boards.size(); i++) {
-        if (boards.get(i).hash.equals(hash)) {
-          return i + 1;
-        }
-      }
-      return -1;
     } finally {
       rwLock.readLock().unlock();
     }
