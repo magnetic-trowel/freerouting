@@ -171,7 +171,24 @@ public final class FoundConnectionInserter {
     // line for line.
     final double savedEdgeToTurnDist = board.rules.getPinEdgeToTurnDist();
     board.rules.setPinEdgeToTurnDist(-1);
+    boolean result;
+    try {
+      result = insertTraceLines(trace);
+    } finally {
+      board.rules.setPinEdgeToTurnDist(savedEdgeToTurnDist);
+    }
+    if (this.firstCorner == null) {
+      this.firstCorner = trace.corners[0];
+    }
+    this.lastCorner = trace.corners[trace.corners.length - 1];
+    return result;
+  }
 
+  /**
+   * Inserts the lines of a trace of several corners one by one, then removes the trace stubs left
+   * at its corners. Returns false if a line could not be inserted.
+   */
+  private boolean insertTraceLines(PlannedConnection.Segment trace) {
     // Look for pins att the start and the end of trace in case that neckdown is necessary.
     Pin startPin = null;
     Pin endPin = null;
@@ -484,11 +501,6 @@ public final class FoundConnectionInserter {
           new Point[0]);
     }
 
-    board.rules.setPinEdgeToTurnDist(savedEdgeToTurnDist);
-    if (this.firstCorner == null) {
-      this.firstCorner = trace.corners[0];
-    }
-    this.lastCorner = trace.corners[trace.corners.length - 1];
     return result;
   }
 
