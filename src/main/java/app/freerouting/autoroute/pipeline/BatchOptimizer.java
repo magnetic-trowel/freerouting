@@ -836,6 +836,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     }
     Map<Integer, Future<CandidateResult>> futureByIndex = new HashMap<>();
     int nextToSubmit = 0;
+    PassStop passStop = new PassStop(this.thread);
 
     try {
       for (int i = 0; i < candidateItemIds.size(); i += chunkSize) {
@@ -872,7 +873,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
                         this.minCumulativeTraceLength,
                         withPreferredDirections,
                         this.useIncreasedRipupCosts,
-                        this.thread,
+                        passStop,
                         this.deadlineMs,
                         baselineMetrics,
                         selection != CommitSelection.ALL,
@@ -936,7 +937,21 @@ public final class BatchOptimizer extends NamedAlgorithm {
         }
       }
     } finally {
+      // Candidates still running past an early stop are not interruptible; let them stop at their
+      // next stop check instead of routing their discarded boards into the next pass.
+      passStop.endPass();
       pool.shutdownNow();
+    }
+
+    // A stop or deadline after the last chunk check still marked every candidate evaluated after
+    // it as not improved, so the winner would come from a cut-off candidate set and the result
+    // would depend on when the stop came. Drop the pass, as a stop seen at a chunk boundary does.
+    if (!stoppedOrTimedOut && passInterrupted(this.thread, this.deadlineMs)) {
+      stoppedOrTimedOut = true;
+      if (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs) {
+        job.logInfo("Optimizer stage timed out.");
+        this.isTimedOut = true;
+      }
     }
 
     float routeImproved = 0.0f;
@@ -1113,6 +1128,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
   private static boolean isRunning(StoppableThread thread, Long deadlineMs) {
     return (thread == null || !thread.isStopRequested())
         && (deadlineMs == null || System.currentTimeMillis() < deadlineMs);
+  }
+
+  /**
+   * True if a stop or the optimizer deadline has come by the end of a pass's candidate loop. The
+   * pass must then commit nothing: candidates evaluated after the stop were cut short and count as
+   * not improved, so the pass's winner would depend on when the stop came.
+   */
+  static boolean passInterrupted(StoppableThread thread, Long deadlineMs) {
+    return !isRunning(thread, deadlineMs);
   }
 
   /** How a pass chooses the improvements it commits; see {@code optimizer.commit_selection}. */
@@ -1443,6 +1467,52 @@ public final class BatchOptimizer extends NamedAlgorithm {
             < 0;
       }
       return result.improvedOver(other.result);
+    }
+  }
+
+  /**
+   * The stop flag of one pass's candidates. It is set when the job's flag is, and also once the
+   * pass has consumed all the results it uses, so that candidates left running by an early stop
+   * stop working on boards nobody reads. Every consumed candidate completed before that, so the
+   * results the pass uses are unchanged. Stop requests made by a candidate go to the job.
+   */
+  static final class PassStop extends StoppableThread {
+    private final StoppableThread job;
+    private volatile boolean passEnded;
+
+    PassStop(StoppableThread job) {
+      this.job = job;
+    }
+
+    void endPass() {
+      this.passEnded = true;
+    }
+
+    @Override
+    protected void threadAction() {}
+
+    @Override
+    public boolean isStopRequested() {
+      return passEnded || (job != null && job.isStopRequested());
+    }
+
+    @Override
+    public boolean isStopAutoRouterRequested() {
+      return passEnded || (job != null && job.isStopAutoRouterRequested());
+    }
+
+    @Override
+    public void requestStop() {
+      if (job != null) {
+        job.requestStop();
+      }
+    }
+
+    @Override
+    public void requestStopAutoRouter() {
+      if (job != null) {
+        job.requestStopAutoRouter();
+      }
     }
   }
 
