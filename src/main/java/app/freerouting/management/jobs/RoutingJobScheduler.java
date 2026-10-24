@@ -307,12 +307,15 @@ public final class RoutingJobScheduler {
                                         + job.state
                                         + ") while it was being set up; not started.");
                               }
-                            } catch (Exception e) {
+                            } catch (Throwable e) {
+                              // An Error too (an OutOfMemoryError while loading a large board):
+                              // only this job fails, and its partly loaded board is let go.
                               FRLogger.error(
                                   "Failed to set up routing job '"
                                       + job.id
                                       + "', it will be terminated.",
                                   e);
+                              job.board = null;
                               job.state = RoutingJobState.TERMINATED;
                             }
                           } else {
@@ -338,7 +341,9 @@ public final class RoutingJobScheduler {
                   Thread.sleep(250);
                 } catch (InterruptedException e) {
                   FRLogger.error("RoutingJobScheduler thread was interrupted.", e);
-                } catch (Exception e) {
+                } catch (Throwable e) {
+                  // Nothing else restarts this thread: if an Error ended it, no job would ever
+                  // start again.
                   FRLogger.error(
                       "RoutingJobScheduler thread encountered an unexpected error and will "
                           + "continue.",
