@@ -179,6 +179,8 @@ If `Freerouting-Environment-Host` is absent or does not match the `<ToolName>/<V
 
 ### Routing Jobs
 
+Every endpoint that takes a `{jobId}` answers a job that does not exist and a job of another profile the same way: **HTTP 404** with `{"error":"Job not found."}` (a stream endpoint closes the stream). A response never tells whether a job ID exists or shows another profile's session ID.
+
 - **Enqueue a Job**
 
   ```http

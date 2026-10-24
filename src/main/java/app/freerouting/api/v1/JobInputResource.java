@@ -11,7 +11,6 @@ import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
 import app.freerouting.io.FileFormat;
 import app.freerouting.management.jobs.RoutingJobScheduler;
-import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.util.TextManager;
 import com.google.gson.JsonParseException;
@@ -112,8 +111,7 @@ public class JobInputResource extends BaseController {
     }
 
     // Check if the sessionId references a valid session
-    Session session =
-        SessionManager.getInstance().getSession(jobRequest.sessionId.toString(), userId);
+    Session session = findOwnedSession(jobRequest.sessionId.toString(), userId);
     if (session == null) {
       return Response.status(Response.Status.BAD_REQUEST)
           .entity("{\"error\":\"The session ID '" + jobRequest.sessionId + "' is invalid.\"}")
@@ -191,20 +189,10 @@ public class JobInputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    // Get the job based on the jobId
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-
-    // If the job does not exist, return a 404 response
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    // Check if the sessionId references a valid session
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+      return jobNotFound();
     }
 
     // Check if the job is queued and have not started yet
@@ -255,7 +243,7 @@ public class JobInputResource extends BaseController {
                     mediaType = MediaType.APPLICATION_JSON,
                     schema = @Schema(implementation = RouterSettings.class))),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(responseCode = "400", description = "Invalid request or session")
+        @ApiResponse(responseCode = "400", description = "Invalid request")
       })
   @GET
   @Path("/{jobId}/settings")
@@ -265,16 +253,10 @@ public class JobInputResource extends BaseController {
           String jobId) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+      return jobNotFound();
     }
 
     RouterSettings effectiveSettings;
@@ -366,20 +348,10 @@ public class JobInputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    // Get the job based on the jobId
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-
-    // If the job does not exist, return a 404 response
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    // Check if the sessionId references a valid session
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+      return jobNotFound();
     }
 
     // Check if the job is queued and have not started yet
@@ -496,16 +468,10 @@ public class JobInputResource extends BaseController {
       String requestBody) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+      return jobNotFound();
     }
 
     if (job.state != RoutingJobState.QUEUED) {
@@ -600,16 +566,10 @@ public class JobInputResource extends BaseController {
       String jsonBody) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+      return jobNotFound();
     }
 
     if (job.state != RoutingJobState.QUEUED) {

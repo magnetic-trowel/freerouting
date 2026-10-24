@@ -1,7 +1,13 @@
 package app.freerouting.api;
 
+import app.freerouting.core.RoutingJob;
+import app.freerouting.core.Session;
+import app.freerouting.management.jobs.RoutingJobScheduler;
+import app.freerouting.management.sessions.SessionManager;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import java.util.UUID;
 
 /**
@@ -120,5 +126,34 @@ public class BaseController {
     // TODO: authenticate the user by calling the auth endpoint
 
     return userId;
+  }
+
+  /**
+   * Returns the session when it exists and belongs to the caller, or {@code null}. Another caller's
+   * session is answered like an absent one.
+   */
+  protected Session findOwnedSession(String sessionId, UUID userId) {
+    return SessionManager.getInstance().getSession(sessionId, userId);
+  }
+
+  /**
+   * Returns the job when it exists and belongs to the caller, or {@code null}. Another caller's job
+   * is answered like an absent one ({@link #jobNotFound()}), so a response neither shows a foreign
+   * session id nor tells whether a job id exists.
+   */
+  protected RoutingJob findOwnedJob(String jobId, UUID userId) {
+    RoutingJob job = RoutingJobScheduler.getInstance().getJob(jobId);
+    if (job == null || job.sessionId == null) {
+      return null;
+    }
+    return findOwnedSession(job.sessionId.toString(), userId) != null ? job : null;
+  }
+
+  /** The response for a job that does not exist or belongs to another caller. */
+  protected static Response jobNotFound() {
+    return Response.status(Response.Status.NOT_FOUND)
+        .entity("{\"error\":\"Job not found.\"}")
+        .type(MediaType.APPLICATION_JSON)
+        .build();
   }
 }

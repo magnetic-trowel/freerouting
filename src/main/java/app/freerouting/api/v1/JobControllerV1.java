@@ -139,8 +139,7 @@ public class JobControllerV1 extends BaseController {
             content =
                 @Content(
                     mediaType = MediaType.APPLICATION_JSON,
-                    examples = @ExampleObject(value = "{}"))),
-        @ApiResponse(responseCode = "400", description = "Invalid session ID")
+                    examples = @ExampleObject(value = "{\"error\":\"Job not found.\"}")))
       })
   @Path("/{jobId}")
   public Response getJob(
@@ -213,8 +212,7 @@ public class JobControllerV1 extends BaseController {
                 @Content(
                     mediaType = MediaType.APPLICATION_JSON,
                     schema = @Schema(implementation = RoutingJob.class))),
-        @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(responseCode = "400", description = "Invalid session ID")
+        @ApiResponse(responseCode = "404", description = "Job not found")
       })
   @Path("/{jobId}/cancel")
   public Response cancelJob(
@@ -467,9 +465,7 @@ public class JobControllerV1 extends BaseController {
             responseCode = "204",
             description = "Job is in progress but no output data is available yet"),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(
-            responseCode = "400",
-            description = "Job failed, was cancelled, or session is invalid")
+        @ApiResponse(responseCode = "400", description = "Job failed or was cancelled")
       })
   @Path("/{jobId}/output")
   public Response downloadOutput(
@@ -619,8 +615,7 @@ public class JobControllerV1 extends BaseController {
             responseCode = "200",
             description = "Logs retrieved successfully",
             content = @Content(mediaType = MediaType.APPLICATION_JSON)),
-        @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(responseCode = "400", description = "Invalid session ID")
+        @ApiResponse(responseCode = "404", description = "Job not found")
       })
   @Path("/{jobId}/logs")
   public Response logs(
@@ -686,7 +681,7 @@ public class JobControllerV1 extends BaseController {
                     mediaType = MediaType.APPLICATION_JSON,
                     schema = @Schema(implementation = KiCadDrcReport.class))),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(responseCode = "400", description = "Invalid session or failed to load board"),
+        @ApiResponse(responseCode = "400", description = "Failed to load board"),
         @ApiResponse(
             responseCode = "410",
             description = "The routed board of this finished job is no longer kept in memory"),

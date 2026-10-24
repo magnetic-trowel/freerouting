@@ -8,15 +8,12 @@ import app.freerouting.api.dto.BoardFilePayload;
 import app.freerouting.board.actions.ItemIdGenerator;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.core.RoutingJobState;
-import app.freerouting.core.Session;
 import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.io.FileFormat;
 import app.freerouting.io.kicad.KiCadDrcReport;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.management.BoardLoader;
 import app.freerouting.management.HeadlessBoardManager;
-import app.freerouting.management.jobs.RoutingJobScheduler;
-import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.util.TextManager;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -100,9 +97,7 @@ public class JobOutputResource extends BaseController {
             responseCode = "204",
             description = "Job is in progress but no output data is available yet"),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(
-            responseCode = "400",
-            description = "Job failed, was cancelled, or session is invalid")
+        @ApiResponse(responseCode = "400", description = "Job failed or was cancelled")
       })
   @GET
   @Path("/{jobId}/output")
@@ -116,22 +111,10 @@ public class JobOutputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    // Get the job based on the jobId
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-
-    // If the job does not exist, return a 404 response
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    // Check if the sessionId references a valid session
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity(
-              GSON.toJson(
-                  java.util.Map.of("error", "The session ID '" + job.sessionId + "' is invalid.")))
-          .build();
+      return jobNotFound();
     }
 
     // Reject jobs that have failed, been cancelled, or are in an invalid terminal state
@@ -244,18 +227,10 @@ public class JobOutputResource extends BaseController {
           String jobId) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity(
-              GSON.toJson(
-                  java.util.Map.of("error", "The session ID '" + job.sessionId + "' is invalid.")))
-          .build();
+      return jobNotFound();
     }
 
     // Reject terminal error states
@@ -380,12 +355,9 @@ public class JobOutputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    // Get the job based on the jobId
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-
-    // If the job does not exist or session is invalid, close the connection
-    if (job == null
-        || SessionManager.getInstance().getSession(job.sessionId.toString(), userId) == null) {
+    // Another caller's job is answered like an absent one: the stream closes.
+    var job = findOwnedJob(jobId, userId);
+    if (job == null) {
       try {
         eventSink.close();
       } catch (Exception e) {
@@ -437,9 +409,9 @@ public class JobOutputResource extends BaseController {
       @Context Sse sse) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-    if (job == null
-        || SessionManager.getInstance().getSession(job.sessionId.toString(), userId) == null) {
+    // Another caller's job is answered like an absent one: the stream closes.
+    var job = findOwnedJob(jobId, userId);
+    if (job == null) {
       try {
         eventSink.close();
       } catch (Exception e) {
@@ -477,7 +449,7 @@ public class JobOutputResource extends BaseController {
                     mediaType = MediaType.APPLICATION_JSON,
                     schema = @Schema(implementation = KiCadDrcReport.class))),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(responseCode = "400", description = "Invalid session or failed to load board"),
+        @ApiResponse(responseCode = "400", description = "Failed to load board"),
         @ApiResponse(
             responseCode = "410",
             description = "The routed board of this finished job is no longer kept in memory"),
@@ -498,22 +470,10 @@ public class JobOutputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    // Get the job based on the jobId
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-
-    // If the job does not exist, return a 404 response
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND)
-          .entity("{\"error\":\"Job not found.\"}")
-          .build();
-    }
-
-    // Check if the sessionId references a valid session
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+      return jobNotFound();
     }
 
     // A released board must not be replaced by the unrouted board of the input.
@@ -600,7 +560,7 @@ public class JobOutputResource extends BaseController {
                     schema =
                         @Schema(implementation = app.freerouting.drc.DrcSummaryResponse.class))),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(responseCode = "400", description = "Invalid session or failed to load board"),
+        @ApiResponse(responseCode = "400", description = "Failed to load board"),
         @ApiResponse(
             responseCode = "410",
             description = "The routed board of this finished job is no longer kept in memory"),
@@ -617,18 +577,10 @@ public class JobOutputResource extends BaseController {
           String jobId) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND)
-          .entity("{\"error\":\"Job not found.\"}")
-          .build();
-    }
-
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+      return jobNotFound();
     }
 
     if (job.isBoardReleased()) {
