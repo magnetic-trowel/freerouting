@@ -12,6 +12,7 @@ import app.freerouting.settings.sources.DefaultSettings;
 import app.freerouting.util.AtomicFiles;
 import app.freerouting.util.ReflectionUtil;
 import app.freerouting.util.gson.GsonProvider;
+import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;
 import java.io.IOException;
 import java.io.Reader;
@@ -23,6 +24,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Arrays;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 
@@ -106,6 +108,9 @@ public class GlobalSettings implements Serializable {
    * #getMaxPasses()} and is never written to {@code freerouting.json}.
    */
   private final transient RouterSettings commandLineRouterSettings = new RouterSettings();
+
+  /** The persisted values that the command line or environment changed for this process. */
+  private final transient ProcessOverrides processOverrides = new ProcessOverrides();
 
   @SerializedName("drc")
   public final DesignRulesCheckerSettings drcSettings = new DesignRulesCheckerSettings();
@@ -442,6 +447,10 @@ public class GlobalSettings implements Serializable {
    * -SNAPSHOT} suffix) before writing so that SNAPSHOT builds never pollute the stored config with
    * a non-release version string.
    *
+   * <p>Values that command-line arguments or {@code FREEROUTING__} environment variables set for
+   * this process are not saved: the file keeps its own value for them, unless the value was changed
+   * again in this process (for example by the user through the GUI).
+   *
    * <p>Throws {@link AccessDeniedException} (subtype of {@link IOException}) when the OS denies
    * write access to the target directory or file. The exception message contains the path; the
    * caller should log an actionable warning advising the user to check permissions and, in Docker
@@ -492,7 +501,9 @@ public class GlobalSettings implements Serializable {
     try {
       AtomicFiles.write(
           configurationFilePath,
-          GsonProvider.GSON.toJson(globalSettings).getBytes(StandardCharsets.UTF_8));
+          GsonProvider.GSON
+              .toJson(globalSettings.toPersistedJson())
+              .getBytes(StandardCharsets.UTF_8));
     } catch (AccessDeniedException e) {
       throw new AccessDeniedException(
           configurationFilePath.toString(),
@@ -540,10 +551,58 @@ public class GlobalSettings implements Serializable {
     }
   }
 
-  /** Applies non-router {@code FREEROUTING__} environment variables to this object. */
+  /**
+   * Returns the JSON form of these settings as {@link #saveAsJson} writes it: values that only the
+   * command line or environment set for this process are replaced with the values from the file.
+   */
+  private JsonObject toPersistedJson() {
+    JsonObject json = toJsonTree();
+    if (!processOverrides.isEmpty()) {
+      processOverrides.restorePersistedValues(json, readSavedSettings());
+    }
+    return json;
+  }
+
+  private JsonObject toJsonTree() {
+    return GsonProvider.GSON.toJsonTree(this).getAsJsonObject();
+  }
+
+  /**
+   * Returns the settings currently saved in {@code freerouting.json} in the JSON form of {@link
+   * #toJsonTree()}, or {@code null} when the file is missing or cannot be read.
+   */
+  private static JsonObject readSavedSettings() {
+    if (!Files.exists(configurationFilePath)) {
+      return null;
+    }
+    try (Reader reader = Files.newBufferedReader(configurationFilePath)) {
+      GlobalSettings saved = GsonProvider.GSON.fromJson(reader, GlobalSettings.class);
+      return saved != null ? saved.toJsonTree() : null;
+    } catch (Exception e) {
+      FRLogger.debug(
+          "Could not read '" + configurationFilePath + "' before saving: " + e.getMessage());
+      return null;
+    }
+  }
+
+  /**
+   * Applies non-router {@code FREEROUTING__} environment variables to this object, for this process
+   * only: {@link #saveAsJson} does not save them.
+   */
   public void applyNonRouterEnvironmentVariables() {
+    applyNonRouterEnvironmentVariables(System.getenv());
+  }
+
+  /**
+   * Applies the non-router {@code FREEROUTING__} entries of {@code environment} to this object, for
+   * this process only.
+   *
+   * @param environment environment variables by name
+   */
+  void applyNonRouterEnvironmentVariables(Map<String, String> environment) {
+    JsonObject before = toJsonTree();
     // Read all the environment variables that begins with "FREEROUTING__"
-    for (var entry : System.getenv().entrySet()) {
+    for (var entry : environment.entrySet()) {
       if (entry.getKey().startsWith("FREEROUTING__")) {
         String propertyName =
             entry
@@ -561,6 +620,7 @@ public class GlobalSettings implements Serializable {
         setValue(propertyName, entry.getValue());
       }
     }
+    processOverrides.record(before, toJsonTree());
   }
 
   /**
@@ -611,15 +671,23 @@ public class GlobalSettings implements Serializable {
   }
 
   /**
-   * Applies supported command-line arguments to these settings.
+   * Applies supported command-line arguments to these settings, for this process only.
    *
    * <p>Router options ({@code --router.*} and the legacy {@code -mp}, {@code -mt}, {@code -oit},
-   * {@code -us}, {@code -is}, {@code -inc} and {@code -drc} flags) are kept for this process only
-   * and are never saved to {@code freerouting.json}.
+   * {@code -us}, {@code -is}, {@code -inc} and {@code -drc} flags) are kept apart and are never
+   * saved to {@code freerouting.json}. Other values (for example {@code --api_server.*} or {@code
+   * -di}) take effect in place, and {@link #saveAsJson} writes the file's value for them unless
+   * they are changed again in this process, for example through the GUI.
    *
    * @param args command-line arguments to parse
    */
   public void applyCommandLineArguments(String[] args) {
+    JsonObject before = toJsonTree();
+    parseCommandLineArguments(args);
+    processOverrides.record(before, toJsonTree());
+  }
+
+  private void parseCommandLineArguments(String[] args) {
     for (int i = 0; i < args.length; i++) {
       try {
         if ("-help".equalsIgnoreCase(args[i])

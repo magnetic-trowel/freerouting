@@ -335,7 +335,7 @@ Tuning guidance:
 
 Freerouting can also be configured using command-line arguments. These arguments override the settings specified in the JSON configuration file. You must use `--{property-name}={property-value}` format, where `property-name` is the hierarchical definition of the property you want to change and the `property-value` is its desired value. You can use `.`, `-` and `:` characters to separate the hierarchical levels in the `property-name` parameter.
 
-Router options given on the command line (`--router.*` and the short flags such as `-mp`, `-mt`, `-oit` and `-inc`) apply to that run only. They are never written to `freerouting.json`, even when the GUI saves its settings during the session, so they do not become defaults for later runs. To make a router option permanent, put it in the `router` section of `freerouting.json`.
+Command-line arguments and `FREEROUTING__*` environment variables apply to that run only, for every section (for example `--router.autorouter.max_passes=3`, `-mt 1`, `--api_server.authentication.enabled=false` or `-di <dir>`). When the GUI saves its settings during the session, `freerouting.json` keeps its own values for them, so they do not become defaults for later runs. A value the user changes in the GUI during the session is still saved, even if it was first given on the command line. To make an option permanent, put it in `freerouting.json`.
 
 **Scalar example:**
 
@@ -355,7 +355,7 @@ java -jar freerouting.jar --mcp_server.rate_limit.enabled=true --mcp_server.rate
 
 ### Environment Variables
 
-Environment variables provide another way to override settings. The environment variable names correspond to the keys in the JSON settings file, starting with `FREEROUTING__` and periods replaced by double underscores.
+Environment variables provide another way to override settings. The environment variable names correspond to the keys in the JSON settings file, starting with `FREEROUTING__` and periods replaced by double underscores. Like command-line arguments, they apply to the current process only and are not saved to `freerouting.json`.
 
 **Scalar example:**
 
