@@ -63,9 +63,31 @@ class DsnReaderMalformedInputTest {
 
   @Test
   void integerBeyondIntRangeIsReadAsNumber() {
-    // NumberFormatException from Integer.valueOf in the scanner
+    // NumberFormatException from Integer.valueOf in the scanner; read as a number, the outline is
+    // then 2147483648 mil (55 km) wide
+    BoardReadResult.ParseError error =
+        readParseError(
+            HEADER + "    (boundary (path pcb 0 0 0 2147483648 0 1000 -1000 0 0))\n  )\n)\n");
+    assertTrue(error.detail().contains("54546 m wide"), error.detail());
+  }
+
+  @Test
+  void boardOutlineManyMetresWideIsParseError() {
+    // a 100 mm board in um declared as mm: the outline was cut into millions of tree shapes
+    BoardReadResult.ParseError error =
+        readParseError(
+            "(pcb t\n  (resolution mm 10)\n  (structure\n    (layer F.Cu (type signal))\n"
+                + "    (boundary (rect pcb 0 0 100000 80000))\n  )\n)\n");
+    assertTrue(error.detail().contains("100 m wide"), error.detail());
+    assertTrue(error.detail().contains("mm"), error.detail());
+  }
+
+  @Test
+  void boardOutlineOfTwoMetresIsRead() {
     RoutingBoard board =
-        readBoard(HEADER + "    (boundary (path pcb 0 0 0 2147483648 0 1000 -1000 0 0))\n  )\n)\n");
+        readBoard(
+            "(pcb t\n  (resolution mm 10)\n  (structure\n    (layer F.Cu (type signal))\n"
+                + "    (boundary (rect pcb 0 0 2000 500))\n  )\n)\n");
     assertEquals(1, board.getLayerCount());
   }
 

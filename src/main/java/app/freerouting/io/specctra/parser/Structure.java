@@ -38,6 +38,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
@@ -48,6 +49,14 @@ import java.util.Set;
   "checkstyle:VariableDeclarationUsageDistance"
 })
 public class Structure extends ScopeKeyword {
+
+  /**
+   * The widest board outline that is read, in millimetres. Outline strip pieces, search-tree
+   * sections and clearances are physical lengths, so a board many metres wide (a design in um
+   * declared as mm is 1000 times too large) would be cut into millions of tree shapes, a load that
+   * no job timeout can interrupt.
+   */
+  private static final double MAX_BOARD_SIZE_MM = 10_000;
 
   /** Creates a new instance of Structure. */
   public Structure() {
@@ -1315,6 +1324,23 @@ public class Structure extends ScopeKeyword {
     if (!Double.isFinite(maxCoor)) {
       // the scaling loop below would never end
       return scopeParameter.parseError("the board outline coordinates are out of range");
+    }
+    double boardSizeMm =
+        app.freerouting.board.model.structure.Unit.scale(
+            Math.max(
+                boundingBox.coor[2] - boundingBox.coor[0],
+                boundingBox.coor[3] - boundingBox.coor[1]),
+            scopeParameter.unit,
+            app.freerouting.board.model.structure.Unit.MM);
+    if (boardSizeMm > MAX_BOARD_SIZE_MM) {
+      return scopeParameter.parseError(
+          String.format(
+              Locale.ROOT,
+              "the board outline is %.0f m wide in the unit %s of the (resolution ...) scope,"
+                  + " more than %.0f m; check that unit",
+              boardSizeMm / 1000,
+              scopeParameter.unit,
+              MAX_BOARD_SIZE_MM / 1000));
     }
     // make scalefactor smaller, if there is a danger of integer overflow.
     while (5 * maxCoor >= Limits.CRIT_INT) {
