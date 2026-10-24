@@ -23,6 +23,7 @@ import app.freerouting.rules.Net;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -244,6 +245,21 @@ public final class SesWriter {
         continue;
       }
       writePadstack(viaPadstack, board, identifierType, coordinateTransform, file);
+    }
+    // Design vias may use a padstack that is not in the via list; KiCad rejects the whole session
+    // when a via names a padstack that library_out does not define.
+    Set<Padstack> usedPadstacks = new HashSet<>();
+    for (Via via : board.getVias()) {
+      if (via.netCount() > 0 && via.getFixedState() != FixedState.SYSTEM_FIXED) {
+        usedPadstacks.add(via.getPadstack());
+      }
+    }
+    int padstackCount = board.library.padstacks != null ? board.library.padstacks.count() : 0;
+    for (int i = 1; i <= padstackCount; i++) {
+      Padstack padstack = board.library.padstacks.get(i);
+      if (usedPadstacks.contains(padstack) && writtenPadstackNames.add(padstack.name)) {
+        writePadstack(padstack, board, identifierType, coordinateTransform, file);
+      }
     }
     file.endScope();
   }
