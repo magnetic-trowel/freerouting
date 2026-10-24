@@ -23,8 +23,10 @@ import app.freerouting.rules.Net;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -325,14 +327,26 @@ public final class SesWriter {
       throws IOException {
     file.startScope();
     file.write("network_out ");
+    // A net split into subnets keeps one scope per subnet, empty ones too, so that SesReader can
+    // give the n-th scope of a name to the n-th subnet.
+    Map<String, Integer> subnetCounts = new HashMap<>();
     for (int i = 1; i <= board.rules.nets.maxNetNumber(); i++) {
-      writeNet(i, board, identifierType, coordinateTransform, file);
+      Net net = board.rules.nets.get(i);
+      if (net != null) {
+        subnetCounts.merge(net.name, 1, Integer::sum);
+      }
+    }
+    for (int i = 1; i <= board.rules.nets.maxNetNumber(); i++) {
+      Net net = board.rules.nets.get(i);
+      boolean splitNet = net != null && subnetCounts.get(net.name) > 1;
+      writeNet(i, splitNet, board, identifierType, coordinateTransform, file);
     }
     file.endScope();
   }
 
   private static void writeNet(
       int netNumber,
+      boolean writeEmpty,
       BasicBoard board,
       IdentifierType identifierType,
       CoordinateTransform coordinateTransform,
@@ -368,6 +382,12 @@ public final class SesWriter {
         writeConductionArea(
             (ConductionArea) currentItem, board, identifierType, coordinateTransform, file);
       }
+    }
+    if (!headerWritten && writeEmpty) {
+      file.startScope();
+      file.write("net ");
+      identifierType.writeStrict(board.rules.nets.get(netNumber).name, file);
+      headerWritten = true;
     }
     if (headerWritten) {
       file.endScope();

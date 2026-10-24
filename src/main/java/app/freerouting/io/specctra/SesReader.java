@@ -17,6 +17,10 @@ import app.freerouting.rules.Net;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Reads a Specctra session (.ses) file and imports the routing data (wires and vias) into a {@link
@@ -35,6 +39,9 @@ public final class SesReader {
   private int wiresImported;
   private int viasImported;
   private int errorsEncountered;
+
+  /** Number of {@code (net ...)} scopes read so far per net name. */
+  private final Map<String, Integer> netScopesRead = new HashMap<>();
 
   private SesReader(IJFlexScanner scanner, BasicBoard board, double scaleFactor) {
     this.scanner = scanner;
@@ -279,6 +286,20 @@ public final class SesReader {
     }
   }
 
+  /**
+   * Returns the net of the next {@code (net ...)} scope with this name. A net split into subnets
+   * (DSN {@code fromto} or {@code order}) has one scope per subnet, in net number order (see {@link
+   * SesWriter}); the n-th scope belongs to the n-th subnet.
+   */
+  private Net sessionNet(String netName) {
+    List<Net> candidates = new ArrayList<>(board.rules.nets.get(netName));
+    if (candidates.isEmpty()) {
+      return null;
+    }
+    int scopeIndex = netScopesRead.merge(netName, 1, Integer::sum) - 1;
+    return candidates.get(scopeIndex < candidates.size() ? scopeIndex : 0);
+  }
+
   /** Processes a single {@code (net ...)} scope containing wires and vias. */
   private void processNetScope() throws IOException {
     Object nextToken = this.scanner.nextToken();
@@ -292,7 +313,7 @@ public final class SesReader {
     }
     this.scanner.setScopeIdentifier(netName);
 
-    Net net = board.rules.nets.get(netName, 1);
+    Net net = sessionNet(netName);
     if (net == null) {
       FRLogger.warn("SesReader: net not found: '" + netName + "' — skipping");
       errorsEncountered++;
