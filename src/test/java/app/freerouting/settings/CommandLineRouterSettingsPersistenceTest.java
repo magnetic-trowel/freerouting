@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.sources.CliSettings;
@@ -124,18 +125,24 @@ class CommandLineRouterSettingsPersistenceTest {
 
   @Test
   void explicitlySavedRouterValueIsPersisted() throws IOException {
-    startGuiSession(new String[] {"--router.autorouter.max_passes=3"});
+    GlobalSettings globalSettings =
+        startGuiSession(new String[] {"--router.autorouter.max_passes=3"});
 
-    assertEquals(
-        Boolean.TRUE, GlobalSettings.setDefaultValue("router.autorouter.max_passes", "42"));
-    assertEquals(
-        Boolean.TRUE,
-        GlobalSettings.setDefaultValue("router.autorouter.ignore_net_classes", "GND,VCC"));
+    assertTrue(globalSettings.setDefaultValue("router.autorouter.max_passes", "42"));
+    assertTrue(globalSettings.setDefaultValue("router.autorouter.ignore_net_classes", "GND,VCC"));
 
     RouterSettings persisted = readPersistedRouterSettings();
     assertEquals(42, persisted.autorouter.maxPasses);
     assertArrayEquals(new String[] {"GND", "VCC"}, persisted.autorouter.ignoreNetClasses);
     assertEquals(2.5f, persisted.optimizer.optimizationImprovementThreshold, 0.0001f);
+
+    // The session's long-lived copy saves later (for example a GUI setting): it must keep the
+    // explicitly saved values instead of writing back the ones it loaded at startup.
+    globalSettings.guiSettings.showRoutingSummary = !globalSettings.guiSettings.showRoutingSummary;
+    GlobalSettings.saveAsJson(globalSettings);
+    persisted = readPersistedRouterSettings();
+    assertEquals(42, persisted.autorouter.maxPasses);
+    assertArrayEquals(new String[] {"GND", "VCC"}, persisted.autorouter.ignoreNetClasses);
   }
 
   @Test

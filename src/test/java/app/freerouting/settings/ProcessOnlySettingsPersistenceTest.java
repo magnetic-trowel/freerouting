@@ -116,7 +116,7 @@ class ProcessOnlySettingsPersistenceTest {
     GlobalSettings globalSettings = startGuiSession("-di", "/cli/boards");
 
     // Opening a board from the command-line directory saves it explicitly (BoardFrameFileActions).
-    GlobalSettings.setDefaultValue("gui.input_directory", "/cli/boards");
+    globalSettings.setDefaultValue("gui.input_directory", "/cli/boards");
     GlobalSettings.saveAsJson(globalSettings);
 
     assertEquals("/cli/boards", GlobalSettings.load().guiSettings.inputDirectory);

@@ -498,15 +498,26 @@ public class GlobalSettings implements Serializable {
   }
 
   /**
-   * Sets a property value and permanently saves it into the settings file. settings file. Property
-   * names are in the format of "section.property" (eg. "router.max_passes", "gui:input_directory"
-   * or "profile-email").
+   * Sets a property value in these settings and saves it to the settings file at once, also for a
+   * property that the command line or environment set for this process. Other unsaved changes are
+   * not written. Property names are in the format of "section.property" (eg. "router.max_passes",
+   * "gui:input_directory" or "profile-email").
+   *
+   * <p>The value is set here too, so that a later {@link #saveAsJson} of these settings, which may
+   * be the session's long-lived copy, keeps it instead of writing back the old value.
+   *
+   * @return whether the value was set and saved
    */
-  public static Boolean setDefaultValue(String propertyName, String newValue) {
+  public boolean setDefaultValue(String propertyName, String newValue) {
+    if (!setValue(propertyName, newValue)) {
+      return false;
+    }
     try {
-      var gs = load();
-      gs.setValue(propertyName, newValue);
-      saveAsJson(gs);
+      // Saved through a copy of the file, so that the value is written even where this process
+      // keeps the file's value (see ProcessOverrides): it then is the file's value.
+      var saved = load();
+      saved.setValue(propertyName, newValue);
+      saveAsJson(saved);
       return true;
     } catch (Exception e) {
       FRLogger.error("Failed to save property value for: " + propertyName, e);
