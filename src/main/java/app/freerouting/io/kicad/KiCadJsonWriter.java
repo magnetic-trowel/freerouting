@@ -30,32 +30,30 @@ public final class KiCadJsonWriter {
 
   /** Serializes the board and returns it as a JSON string with a specific design name. */
   public static String write(RoutingBoard board, String designName) {
-    double scaleFactor = 10000.0; // default mapping factor for millimeters
-    if (board.communication != null) {
-      if (board.communication.unit == Unit.MIL) {
-        scaleFactor = 254.0;
-      } else if (board.communication.unit == Unit.UM) {
-        scaleFactor = 10.0;
-      } else {
-        scaleFactor = 10000.0;
-      }
-    }
-
     KiCadBoardJson boardJson = new KiCadBoardJson();
     boardJson.designName = designName != null ? designName : "KiCad_Design";
+    // JSON coordinates are in the declared unit and "resolution" is the number of board units per
+    // unit (KiCadJsonReader multiplies by it). Both follow the board's own coordinate transform: a
+    // fixed factor per unit is only right for one input resolution (DSN mil 1000 came out in units
+    // of 1/254 mil instead of mil).
+    Unit outputUnit = Unit.MM;
+    boardJson.unit = KiCadBoardJson.UnitJson.MM;
     if (board.communication != null) {
-      boardJson.resolution = scaleFactor;
-      if (board.communication.unit == Unit.MIL) {
+      if (board.communication.unit == Unit.MIL || board.communication.unit == Unit.INCH) {
+        outputUnit = Unit.MIL;
         boardJson.unit = KiCadBoardJson.UnitJson.MIL;
       } else if (board.communication.unit == Unit.UM) {
+        outputUnit = Unit.UM;
         boardJson.unit = KiCadBoardJson.UnitJson.UM;
-      } else {
-        boardJson.unit = KiCadBoardJson.UnitJson.MM;
       }
-    } else {
-      boardJson.resolution = 10000.0;
+    }
+    double scaleFactor =
+        board.communication != null ? board.communication.getResolution(outputUnit) : 10000.0;
+    if (!Double.isFinite(scaleFactor) || scaleFactor <= 0) {
+      scaleFactor = 10000.0;
       boardJson.unit = KiCadBoardJson.UnitJson.MM;
     }
+    boardJson.resolution = scaleFactor;
 
     // 1. Layers
     for (int i = 0; i < board.getLayerCount(); i++) {
@@ -106,9 +104,12 @@ public final class KiCadJsonWriter {
           if (shape != null) {
             ncJson.viaDiameter = shape.boundingBox().width() / scaleFactor;
           }
+          ncJson.viaDrill = namedDrill(viaPad, scaleFactor);
         }
       }
-      ncJson.viaDrill = ncJson.viaDiameter * 0.5;
+      if (!(ncJson.viaDrill > 0)) {
+        ncJson.viaDrill = ncJson.viaDiameter * 0.5;
+      }
 
       for (int n = 1; n <= board.rules.nets.maxNetNumber(); n++) {
         Net net = board.rules.nets.get(n);
@@ -198,7 +199,8 @@ public final class KiCadJsonWriter {
       } else {
         viaJson.diameter = 0.8;
       }
-      viaJson.drill = viaJson.diameter * 0.5;
+      double drill = namedDrill(padstack, scaleFactor);
+      viaJson.drill = drill > 0 ? drill : viaJson.diameter * 0.5;
       boardJson.vias.add(viaJson);
     }
 
@@ -223,5 +225,18 @@ public final class KiCadJsonWriter {
     }
 
     return GsonProvider.GSON.toJson(boardJson);
+  }
+
+  /**
+   * Returns the drill diameter that a KiCad style padstack name such as {@code Via[0-1]_600:400_um}
+   * states, in JSON units, or 0 if the name states none. The padstack shapes carry no drill, so
+   * other padstacks keep the half-diameter estimate.
+   */
+  private static double namedDrill(Padstack padstack, double scaleFactor) {
+    if (padstack.name == null || padstack.name.indexOf(':') < 0) {
+      return 0;
+    }
+    double drillRadius = padstack.getDrillRadius();
+    return drillRadius > 0 && Double.isFinite(drillRadius) ? 2 * drillRadius / scaleFactor : 0;
   }
 }
