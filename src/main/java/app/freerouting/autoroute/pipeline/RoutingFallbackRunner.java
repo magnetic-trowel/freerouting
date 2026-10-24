@@ -173,7 +173,12 @@ final class RoutingFallbackRunner {
     RoutingSupervisor supervisor = new RoutingSupervisor();
     RoutingFallback.Outcome best =
         RoutingFallback.Outcome.of("incumbent", job.board, job.routerSettings);
-    Attempt bestAttempt = new Attempt(best, job.board, incumbent, null);
+    // The incumbent's own violations are its baseline, as for the default attempt in run():
+    // without one, every candidate with any violation (even the input's) counts them all as new
+    // and can never replace the incumbent.
+    ClearanceBaseline incumbentClearance =
+        RoutingFallback.captureClearance(job.board, best.violations);
+    Attempt bestAttempt = new Attempt(best, job.board, incumbent, incumbentClearance);
     RouterSettings jobSettings = job.routerSettings;
     int round = 0;
     while (!bestAttempt.outcome.isCompleteAndClean()

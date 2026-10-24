@@ -240,8 +240,12 @@ final class AutoroutePassRunner {
 
       long passDuration = System.currentTimeMillis() - passStartTime;
       int currentRipupCost = router.startRipupCosts * passNo;
-      PerformanceProfiler.recordPass(
-          passNo, routerCounters.incompleteCount, passDuration, currentRipupCost);
+      // Optimizer candidates run passes of their own on worker threads; the job's pass history
+      // must not collect them (it is printed and cleared only when a pass loop ends).
+      if (!router.isOptimizerAutorouter) {
+        PerformanceProfiler.recordPass(
+            passNo, routerCounters.incompleteCount, passDuration, currentRipupCost);
+      }
       router.logBenchmarkProfile(passNo);
 
       router.airLine = null;
