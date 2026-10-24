@@ -10,6 +10,7 @@ import app.freerouting.datastructures.IdGenerator;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.PolylineShape;
 import app.freerouting.io.CoordinateTransform;
+import app.freerouting.logger.FRLogger;
 import app.freerouting.rules.BoardRules;
 import app.freerouting.rules.DefaultItemClearanceClasses;
 import app.freerouting.settings.RouterSettings;
@@ -74,6 +75,9 @@ public class ReadScopeParameter {
   /** Set to {@code false} by the structure reader when the board outline is absent. */
   public boolean boardOutlineOk = true;
 
+  /** Why reading failed, when a reader recorded it; {@code null} otherwise. */
+  private String parseErrorDetail;
+
   public Communication.SpecctraParserInfo.WriteResolution writeResolution;
 
   /** The following objects will be initialised when the structure scope is read. */
@@ -119,6 +123,45 @@ public class ReadScopeParameter {
    */
   public List<String> getWarnings() {
     return java.util.Collections.unmodifiableList(warnings);
+  }
+
+  /**
+   * Returns why reading failed, when a reader recorded the reason, or {@code null} otherwise. Only
+   * meaningful after the read reported a failure.
+   */
+  public String getParseErrorDetail() {
+    return parseErrorDetail;
+  }
+
+  /**
+   * Returns the board that a scope reads its items into, or {@code null} after recording a parse
+   * error when there is no board yet. The board is created at the end of the {@code (structure
+   * ...)} scope, so a scope that needs it cannot be read in front of that scope or without it.
+   *
+   * @param scopeName name of the scope that needs the board, for the error message
+   */
+  RoutingBoard boardForScope(String scopeName) {
+    RoutingBoard board = boardHandling.getRoutingBoard();
+    if (board == null) {
+      parseError(
+          "the ("
+              + scopeName
+              + " ...) scope must follow a (structure ...) scope with layers and a boundary");
+    }
+    return board;
+  }
+
+  /**
+   * Logs why the file cannot be read and keeps the first such reason for the parse error result.
+   *
+   * @return {@code false}, so that a reader can {@code return scopeParameter.parseError(...)}
+   */
+  boolean parseError(String detail) {
+    FRLogger.warn("DSN file: " + detail);
+    if (parseErrorDetail == null) {
+      parseErrorDetail = detail;
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------

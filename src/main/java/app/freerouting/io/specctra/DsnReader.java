@@ -129,6 +129,12 @@ public final class DsnReader {
 
     closeQuietly(inputStream);
 
+    if (readOk && board == null) {
+      // The (pcb ...) scope ended (or the file ended) before a (structure ...) scope created the
+      // board, so there is nothing to route.
+      return new BoardReadResult.ParseError(
+          "(structure", "No (structure ...) scope with layers and a boundary was found");
+    }
     if (readOk) {
       // Apply power-plane autoroute settings if the DSN had no (autoroute ...) scope
       if (scopeParameter.autorouteSettings == null) {
@@ -156,7 +162,9 @@ public final class DsnReader {
       }
       return new BoardReadResult.OutlineMissing(board, null, warnings);
     } else {
-      return new BoardReadResult.ParseError("(pcb", "DSN structure parsing failed");
+      String detail = scopeParameter.getParseErrorDetail();
+      return new BoardReadResult.ParseError(
+          "(pcb", detail != null ? detail : "DSN structure parsing failed");
     }
   }
 

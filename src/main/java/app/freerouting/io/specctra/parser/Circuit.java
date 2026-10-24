@@ -58,9 +58,17 @@ public final class Circuit {
             maxTraceLength = lengthRule.maxLength;
           }
         } else if (nextToken == Keyword.USE_VIA) {
-          useVia.addAll(Structure.readViaPadstacks(scanner));
+          Collection<String> viaPadstacks = Structure.readViaPadstacks(scanner);
+          if (viaPadstacks == null) {
+            return null;
+          }
+          useVia.addAll(viaPadstacks);
         } else if (nextToken == Keyword.USE_LAYER) {
-          useLayer.addAll(Arrays.stream(DsnFile.readStringListScope(scanner)).toList());
+          String[] layerNames = DsnFile.readStringListScope(scanner);
+          if (layerNames == null) {
+            return null;
+          }
+          useLayer.addAll(Arrays.asList(layerNames));
         } else {
           ScopeKeyword.skipScope(scanner);
         }

@@ -3,6 +3,7 @@ package app.freerouting.io.specctra.parser;
 import app.freerouting.datastructures.IdentifierType;
 import app.freerouting.datastructures.IndentFileWriter;
 import app.freerouting.geometry.planar.Area;
+import app.freerouting.geometry.planar.Limits;
 import app.freerouting.geometry.planar.PolylineArea;
 import app.freerouting.geometry.planar.PolylineShape;
 import app.freerouting.io.CoordinateTransform;
@@ -115,6 +116,13 @@ public abstract class Shape {
       // read the width and the corners of the path
       for (; ; ) {
         nextToken = scanner.nextToken();
+        if (nextToken == null) {
+          FRLogger.warn(
+              "PolylinePath.read_scope: unexpected end of file at '"
+                  + scanner.getScopeIdentifier()
+                  + "'");
+          return null;
+        }
         if (nextToken == Keyword.CLOSED_BRACKET) {
           break;
         }
@@ -220,7 +228,14 @@ public abstract class Shape {
         // a new scope is expected
         if (nextToken == Keyword.WINDOW && !skipWindowScopes) {
           Shape holeShape = Shape.readScope(scanner, layerStructure);
-          shapeList.add(holeShape);
+          if (holeShape != null) {
+            shapeList.add(holeShape);
+          } else {
+            FRLogger.warn(
+                "Shape.read_area_scope: window ignored, its shape could not be read at '"
+                    + scanner.getScopeIdentifier()
+                    + "'");
+          }
           // overread closing bracket
           try {
             nextToken = scanner.nextToken();
@@ -460,6 +475,13 @@ public abstract class Shape {
           ScopeKeyword.skipScope(scanner);
           nextToken = scanner.nextToken();
         }
+        if (nextToken == null) {
+          FRLogger.warn(
+              "Shape.read_polygon_path_scope: unexpected end of file at '"
+                  + scanner.getScopeIdentifier()
+                  + "'");
+          return null;
+        }
         if (nextToken == Keyword.CLOSED_BRACKET) {
           break;
         }
@@ -526,6 +548,9 @@ public abstract class Shape {
       FRLogger.warn("Shape.transform_area_to_board: area.size() > 0 expected");
       return null;
     }
+    if (!isInBoardRange(area, coordinateTransform)) {
+      return null;
+    }
     Iterator<Shape> it = area.iterator();
     Shape boundary = it.next();
     app.freerouting.geometry.planar.Shape boundaryShape =
@@ -565,6 +590,9 @@ public abstract class Shape {
       FRLogger.warn("Shape.transform_area_to_board_rel: area.size() > 0 expected");
       return null;
     }
+    if (!isInBoardRange(area, coordinateTransform)) {
+      return null;
+    }
     Iterator<Shape> it = area.iterator();
     Shape boundary = it.next();
     app.freerouting.geometry.planar.Shape boundaryShape =
@@ -591,6 +619,33 @@ public abstract class Shape {
       result = new PolylineArea(border, holes);
     }
     return result;
+  }
+
+  /**
+   * Returns false, after a warning, when a shape of the area reaches beyond the board coordinate
+   * range. Board coordinates are rounded to int, which wraps around for such values, and the
+   * geometry needs them below {@link Limits#CRIT_INT}; a wrapped-around area could need billions of
+   * search tree sections.
+   */
+  private static boolean isInBoardRange(
+      Collection<Shape> area, CoordinateTransform coordinateTransform) {
+    for (Shape shape : area) {
+      if (shape instanceof Polygon polygon && polygon.coor.length < 2) {
+        continue; // no corners, so the bounding box is not meaningful
+      }
+      Rectangle box = shape.boundingBox();
+      if (box == null) {
+        continue;
+      }
+      for (double value : box.coor) {
+        if (!(Math.abs(coordinateTransform.dsnToBoard(value)) < Limits.CRIT_INT)) {
+          FRLogger.warn(
+              "Shape.transform_area_to_board: area ignored, its coordinates are out of range");
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   /** Writes a shape scope to a Specctra dsn file. */

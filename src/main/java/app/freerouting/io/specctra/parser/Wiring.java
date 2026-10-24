@@ -305,6 +305,9 @@ public class Wiring extends ScopeKeyword {
 
   @Override
   public boolean readScope(ReadScopeParameter scopeParameter) {
+    if (scopeParameter.boardForScope("wiring") == null) {
+      return false;
+    }
     Object nextToken = null;
     for (; ; ) {
       Object prevToken = nextToken;
@@ -399,7 +402,14 @@ public class Wiring extends ScopeKeyword {
               Shape.readCircleScope(scopeParameter.scanner, scopeParameter.layerStructure);
         } else if (nextToken == WINDOW) {
           Shape holeShape = Shape.readScope(scopeParameter.scanner, scopeParameter.layerStructure);
-          holeList.add(holeShape);
+          if (holeShape != null) {
+            holeList.add(holeShape);
+          } else {
+            FRLogger.warn(
+                "Wiring.read_wire_scope: window ignored, its shape could not be read at '"
+                    + scopeParameter.scanner.getScopeIdentifier()
+                    + "'");
+          }
           // overread the closing bracket
           try {
             nextToken = scopeParameter.scanner.nextToken();
@@ -449,15 +459,17 @@ public class Wiring extends ScopeKeyword {
     }
     int layerIndex;
     int halfWidth;
+    // A polyline path keeps a null layer when its layer name is unknown.
+    Layer wireLayer = path != null ? path.layer : borderShape.layer;
     if (path != null) {
-      layerIndex = path.layer.no;
+      layerIndex = wireLayer != null ? wireLayer.no : -1;
       halfWidth = (int) Math.round(scopeParameter.coordinateTransform.dsnToBoard(path.width / 2));
     } else {
       layerIndex = borderShape.layer.no;
       halfWidth = 0;
     }
     if (layerIndex < 0 || layerIndex >= board.getLayerCount()) {
-      String layerName = path != null ? path.layer.name : borderShape.layer.name;
+      String layerName = wireLayer != null ? wireLayer.name : "?";
       String msg =
           "Wiring: wire ignored — unknown layer '"
               + layerName
@@ -656,9 +668,13 @@ public class Wiring extends ScopeKeyword {
         }
       }
       RoutingBoard board = scopeParameter.boardHandling.getRoutingBoard();
-      Padstack currentPadstack = board.library.padstacks.get(padstackName);
-      if (currentPadstack == null && padstackName != null) {
-        currentPadstack = board.library.padstacks.get(padstackName.replaceAll("\\.\\d+", ""));
+      Padstack currentPadstack = null;
+      // the padstack list is null when the DSN file has no (library ...) scope
+      if (board.library.padstacks != null) {
+        currentPadstack = board.library.padstacks.get(padstackName);
+        if (currentPadstack == null && padstackName != null) {
+          currentPadstack = board.library.padstacks.get(padstackName.replaceAll("\\.\\d+", ""));
+        }
       }
       if (currentPadstack == null) {
         String msg =

@@ -1692,7 +1692,7 @@ public class SpecctraDsnStreamReader implements IJFlexScanner {
           break;
         case 5:
           {
-            return Integer.valueOf(yytext());
+            return integerToken(yytext());
           }
         case 236:
           break;
@@ -1741,7 +1741,28 @@ public class SpecctraDsnStreamReader implements IJFlexScanner {
     return nextString(ignoreNewline, ' ');
   }
 
-  private double readFloatingToken() throws IOException {
+  /**
+   * Returns an integer literal as {@link Integer}. A literal outside the int range is returned like
+   * a decimal literal (see {@link #numberToken(String)}) instead of failing the scan.
+   */
+  private static Object integerToken(String text) {
+    try {
+      return Integer.valueOf(text);
+    } catch (NumberFormatException _) {
+      return numberToken(text);
+    }
+  }
+
+  /**
+   * Returns a decimal literal as {@link Double}. A value that overflows to infinity is returned as
+   * its text, so that callers expecting a number reject it instead of computing with it.
+   */
+  private static Object numberToken(String text) {
+    double value = Double.parseDouble(text);
+    return Double.isFinite(value) ? value : text;
+  }
+
+  private Object readFloatingToken() throws IOException {
     boolean hasExp = false;
     for (int i = zzStartRead; i < zzMarkedPos; i++) {
       char c = zzBuffer[i];
@@ -1765,7 +1786,7 @@ public class SpecctraDsnStreamReader implements IJFlexScanner {
         zzMarkedPos++;
       }
     }
-    return Double.parseDouble(new String(zzBuffer, zzStartRead, zzMarkedPos - zzStartRead));
+    return numberToken(new String(zzBuffer, zzStartRead, zzMarkedPos - zzStartRead));
   }
 
   private boolean hasStringChar(int offset) {

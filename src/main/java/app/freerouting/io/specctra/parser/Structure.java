@@ -286,6 +286,13 @@ public class Structure extends ScopeKeyword {
       Object prevToken = null;
       for (; ; ) {
         Object nextToken = scanner.nextToken();
+        if (nextToken == null) {
+          FRLogger.warn(
+              "Structure.read_boundary_scope: unexpected end of file at '"
+                  + scanner.getScopeIdentifier()
+                  + "'");
+          return false;
+        }
         if (nextToken == Keyword.CLOSED_BRACKET) {
           break;
         }
@@ -352,6 +359,13 @@ public class Structure extends ScopeKeyword {
         nextToken = scanner.nextToken();
         if (nextToken == Keyword.TYPE) {
           nextToken = scanner.nextToken();
+          if (nextToken == null) {
+            FRLogger.warn(
+                "Structure.read_layer_scope: unexpected end of file at '"
+                    + scanner.getScopeIdentifier()
+                    + "'");
+            return false;
+          }
           if (nextToken == Keyword.POWER) {
             isSignal = false;
           } else if ((nextToken != Keyword.SIGNAL)
@@ -387,6 +401,13 @@ public class Structure extends ScopeKeyword {
           for (; ; ) {
             scanner.yybegin(SpecctraDsnStreamReader.NAME);
             nextToken = scanner.nextToken();
+            if (nextToken == null) {
+              FRLogger.warn(
+                  "Structure.read_layer_scope: unexpected end of file at '"
+                      + scanner.getScopeIdentifier()
+                      + "'");
+              return false;
+            }
             if (nextToken == Keyword.CLOSED_BRACKET) {
               break;
             }
@@ -874,8 +895,17 @@ public class Structure extends ScopeKeyword {
       ReadScopeParameter scopeParameter,
       KeepoutType keepoutType,
       FixedState fixedState) {
+    if (area == null) {
+      // Shape.readAreaScope already reported why the keepout could not be read. Skip it, as
+      // Package.readScope does for unreadable image keepouts.
+      return true;
+    }
     Area keepoutArea =
         Shape.transformAreaToBoard(area.shapeList, scopeParameter.coordinateTransform);
+    if (keepoutArea == null) {
+      // Shape.transformAreaToBoard already reported why the area cannot be used
+      return true;
+    }
     if (keepoutArea.dimension() < 2) {
       // A degenerate keepout (e.g. all polygon vertices identical, exported incorrectly by the EDA
       // tool) cannot be enforced as a routing constraint. The board remains valid — the keepout
@@ -1231,11 +1261,21 @@ public class Structure extends ScopeKeyword {
         scopeParameter.boardOutlineOk = false;
         return false;
       }
-      Iterator<Shape> it = boardConstructionInfo.outlineShapes.iterator();
-
-      Rectangle boundingBox = it.next().boundingBox();
-      while (it.hasNext()) {
-        boundingBox = boundingBox.union(it.next().boundingBox());
+      Rectangle boundingBox = null;
+      for (Shape outlineShape : boardConstructionInfo.outlineShapes) {
+        // a polyline path has no bounding box
+        Rectangle shapeBox = outlineShape.boundingBox();
+        if (shapeBox != null) {
+          boundingBox = boundingBox == null ? shapeBox : boundingBox.union(shapeBox);
+        }
+      }
+      if (boundingBox == null) {
+        FRLogger.warn(
+            "Structure.create_board: outline missing at '"
+                + scopeParameter.scanner.getScopeIdentifier()
+                + "'");
+        scopeParameter.boardOutlineOk = false;
+        return false;
       }
       boardConstructionInfo.boundingShape = boundingBox;
     }
@@ -1272,6 +1312,10 @@ public class Structure extends ScopeKeyword {
       scopeParameter.boardOutlineOk = false;
       return false;
     }
+    if (!Double.isFinite(maxCoor)) {
+      // the scaling loop below would never end
+      return scopeParameter.parseError("the board outline coordinates are out of range");
+    }
     // make scalefactor smaller, if there is a danger of integer overflow.
     while (5 * maxCoor >= Limits.CRIT_INT) {
       scaleFactor /= 10.0;
@@ -1294,18 +1338,29 @@ public class Structure extends ScopeKeyword {
           currentShape = new PolygonPath(currentPath.layer, 0, currentPath.coordinateArr);
         }
       }
-      PolylineShape currentBoardShape =
-          (PolylineShape) currentShape.transformToBoard(scopeParameter.coordinateTransform);
+      // A circle has no polygonal board shape and a polyline path no board shape at all.
+      app.freerouting.geometry.planar.Shape boardShape =
+          currentShape.transformToBoard(scopeParameter.coordinateTransform);
+      if (!(boardShape instanceof PolylineShape currentBoardShape)) {
+        FRLogger.warn(
+            "Structure.create_board: board outline shape ignored, a path, polygon or rectangle"
+                + " is expected at '"
+                + scopeParameter.scanner.getScopeIdentifier()
+                + "'");
+        continue;
+      }
       if (currentBoardShape.dimension() > 0) {
         boardOutlineShapes.add(currentBoardShape);
       }
     }
     if (boardOutlineShapes.isEmpty()) {
       // construct an outline from the boundingShape, if the outline is missing.
-      PolylineShape currentBoardShape =
-          (PolylineShape)
-              boardConstructionInfo.boundingShape.transformToBoard(
-                  scopeParameter.coordinateTransform);
+      app.freerouting.geometry.planar.Shape boundingBoardShape =
+          boardConstructionInfo.boundingShape.transformToBoard(scopeParameter.coordinateTransform);
+      if (!(boundingBoardShape instanceof PolylineShape currentBoardShape)) {
+        return scopeParameter.parseError(
+            "the board outline must be a path, polygon or rectangle, not a circle");
+      }
       boardOutlineShapes.add(currentBoardShape);
     }
     final Collection<PolylineShape> holeShapes = separateHoles(boardOutlineShapes);

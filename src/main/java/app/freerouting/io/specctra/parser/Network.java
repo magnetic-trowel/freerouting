@@ -6,6 +6,7 @@ import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.core.library.LogicalPart;
 import app.freerouting.core.library.Package;
+import app.freerouting.core.library.Packages;
 import app.freerouting.core.library.Padstack;
 import app.freerouting.datastructures.IdentifierType;
 import app.freerouting.datastructures.IndentFileWriter;
@@ -284,10 +285,13 @@ public class Network extends ScopeKeyword {
         viaPadstack = board.library.getViaPadstack(padstackName.replaceAll("\\.\\d+", ""));
       }
       if (viaPadstack == null) {
-        // The padstack may not yet be inserted into the list of via padstacks
-        viaPadstack = board.library.padstacks.get(padstackName);
-        if (viaPadstack == null) {
-          viaPadstack = board.library.padstacks.get(padstackName.replaceAll("\\.\\d+", ""));
+        // The padstack may not yet be inserted into the list of via padstacks. The padstack list
+        // is null when the DSN file has no (library ...) scope.
+        if (board.library.padstacks != null) {
+          viaPadstack = board.library.padstacks.get(padstackName);
+          if (viaPadstack == null) {
+            viaPadstack = board.library.padstacks.get(padstackName.replaceAll("\\.\\d+", ""));
+          }
         }
         if (viaPadstack == null) {
           FRLogger.warn(
@@ -965,8 +969,10 @@ public class Network extends ScopeKeyword {
       String libKey,
       ReadScopeParameter scopeParameter) {
     RoutingBoard routingBoard = scopeParameter.boardHandling.getRoutingBoard();
-    Package currentFrontPackage = routingBoard.library.packages.get(libKey, true);
-    Package currentBackPackage = routingBoard.library.packages.get(libKey, false);
+    // the packages are null when the DSN file has no (library ...) scope
+    Packages packages = routingBoard.library.packages;
+    Package currentFrontPackage = packages != null ? packages.get(libKey, true) : null;
+    Package currentBackPackage = packages != null ? packages.get(libKey, false) : null;
     if (currentFrontPackage == null || currentBackPackage == null) {
       FRLogger.warn(
           "Network.insert_component: component package not found at '"
@@ -982,6 +988,15 @@ public class Network extends ScopeKeyword {
       exactLocation = null;
     }
     double rotationInDegree = location.rotation;
+    if (Math.abs(rotationInDegree) >= 360) {
+      // The board items normalize their rotation by adding or subtracting 360 degrees in a loop,
+      // which never ends for huge values. The remainder is exact, so it gives that loop's result
+      // for every value the loop could finish, including +0.0 for multiples of 360.
+      rotationInDegree %= 360;
+      if (rotationInDegree == 0) {
+        rotationInDegree = 0;
+      }
+    }
 
     app.freerouting.board.model.structure.Component newComponent =
         routingBoard.components.addPrecise(
@@ -1271,6 +1286,9 @@ public class Network extends ScopeKeyword {
 
   @Override
   public boolean readScope(ReadScopeParameter scopeParameter) {
+    if (scopeParameter.boardForScope("network") == null) {
+      return false;
+    }
     Collection<NetClass> classes = new LinkedList<>();
     Collection<NetClass.ClassClass> classClassList = new LinkedList<>();
     Collection<ViaInfo> viaInfos = new LinkedList<>();
@@ -1349,7 +1367,11 @@ public class Network extends ScopeKeyword {
 
     // Set the via padstacks after network parsing, so that named vias from both structure and
     // network DSN sections are properly instantiated .
-    if (scopeParameter.viaPadstackNames != null) {
+    if (scopeParameter.viaPadstackNames != null && board.library.padstacks == null) {
+      FRLogger.warn(
+          "Network.read_scope: via padstacks not found, because the (library ...) scope is"
+              + " missing or does not precede the (network ...) scope");
+    } else if (scopeParameter.viaPadstackNames != null) {
       Padstack[] viaPadstacks = new Padstack[scopeParameter.viaPadstackNames.size()];
       Iterator<String> it = scopeParameter.viaPadstackNames.iterator();
       int foundPadstackCount = 0;

@@ -214,7 +214,11 @@ public class NetClass {
         }
         if (prevToken == Keyword.OPEN_BRACKET) {
           if (nextToken == Keyword.CLASSES) {
-            classes.addAll(Arrays.stream(DsnFile.readStringListScope(scanner)).toList());
+            String[] classNames = DsnFile.readStringListScope(scanner);
+            if (classNames == null) {
+              return null;
+            }
+            classes.addAll(Arrays.asList(classNames));
           } else if (nextToken == Keyword.RULE) {
             rules.addAll(Rule.readScope(scanner));
           } else if (nextToken == Keyword.LAYER_RULE) {

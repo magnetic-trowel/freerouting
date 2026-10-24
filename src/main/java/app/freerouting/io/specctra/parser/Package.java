@@ -335,7 +335,16 @@ public class Package {
 
     try {
       String nextString = scanner.nextString();
-      result = Double.parseDouble(nextString);
+      try {
+        result = Double.parseDouble(nextString);
+      } catch (NumberFormatException _) {
+        result = Double.NaN;
+      }
+      if (!Double.isFinite(result)) {
+        FRLogger.warn(
+            "Package.read_rotation: number expected at '" + scanner.getScopeIdentifier() + "'");
+        result = 0;
+      }
 
       // Overread The closing bracket.
       Object nextToken = scanner.nextToken();

@@ -23,7 +23,11 @@ import java.util.Objects;
 })
 public abstract class Rule {
 
-  /** Returns a collection of objects of class Rule. */
+  /**
+   * Returns a collection of objects of class Rule. Never {@code null}: when the scope ends early
+   * (end of file or IO error), the rules read so far are returned and the caller meets the same
+   * condition on its next token.
+   */
   public static Collection<Rule> readScope(IJFlexScanner scanner) {
     Collection<Rule> result = new LinkedList<>();
     Object currentToken = null;
@@ -34,12 +38,12 @@ public abstract class Rule {
         currentToken = scanner.nextToken();
       } catch (IOException e) {
         FRLogger.error("Rule.read_scope: IO error scanning file", e);
-        return null;
+        return result;
       }
       if (currentToken == null) {
         FRLogger.warn(
             "Rule.read_scope: unexpected end of file at '" + scanner.getScopeIdentifier() + "'");
-        return null;
+        return result;
       }
       if (currentToken == Keyword.CLOSED_BRACKET) {
         // end of scope
