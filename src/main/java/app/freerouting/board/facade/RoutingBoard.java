@@ -1704,7 +1704,7 @@ public class RoutingBoard extends BasicBoard implements Serializable {
    */
   public synchronized BoardImage image() {
     byte[] bytes = getUndoFacade().serialize();
-    return bytes == null ? null : new BoardImage(bytes);
+    return bytes == null ? null : new BoardImage(bytes, this.clearanceBaseline);
   }
 
   private RoutingBoardOperations getOperations() {

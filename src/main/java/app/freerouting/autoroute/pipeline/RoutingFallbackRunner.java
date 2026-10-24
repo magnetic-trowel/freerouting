@@ -64,16 +64,25 @@ final class RoutingFallbackRunner {
     if (alternatives.isEmpty() && continuations.isEmpty() && !residual) {
       return defaultRouter;
     }
+    String alternativesText =
+        alternatives.size()
+            + " alternative "
+            + (alternatives.size() == 1 ? "strategy" : "strategies");
+    String plan;
+    if (residual && !alternatives.isEmpty()) {
+      plan = "continuing the board first, then trying " + alternativesText;
+    } else if (residual) {
+      plan = "continuing the board";
+    } else {
+      plan = "trying " + alternativesText;
+    }
     job.logInfo(
         "Routing fallback: the default configuration stopped at "
             + RoutingFallback.describe(reason)
             + " with "
             + best
-            + "; trying "
-            + alternatives.size()
-            + " alternative "
-            + (alternatives.size() == 1 ? "strategy" : "strategies")
-            + (residual ? ", then continuing the best board" : "")
+            + "; "
+            + plan
             + ".");
     if (defaultRouter.passLoopStartHash != null) {
       this.passLoopStarts.put(defaultRouter.passLoopStartHash, best);

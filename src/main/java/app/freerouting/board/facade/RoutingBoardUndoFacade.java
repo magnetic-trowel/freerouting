@@ -40,7 +40,7 @@ public final class RoutingBoardUndoFacade {
 
   synchronized RoutingBoard deepCopy() {
     byte[] image = serialize();
-    return image == null ? null : copyOf(image);
+    return image == null ? null : copyOf(image, board.clearanceBaseline);
   }
 
   /** Serializes the board for {@link #copyOf}. Returns null if serialization fails. */
@@ -56,13 +56,18 @@ public final class RoutingBoardUndoFacade {
     }
   }
 
-  /** Creates the board that {@link #deepCopy} would return from serialized board bytes. */
-  static RoutingBoard copyOf(byte[] image) {
+  /**
+   * Creates the board that {@link #deepCopy} would return from serialized board bytes. The baseline
+   * of pre-existing clearance violations is transient, so it is passed separately; it is immutable
+   * and shared by the copies. Without it every pre-existing violation counts as new on the copy.
+   */
+  static RoutingBoard copyOf(byte[] image, app.freerouting.drc.ClearanceBaseline baseline) {
     try (ObjectInputStream inputStream =
         new app.freerouting.util.SafeObjectInputStream(new ByteArrayInputStream(image))) {
       RoutingBoard boardCopy = (RoutingBoard) inputStream.readObject();
       boardCopy.clearAllItemTemporaryAutorouteData();
       boardCopy.finishAutoroute();
+      boardCopy.clearanceBaseline = baseline;
       return boardCopy;
     } catch (Exception exception) {
       FRLogger.error("Exception in deep_copy_routing_board" + exception, exception);
