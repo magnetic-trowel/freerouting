@@ -73,6 +73,22 @@ class PolygonShapeSelfIntersectingSplitTest {
             550000, 800000, 250000, 450000));
   }
 
+  /**
+   * The closing spike and duplicate corner of this input change the winding number of its corners,
+   * so the simple polygon left after removing them was kept in clockwise sense, and the division
+   * split of a clockwise polygon covers more than twice its area.
+   */
+  @Test
+  void polygonIsOrientedFromItsCleanedCorners() {
+    PolygonShape shape =
+        polygon(
+            550000, 950000, 200000, 50000, 350000, 450000, 200000, 100000, 550000, 950000, 600000,
+            150000);
+
+    assertTrue(shape.borderIsSimple());
+    assertCoversItsRegion(shape);
+  }
+
   @Test
   void simpleBorderIsRecognised() {
     assertTrue(polygon(0, 0, 100, 0, 100, 100, 0, 100).borderIsSimple());

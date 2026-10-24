@@ -6,6 +6,7 @@ import java.awt.geom.PathIterator;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -73,34 +74,37 @@ public class PolygonShape extends PolylineShape {
       // skip first point
       ++firstCornerNo;
     }
-    // search the point with the lowest y and then with the lowest x
-    int startCornerNo = firstCornerNo;
-    FloatPoint startCorner = currentCorners[startCornerNo].toFloat();
-    for (int i = startCornerNo + 1; i <= lastCornerNo; i++) {
-      FloatPoint currentCorner = currentCorners[i].toFloat();
-      if (currentCorner.y < startCorner.y
-          || currentCorner.y == startCorner.y && currentCorner.x < startCorner.x) {
-        startCornerNo = i;
-        startCorner = currentCorner;
-      }
+    Point[] cleaned = Arrays.copyOfRange(currentCorners, firstCornerNo, lastCornerNo + 1);
+    if (cleaned.length < currentCorners.length
+        && new Polygon(cleaned).windingNumberAfterClosing() < 0) {
+      // A closing spike or duplicate corner changed the winding number, so the orientation taken
+      // from the uncleaned corners was wrong.
+      Collections.reverse(Arrays.asList(cleaned));
     }
-    int newCornerCount = lastCornerNo - firstCornerNo + 1;
-    Point[] result = new Point[newCornerCount];
-    int currentCornerNo = 0;
-    for (int i = startCornerNo; i <= lastCornerNo; i++) {
-      result[currentCornerNo] = currentCorners[i];
-      ++currentCornerNo;
-    }
-    for (int i = firstCornerNo; i < startCornerNo; i++) {
-      result[currentCornerNo] = currentCorners[i];
-      ++currentCornerNo;
-    }
-    corners = result;
+    corners = startingAtLowestCorner(cleaned);
   }
 
   /** Creates a polygon shape from an array of corner points. */
   public PolygonShape(Point[] corners) {
     this(new Polygon(corners));
+  }
+
+  /** Returns the corners rotated to start with the corner with the lowest y, then lowest x. */
+  private static Point[] startingAtLowestCorner(Point[] corners) {
+    int startCornerNo = 0;
+    for (int i = 1; i < corners.length; i++) {
+      FloatPoint currentCorner = corners[i].toFloat();
+      FloatPoint startCorner = corners[startCornerNo].toFloat();
+      if (currentCorner.y < startCorner.y
+          || currentCorner.y == startCorner.y && currentCorner.x < startCorner.x) {
+        startCornerNo = i;
+      }
+    }
+    Point[] result = new Point[corners.length];
+    for (int i = 0; i < corners.length; i++) {
+      result[i] = corners[(startCornerNo + i) % corners.length];
+    }
+    return result;
   }
 
   @Override
