@@ -623,12 +623,12 @@ public final class BatchAutorouter extends NamedAlgorithm {
   }
 
   /**
-   * Autoroutes ripup passes until the board is completed or the autorouter is stopped by the user.
-   * Returns true if the board is completed.
+   * Autoroutes ripup passes until the board is completed, the loop stops on one of its own criteria
+   * or the autorouter is stopped by the user. {@link #lastStopReason} tells which.
    */
-  public boolean runBatchLoop() {
+  public void runBatchLoop() {
     this.board.awaitPostLoad();
-    return batchLoop.run();
+    batchLoop.run();
   }
 
   String buildUnroutedConnectionsReport() {

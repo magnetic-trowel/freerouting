@@ -311,7 +311,6 @@ final class RoutingFallbackRunner {
       String strategyName) {
     RouterSettings savedSettings = job.routerSettings;
     RoutingBoard savedBoard = job.board;
-    job.thread.resetAutoRouterStopRequest();
     job.board = board;
     job.routerSettings = settings;
     try {
@@ -352,7 +351,7 @@ final class RoutingFallbackRunner {
   }
 
   private static boolean stopped(RoutingJob job) {
-    return job.thread.isStopRequested() || job.state == RoutingJobState.TIMED_OUT;
+    return job.thread.isStopAutoRouterRequested() || job.state == RoutingJobState.TIMED_OUT;
   }
 
   private static List<RoutingFallback.Strategy> automaticContinuations(RouterSettings settings) {

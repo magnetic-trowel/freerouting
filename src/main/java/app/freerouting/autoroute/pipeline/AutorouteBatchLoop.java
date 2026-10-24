@@ -40,7 +40,7 @@ final class AutorouteBatchLoop {
     this.router = router;
   }
 
-  boolean run() {
+  void run() {
     RoutingBoard board = router.board;
     final RouterSettings settings = router.settings;
     final RoutingJob job = Objects.requireNonNull(router.job, "routing job");
@@ -321,10 +321,6 @@ final class AutorouteBatchLoop {
     // pass without updating the board state.
     Set<String> alreadyRoutedBoardHashes = new java.util.HashSet<>();
     while (continueAutorouting && !router.thread.isStopAutoRouterRequested()) {
-      if (job.state == RoutingJobState.TIMED_OUT) {
-        stopFor(BatchAutorouter.StopReason.TIMED_OUT);
-      }
-
       String currentBoardHash = router.board.getHash();
 
       // Same-hash stop disabled because ripup budgets and random seeds change per-pass, making
@@ -636,22 +632,19 @@ final class AutorouteBatchLoop {
     if (router.lastStopReason == null) {
       if (job.state == RoutingJobState.TIMED_OUT) {
         router.lastStopReason = BatchAutorouter.StopReason.TIMED_OUT;
-      } else if (thread.isStopRequested()) {
-        router.lastStopReason = BatchAutorouter.StopReason.CANCELLED;
       } else if (thread.isStopAutoRouterRequested()) {
-        router.lastStopReason = BatchAutorouter.StopReason.STAGNATION;
+        router.lastStopReason = BatchAutorouter.StopReason.CANCELLED;
       } else {
         router.lastStopReason = BatchAutorouter.StopReason.COMPLETED;
       }
     }
 
-    boolean wasRouterRun =
-        router.settings.getRunRouter()
-            && (router.settings.autorouter.maxPasses == null
-                || router.settings.autorouter.maxPasses >= 0);
-    if (wasRouterRun
-        && !router.thread.isStopAutoRouterRequested()
-        && router.lastStopReason != BatchAutorouter.StopReason.REPEATED) {
+    boolean endedOnItsOwn =
+        switch (router.lastStopReason) {
+          case COMPLETED, MAX_PASSES, STAGNATION, NO_IMPROVEMENT -> true;
+          default -> false;
+        };
+    if (isRouterEnabled && endedOnItsOwn) {
       // clean up dangling tails and unused orphan fanout vias when autorouting finishes normally.
       removeTails(Item.StopConnectionOption.NONE);
     }
@@ -696,23 +689,14 @@ final class AutorouteBatchLoop {
     PerformanceProfiler.printResults();
     PerformanceProfiler.reset();
 
-    if (!router.thread.isStopAutoRouterRequested()) {
-      router.fireTaskStateChangedEvent(
-          new TaskStateChangedEvent(
-              router, TaskState.FINISHED, currentPass, router.board.getHash()));
-    } else {
-      // Distinguish between a user-requested cancellation and a job timeout so that
-      // API consumers can tell the two apart via TaskStateChangedEvent.
-      boolean isTimedOut = job.state == RoutingJobState.TIMED_OUT;
-      router.fireTaskStateChangedEvent(
-          new TaskStateChangedEvent(
-              router,
-              isTimedOut ? TaskState.TIMED_OUT : TaskState.CANCELLED,
-              currentPass,
-              router.board.getHash()));
-    }
-
-    return !router.thread.isStopAutoRouterRequested();
+    TaskState endState =
+        switch (router.lastStopReason) {
+          case TIMED_OUT -> TaskState.TIMED_OUT;
+          case CANCELLED, ERROR -> TaskState.CANCELLED;
+          default -> TaskState.FINISHED;
+        };
+    router.fireTaskStateChangedEvent(
+        new TaskStateChangedEvent(router, endState, currentPass, router.board.getHash()));
   }
 
   private void logUnroutedBreakdown(int currentPass) {
@@ -767,10 +751,13 @@ final class AutorouteBatchLoop {
     router.fireBoardSnapshotEvent(board);
   }
 
+  /**
+   * Records why the loop stops on its own criterion. The caller leaves the loop; the decision is
+   * not a stop request, so the thread's stop flags keep meaning that someone asked the job to stop.
+   */
   private void stopFor(BatchAutorouter.StopReason reason) {
     if (router.lastStopReason == null) {
       router.lastStopReason = reason;
     }
-    router.thread.requestStopAutoRouter();
   }
 }
