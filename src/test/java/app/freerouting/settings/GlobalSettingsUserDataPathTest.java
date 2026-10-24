@@ -415,41 +415,6 @@ class GlobalSettingsUserDataPathTest {
   }
 
   // -------------------------------------------------------------------------
-  // 8. compareVersionStrings()
-  // -------------------------------------------------------------------------
-
-  @Test
-  void compareVersionStringsEqualVersionsReturnZero() {
-    assertEquals(0, GlobalSettings.compareVersionStrings("2.2.0", "2.2.0"));
-    assertEquals(0, GlobalSettings.compareVersionStrings("1.0.0", "1.0.0"));
-  }
-
-  @Test
-  void compareVersionStringsOlderVersionIsNegative() {
-    assertTrue(GlobalSettings.compareVersionStrings("2.1.0", "2.2.0") < 0);
-    assertTrue(GlobalSettings.compareVersionStrings("1.9.9", "2.0.0") < 0);
-    assertTrue(GlobalSettings.compareVersionStrings("2.2.0", "2.2.1") < 0);
-  }
-
-  @Test
-  void compareVersionStringsNewerVersionIsPositive() {
-    assertTrue(GlobalSettings.compareVersionStrings("2.3.0", "2.2.0") > 0);
-    assertTrue(GlobalSettings.compareVersionStrings("2.2.1", "2.2.0") > 0);
-    assertTrue(GlobalSettings.compareVersionStrings("10.0.0", "9.99.99") > 0);
-  }
-
-  @Test
-  void compareVersionStringsNullHandling() {
-    assertTrue(
-        GlobalSettings.compareVersionStrings(null, "1.0.0") < 0,
-        "null v1 should be treated as less-than any non-null v2");
-    assertTrue(
-        GlobalSettings.compareVersionStrings("1.0.0", null) > 0,
-        "non-null v1 should be greater than null v2");
-    assertEquals(0, GlobalSettings.compareVersionStrings(null, null));
-  }
-
-  // -------------------------------------------------------------------------
   // 9. load() warning messages on version change
   // -------------------------------------------------------------------------
 

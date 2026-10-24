@@ -11,7 +11,8 @@ import java.time.Duration;
 
 /**
  * VersionChecker retrieves the latest release information from GitHub in the background and logs a
- * message if a newer version of the application is available.
+ * message if that release is newer than the running version (see {@link Versions#compare}), so a
+ * development build ahead of the latest release does not report one.
  */
 public class VersionChecker implements Runnable {
 
@@ -106,14 +107,7 @@ public class VersionChecker implements Runnable {
       JsonObject json = JsonParser.parseString(responseBody).getAsJsonObject();
       if (json.has("tag_name")) {
         String latestVersion = json.get("tag_name").getAsString();
-
-        String cleanCurrent = currentVersion.substring(1); // currentVersion always starts with 'v'
-        String cleanLatest =
-            latestVersion.startsWith("v") || latestVersion.startsWith("V")
-                ? latestVersion.substring(1)
-                : latestVersion;
-
-        if (!cleanCurrent.equalsIgnoreCase(cleanLatest)) {
+        if (Versions.compare(latestVersion, currentVersion) > 0) {
           FRLogger.info("New version available: " + latestVersion);
         } else {
           FRLogger.debug(

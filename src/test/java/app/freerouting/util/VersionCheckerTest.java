@@ -3,7 +3,10 @@ package app.freerouting.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
 
+import app.freerouting.logger.FRLogger;
+import app.freerouting.logger.LogEntry;
 import java.net.http.HttpClient;
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 class VersionCheckerTest {
@@ -65,5 +68,24 @@ class VersionCheckerTest {
     checker.processResponse("");
     checker.processResponse("{invalid-json}");
     checker.processResponse("{}");
+  }
+
+  @Test
+  void reportsOnlyReleasesNewerThanTheRunningVersion() {
+    HttpClient mockClient = mock(HttpClient.class);
+    assertEquals(0, newVersionMessages("2.6.0-SNAPSHOT", "v2.5.0", mockClient));
+    assertEquals(0, newVersionMessages("2.5.0", "v2.5.0", mockClient));
+    assertEquals(0, newVersionMessages("2.6.0", "v2.5.0", mockClient));
+    assertEquals(1, newVersionMessages("2.5.0", "v2.5.1", mockClient));
+    assertEquals(1, newVersionMessages("2.6.0-SNAPSHOT", "v2.6.0", mockClient));
+  }
+
+  private static long newVersionMessages(String current, String latest, HttpClient client) {
+    FRLogger.getLogEntries().clear();
+    new VersionChecker(current, client).processResponse("{\"tag_name\":\"" + latest + "\"}");
+    return Arrays.stream(FRLogger.getLogEntries().getEntries(null, null))
+        .map(LogEntry::getMessage)
+        .filter(m -> m.startsWith("New version available"))
+        .count();
   }
 }

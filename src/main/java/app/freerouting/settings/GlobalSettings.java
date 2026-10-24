@@ -11,6 +11,7 @@ import app.freerouting.settings.sources.CliSettings;
 import app.freerouting.settings.sources.DefaultSettings;
 import app.freerouting.util.AtomicFiles;
 import app.freerouting.util.ReflectionUtil;
+import app.freerouting.util.Versions;
 import app.freerouting.util.gson.GsonProvider;
 import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;
@@ -296,45 +297,6 @@ public class GlobalSettings implements Serializable {
   }
 
   /**
-   * Compares two release-style version strings (e.g. {@code "2.2.0"} vs {@code "2.3.1"}).
-   *
-   * @return negative if {@code v1 < v2}, zero if equal, positive if {@code v1 > v2}. Returns {@code
-   *     -1}/{@code +1} without further detail when either string cannot be parsed as a
-   *     dot-separated numeric version.
-   */
-  static int compareVersionStrings(String v1, String v2) {
-    if (v1 == null && v2 == null) {
-      return 0;
-    }
-    if (v1 == null) {
-      return -1;
-    }
-    if (v2 == null) {
-      return 1;
-    }
-    String[] parts1 = v1.split("\\.");
-    String[] parts2 = v2.split("\\.");
-    int len = Math.max(parts1.length, parts2.length);
-    for (int i = 0; i < len; i++) {
-      try {
-        int n1 = i < parts1.length ? Integer.parseInt(parts1[i]) : 0;
-        int n2 = i < parts2.length ? Integer.parseInt(parts2[i]) : 0;
-        if (n1 != n2) {
-          return Integer.compare(n1, n2);
-        }
-      } catch (NumberFormatException e) {
-        String s1 = i < parts1.length ? parts1[i] : "";
-        String s2 = i < parts2.length ? parts2[i] : "";
-        int cmp = s1.compareTo(s2);
-        if (cmp != 0) {
-          return cmp;
-        }
-      }
-    }
-    return 0;
-  }
-
-  /**
    * Loads settings from the default JSON settings file.
    *
    * <p>Throws {@link NoSuchFileException} when the file (or its parent directory) does not exist
@@ -395,7 +357,7 @@ public class GlobalSettings implements Serializable {
                 + currentVersion
                 + ").");
       } else {
-        int cmp = compareVersionStrings(fileVersion, currentVersion);
+        int cmp = Versions.compare(fileVersion, currentVersion);
         if (cmp < 0) {
           // File was written by an older version — the most common case after an upgrade.
           FRLogger.warn(
