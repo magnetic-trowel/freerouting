@@ -365,14 +365,14 @@ class GlobalSettingsCommandLineTest {
   }
 
   @Test
-  @SuppressWarnings("deprecation") // CLI flags write into the JSON/CLI routerSettings bridge.
   void optimizerImprovementThresholdIsAlwaysPercent() {
+    OptimizerSettings commandLineOptimizer = settings.getCommandLineRouterSettings().optimizer;
+
     settings.applyCommandLineArguments(
         new String[] {"--router.optimizer.improvement_threshold=0.5"});
-    assertEquals(0.5f, settings.routerSettings.optimizer.optimizationImprovementThreshold, 0.0001f);
+    assertEquals(0.5f, commandLineOptimizer.optimizationImprovementThreshold, 0.0001f);
 
     settings.applyCommandLineArguments(new String[] {"-oit", "0.035"});
-    assertEquals(
-        0.035f, settings.routerSettings.optimizer.optimizationImprovementThreshold, 0.0001f);
+    assertEquals(0.035f, commandLineOptimizer.optimizationImprovementThreshold, 0.0001f);
   }
 }

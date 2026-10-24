@@ -98,7 +98,6 @@ class GlobalSettingsTest {
   }
 
   @Test
-  @SuppressWarnings("deprecation") // CLI flags write into the JSON/CLI routerSettings bridge.
   void applyCommandLineArgumentsNestedAutorouterMaxThreads() {
     GlobalSettings settings = new GlobalSettings();
     String[] args =
@@ -106,8 +105,10 @@ class GlobalSettingsTest {
 
     settings.applyCommandLineArguments(args);
 
-    assertEquals(1, settings.routerSettings.autorouter.maxThreads);
-    assertEquals(4, settings.routerSettings.optimizer.maxThreads);
+    // Command-line router options are kept apart from the persisted router settings.
+    assertEquals(1, settings.getCommandLineRouterSettings().autorouter.maxThreads);
+    assertEquals(4, settings.getCommandLineRouterSettings().optimizer.maxThreads);
+    assertEquals(4, settings.getNumThreads());
     assertEquals(0, FRLogger.getLogEntries().getWarningCount());
   }
 

@@ -335,6 +335,8 @@ Tuning guidance:
 
 Freerouting can also be configured using command-line arguments. These arguments override the settings specified in the JSON configuration file. You must use `--{property-name}={property-value}` format, where `property-name` is the hierarchical definition of the property you want to change and the `property-value` is its desired value. You can use `.`, `-` and `:` characters to separate the hierarchical levels in the `property-name` parameter.
 
+Router options given on the command line (`--router.*` and the short flags such as `-mp`, `-mt`, `-oit` and `-inc`) apply to that run only. They are never written to `freerouting.json`, even when the GUI saves its settings during the session, so they do not become defaults for later runs. To make a router option permanent, put it in the `router` section of `freerouting.json`.
+
 **Scalar example:**
 
 ```bash
