@@ -599,7 +599,9 @@ notice files under distinct `META-INF/licenses/commons-numbers-*` paths. Corners
 share a projective denominator only when both original coordinates
 remain within that tolerance. Integer congruence bases are reduced with at most 128
 steps to reconstruct short supporting lines, so a large intersection denominator is not
-mistaken for an out-of-range board coordinate. This is SES representation recovery;
+mistaken for an out-of-range board coordinate. Only basis combinations with coprime
+components are integer lines, so combinations with coefficients up to 16 are tried in
+order of size. This is SES representation recovery;
 no routing decision or board grid is changed.
 
 The reader checks actual insertion before counting an imported wire. It rejects widths,

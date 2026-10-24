@@ -16,6 +16,9 @@ import org.apache.commons.numbers.fraction.BigFraction;
 final class SesPathGeometry {
   private record Corner(BigFraction x, BigFraction y) {}
 
+  /** Largest coefficient of the reduced lattice basis tried for an integer line. */
+  private static final int MAX_BASIS_COEFFICIENT = 16;
+
   private SesPathGeometry() {}
 
   static Polyline read(double[] coordinates, double scale) throws IOException {
@@ -189,6 +192,11 @@ final class SesPathGeometry {
       return x.multiply(other.x).add(y.multiply(other.y));
     }
 
+    LatticeVector times(long factor) {
+      return new LatticeVector(
+          x.multiply(BigInteger.valueOf(factor)), y.multiply(BigInteger.valueOf(factor)));
+    }
+
     LatticeVector subtract(LatticeVector other, BigInteger multiple) {
       return new LatticeVector(
           x.subtract(other.x.multiply(multiple)), y.subtract(other.y.multiply(multiple)));
@@ -236,24 +244,29 @@ final class SesPathGeometry {
     }
     Line firstLine = null;
     IOException lastFailure = null;
-    // A reduced direction need not have an integer point on the corresponding line (e.g. the
-    // vertical line through x=1/3). Small basis combinations restore independent integer lines.
-    for (LatticeVector direction :
-        new LatticeVector[] {
-          first,
-          second,
-          first.subtract(second, BigInteger.ONE),
-          first.subtract(second, BigInteger.ONE.negate())
-        }) {
-      try {
-        Line candidate = integerLine(corner, direction.x, direction.y);
-        if (firstLine == null) {
-          firstLine = candidate;
-        } else if (!firstLine.isParallel(candidate)) {
-          return new Line[] {firstLine, candidate};
+    // A lattice vector is an integer line through the corner only if its components are coprime:
+    // a multiple of a direction that is not in the lattice reduces to that direction, whose line
+    // has no integer point (the vertical line through x=1/3). With a composite denominator every
+    // short basis combination can be such a multiple (denominator 3522 = 2 * 3 * 587 and the basis
+    // (1, 1), (1761, -1761)), so try the combinations in order of their coefficients' size.
+    for (int size = 1; size <= MAX_BASIS_COEFFICIENT; size++) {
+      for (int i = -size; i <= size; i++) {
+        for (int j = 0; j <= size; j++) {
+          if (Math.max(Math.abs(i), j) != size || (j == 0 && i < 0)) {
+            continue; // each direction once, up to its sign
+          }
+          LatticeVector direction = first.times(i).subtract(second, BigInteger.valueOf(-j));
+          try {
+            Line candidate = integerLine(corner, direction.x, direction.y);
+            if (firstLine == null) {
+              firstLine = candidate;
+            } else if (!firstLine.isParallel(candidate)) {
+              return new Line[] {firstLine, candidate};
+            }
+          } catch (IOException unsupportedDirection) {
+            lastFailure = unsupportedDirection;
+          }
         }
-      } catch (IOException unsupportedDirection) {
-        lastFailure = unsupportedDirection;
       }
     }
     throw new IOException("The SES corner has no supported pair of integer lines", lastFailure);

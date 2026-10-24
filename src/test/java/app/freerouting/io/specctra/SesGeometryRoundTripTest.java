@@ -282,6 +282,33 @@ class SesGeometryRoundTripTest {
     assertEquals(3.0, imported.getFirst().lastCorner().toFloat().y, 1e-9);
   }
 
+  /**
+   * A trace that ends where a diagonal crosses a steep line (a T-junction split) has a corner with
+   * a composite denominator. The short basis vectors of its line lattice are multiples of
+   * directions without an integer point, so the reader found only the diagonal and dropped the wire
+   * (Issue209-split05: 38 of 354 wires).
+   */
+  @ParameterizedTest
+  @CsvSource({"3522,false", "3522,true", "30030,false", "30030,true"})
+  void endpointWithCompositeDenominatorOnDiagonalRoundTrips(int denominator, boolean reversed)
+      throws Exception {
+    BasicBoard source = board(Unit.UM, 10, 10);
+    // the steep line through (0, 5) with direction (1, denominator + 1) meets y = x at
+    // (-5 / denominator, -5 / denominator)
+    Line steep = new Line(0, 5, 1, denominator + 6);
+    Line diagonal = new Line(0, 0, 1, 1);
+    Line vertical = new Line(100, 0, 100, 1);
+    Line[] lines =
+        reversed ? new Line[] {vertical, diagonal, steep} : new Line[] {steep, diagonal, vertical};
+    final PolylineTrace original = insert(source, new Polyline(lines));
+    BasicBoard target = board(Unit.UM, 10, 10);
+    SesImportSummary summary = SesReader.read(new ByteArrayInputStream(write(source)), target);
+    assertEquals(0, summary.errorsEncountered());
+    assertEquals(1, summary.wiresImported());
+    PolylineTrace imported = traces(target).getFirst();
+    assertEquals(List.of(original.polyline().corners()), List.of(imported.polyline().corners()));
+  }
+
   private static byte[] write(BasicBoard board) throws Exception {
     try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
       SesWriter.write(board, output, "geometry.dsn");
