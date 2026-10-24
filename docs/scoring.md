@@ -204,8 +204,12 @@ The optimizer **refuses** a candidate before looking at \(\mathrm{score}_{\mathr
 if it made the board less complete or dirtier:
 
 1. More incomplete connections than the incumbent → reject (`CONNECTIVITY_REGRESSION`).
-2. Else more clearance-violation **count** than the incumbent → reject (`DRC_COUNT_REGRESSION`).
-   Violation **depth** is ignored here.
+2. Else any clearance violation that the board did not have when the optimizer started →
+   reject (`NEW_CLEARANCE_VIOLATION`). Violations are matched by geometry (the items' shapes,
+   nets and layer and the measured clearance), so a pass that removes one violation and adds
+   another is rejected. Each candidate and each commit is checked the same way on the items it
+   inserted, so a violating reroute is never committed and never costs the pass its other
+   commits. Violation **depth** is ignored here.
 3. Else if optimizer score is **strictly higher** → keep the candidate.
 4. Else keep the incumbent (ties included). A more-complete but uglier board is
    **not** an automatic win.

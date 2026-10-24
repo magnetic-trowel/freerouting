@@ -19,12 +19,13 @@ class BatchOptimizerCandidateGateTest {
   }
 
   @Test
-  void clearanceRegressionVetoesHigherOptimizerScore() {
+  void newClearanceViolationVetoesHigherOptimizerScore() {
+    // One violation, as the incumbent had, but a new one: the count alone would accept it.
     BoardStatistics candidate = statistics(0, 1);
 
     assertEquals(
-        "DRC_COUNT_REGRESSION",
-        BatchOptimizer.optimizerCandidateRejectionReason(0, 0, 500.0f, candidate, 900.0f));
+        "NEW_CLEARANCE_VIOLATION",
+        BatchOptimizer.optimizerCandidateRejectionReason(0, 1, 500.0f, candidate, 900.0f));
   }
 
   @Test
@@ -40,7 +41,7 @@ class BatchOptimizerCandidateGateTest {
   void candidateWithNoVetoAndHigherOptimizerScoreIsAccepted() {
     BoardStatistics candidate = statistics(0, 0);
 
-    assertNull(BatchOptimizer.optimizerCandidateRejectionReason(1, 1, 500.0f, candidate, 600.0f));
+    assertNull(BatchOptimizer.optimizerCandidateRejectionReason(1, 0, 500.0f, candidate, 600.0f));
   }
 
   private static BoardStatistics statistics(int incompleteCount, int clearanceViolationCount) {

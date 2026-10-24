@@ -18,6 +18,9 @@ import app.freerouting.core.StoppableThread;
 import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.UndoableObjects;
+import app.freerouting.drc.ClearanceBaseline;
+import app.freerouting.drc.ClearanceViolation;
+import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.RouterSettings;
@@ -29,6 +32,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -65,6 +69,12 @@ public final class BatchOptimizer extends NamedAlgorithm {
   protected final AtomicLong workerCpuNanos = new AtomicLong(0);
   protected final AtomicLong workerAllocBytes = new AtomicLong(0);
   protected volatile FloatPoint currentPosition = null;
+
+  /**
+   * The clearance violations of the board the optimizer started on. A candidate, commit or pass is
+   * rejected if it has a violation that is not one of them.
+   */
+  private ClearanceBaseline startViolations = new ClearanceBaseline(List.of());
 
   /** The commits after the best one in the last pass, in the order they were made. */
   private final List<ChangeSet> passCommits = new ArrayList<>();
@@ -259,6 +269,11 @@ public final class BatchOptimizer extends NamedAlgorithm {
       return;
     }
 
+    this.startViolations =
+        new ClearanceBaseline(
+            initialViolations == 0
+                ? List.of()
+                : new DesignRulesChecker(this.board, null).getAllClearanceViolations());
     this.bestBoard = this.board.deepCopy();
     this.bestScore = initialOptimizerScore;
     this.bestIncompleteCount = initialIncomplete;
@@ -375,7 +390,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       String rejectionReason =
           optimizerCandidateRejectionReason(
               this.bestIncompleteCount,
-              this.bestClearanceViolationCount,
+              newClearanceViolationCount(passStats),
               this.bestScore,
               passStats,
               scoreAfterPass);
@@ -393,7 +408,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         rejectionReason =
             optimizerCandidateRejectionReason(
                 this.bestIncompleteCount,
-                this.bestClearanceViolationCount,
+                newClearanceViolationCount(passStats),
                 this.bestScore,
                 passStats,
                 scoreAfterPass);
@@ -576,22 +591,35 @@ public final class BatchOptimizer extends NamedAlgorithm {
   }
 
   /**
+   * Returns the number of clearance violations of the live board, which the statistics were taken
+   * of, that the board the optimizer started on did not have.
+   */
+  private int newClearanceViolationCount(BoardStatistics statistics) {
+    if (statistics.clearanceViolations.totalCount == 0) {
+      return 0;
+    }
+    return this.startViolations.countNewOrChanged(
+        new DesignRulesChecker(this.board, null).getAllClearanceViolations());
+  }
+
+  /**
    * Returns the explicit reason a candidate must be rejected, or {@code null} when it is accepted.
    *
-   * <p>Completeness and DRC count are vetoes; optimizer score ranks candidates that pass both
-   * vetoes. In particular, a more-complete but uglier candidate is not an automatic win.
+   * <p>Completeness and new clearance violations are vetoes; optimizer score ranks candidates that
+   * pass both vetoes. In particular, a more-complete but uglier candidate is not an automatic win,
+   * and a candidate that removes one violation and adds another is rejected.
    */
   static String optimizerCandidateRejectionReason(
       int incumbentIncompleteCount,
-      int incumbentClearanceViolationCount,
+      int newClearanceViolationCount,
       float incumbentOptimizerScore,
       BoardStatistics candidate,
       float candidateOptimizerScore) {
     if (candidate.connections.incompleteCount > incumbentIncompleteCount) {
       return "CONNECTIVITY_REGRESSION";
     }
-    if (candidate.clearanceViolations.totalCount > incumbentClearanceViolationCount) {
-      return "DRC_COUNT_REGRESSION";
+    if (newClearanceViolationCount > 0) {
+      return "NEW_CLEARANCE_VIOLATION";
     }
     if (!(candidateOptimizerScore > incumbentOptimizerScore)) {
       return "OPTIMIZER_SCORE_NOT_IMPROVED";
@@ -795,7 +823,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
                         passStop,
                         this.deadlineMs,
                         baselineMetrics,
-                        selection != CommitSelection.ALL,
+                        this.startViolations,
                         selection == CommitSelection.SCORE_RANKED ? scoreTracker : null)));
           }
           try {
@@ -1024,6 +1052,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 || liveScore.scoreWith(changes) > liveScore.score();
       }
     }
+    keep = keep && !changes.addsClearanceViolation(this.board, this.startViolations);
     if (keep) {
       this.passCommits.add(changes);
       if (liveScore != null) {
@@ -1459,7 +1488,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     private final StoppableThread thread;
     private final Long deadlineMs;
     private final BoardStatistics.OptimizerMetrics baselineMetrics;
-    private final boolean recordChanges;
+    private final ClearanceBaseline startViolations;
     private final ScoreTracker scoreRanking;
 
     OptimizeCandidateTask(
@@ -1472,7 +1501,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         StoppableThread thread,
         Long deadlineMs,
         BoardStatistics.OptimizerMetrics baselineMetrics,
-        boolean recordChanges,
+        ClearanceBaseline startViolations,
         ScoreTracker scoreRanking) {
       this.job = job;
       this.image = image;
@@ -1483,7 +1512,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.thread = thread;
       this.deadlineMs = deadlineMs;
       this.baselineMetrics = baselineMetrics;
-      this.recordChanges = recordChanges;
+      this.startViolations = startViolations;
       this.scoreRanking = scoreRanking;
     }
 
@@ -1559,11 +1588,14 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 && result.incompleteCount() <= result.incompleteCountBefore()
                 && scoreGain > 0);
       }
+      if (result.improved()) {
+        if (changes == null) {
+          changes = ChangeSet.since(workerBoard);
+        }
+        result.updateImproved(!changes.addsClearanceViolation(workerBoard, startViolations));
+      }
       if (!result.improved()) {
         return new CandidateResult(result, null, null, 0, position, cpuUsed, allocUsed);
-      }
-      if (changes == null && recordChanges) {
-        changes = ChangeSet.since(workerBoard);
       }
       if (!workerBoard.popSnapshot()) {
         FRLogger.warn("BatchOptimizer: failed to remove the candidate-board snapshot");
@@ -1648,6 +1680,29 @@ public final class BatchOptimizer extends NamedAlgorithm {
         return cornerCount >= 3 ? cornerCount - 2 : 0;
       }
       return 0;
+    }
+
+    /**
+     * True if an item this change inserted or changed has a clearance violation that is not in the
+     * baseline. Only those items can be in a new violation: every other item kept its shape.
+     */
+    boolean addsClearanceViolation(BasicBoard board, ClearanceBaseline baseline) {
+      Map<String, ClearanceViolation> violations = new LinkedHashMap<>();
+      for (int id : insertedIds) {
+        Item item = board.getItem(id);
+        if (item == null) {
+          continue;
+        }
+        // An insertion next to another inserted item is seen from both sides; count it once.
+        for (ClearanceViolation violation : item.clearanceViolations()) {
+          int first = violation.firstItem.getId();
+          int second = violation.secondItem.getId();
+          violations.putIfAbsent(
+              Math.min(first, second) + "-" + Math.max(first, second) + "-" + violation.layer,
+              violation);
+        }
+      }
+      return !violations.isEmpty() && baseline.countNewOrChanged(violations.values()) > 0;
     }
 
     /**
