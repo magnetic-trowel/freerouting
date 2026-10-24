@@ -65,6 +65,10 @@ public final class DrcRunner {
       FRLogger.error("Failed to load board for DRC check", null);
       return false;
     }
+    // The load starts a background scan (statistics, full DRC, pre-existing violation baseline)
+    // of the loaded board. Let it finish before the rules and session files change the board, so
+    // it neither reads a board that is being changed nor races with the DRC below.
+    drcJob.board.awaitPostLoad();
 
     if (globalSettings.initialRulesFile != null) {
       try {

@@ -117,22 +117,21 @@ public class Via extends DrillItem implements Serializable {
       FRLogger.warn("Via.get_shape: padstack is null");
       return null;
     }
-    if (this.precalculatedShapes == null) {
+    // Read and publish the cache once: the array is filled before it is stored, so a reader on
+    // another thread (the GUI paints the board the router changes) never sees a half-filled array,
+    // and a concurrent clearDerivedData() cannot null the field between the check and the read.
+    Shape[] shapes = this.precalculatedShapes;
+    if (shapes == null) {
       int shapeCount = Math.max(0, padstack.toLayer() - padstack.fromLayer() + 1);
-      this.precalculatedShapes = new Shape[shapeCount];
-      for (int i = 0; i < this.precalculatedShapes.length; i++) {
-        int padstackLayer = i + this.firstLayer();
-        Vector translateVector = getCenter().differenceBy(Point.ZERO);
-        Shape currentShape = padstack.getShape(padstackLayer);
-
-        if (currentShape == null) {
-          this.precalculatedShapes[i] = null;
-        } else {
-          this.precalculatedShapes[i] = (Shape) currentShape.translateBy(translateVector);
-        }
+      shapes = new Shape[shapeCount];
+      Vector translateVector = getCenter().differenceBy(Point.ZERO);
+      for (int i = 0; i < shapes.length; i++) {
+        Shape currentShape = padstack.getShape(i + this.firstLayer());
+        shapes[i] = currentShape == null ? null : (Shape) currentShape.translateBy(translateVector);
       }
+      this.precalculatedShapes = shapes;
     }
-    return this.precalculatedShapes[index];
+    return shapes[index];
   }
 
   @Override

@@ -125,7 +125,9 @@ public class DesignRulesChecker {
 
         // Get the connected set for this item
         Collection<Item> connectedSet = item.getConnectedSet(netNumber);
-        java.util.Set<Item> setItems = new java.util.HashSet<>(connectedSet);
+        // Keep the connected set's id order: findRepresentativeItem() and the reported group items
+        // read this set in iteration order, which for a HashSet of items follows identity hashes.
+        java.util.Set<Item> setItems = new java.util.LinkedHashSet<>(connectedSet);
 
         // Only add items that are actually in this net
         setItems.retainAll(netItems);
