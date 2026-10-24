@@ -28,6 +28,7 @@ import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -49,7 +50,6 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class BatchOptimizer extends NamedAlgorithm {
 
   protected final ProgressThrottler progressThrottler = new ProgressThrottler(1000);
-  protected ReadSortedRouteItems sortedRouteItems;
   // In the first passes the ripup costs are increased for better performance.
   protected boolean useIncreasedRipupCosts;
   // The minimum cumulative trace length that was reached during the optimization
@@ -686,7 +686,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
 
   private List<Integer> prepareCandidateItems() {
     List<Integer> itemIds = new ArrayList<>();
-    this.sortedRouteItems = new ReadSortedRouteItems();
+    List<Item> candidates = candidates(this.board);
 
     ItemSelectionStrategy strategy =
         this.settings.optimizer != null ? this.settings.optimizer.itemSelectionStrategy : null;
@@ -698,7 +698,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       List<Integer> nonPrioritized = new ArrayList<>();
       PriorityQueue<ItemRouteResult> pq = new PriorityQueue<>();
 
-      for (Item item = sortedRouteItems.next(); item != null; item = sortedRouteItems.next()) {
+      for (Item item : candidates) {
         ItemRouteResult r = resultMap.get(item.getId());
         if (r != null) {
           pq.add(r);
@@ -712,12 +712,11 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
       itemIds.addAll(nonPrioritized);
     } else {
-      for (Item item = sortedRouteItems.next(); item != null; item = sortedRouteItems.next()) {
+      for (Item item : candidates) {
         itemIds.add(item.getId());
       }
     }
 
-    this.sortedRouteItems = null;
     resultMap.clear();
     return itemIds;
   }
@@ -825,16 +824,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 ? this.settings.optimizer.maxConsecutiveFailures
                 : 50);
 
-    // Candidates with the same key route identically; evaluate the first and reuse its result.
-    int[] representative = new int[candidateItemIds.size()];
-    int[] lastDuplicate = new int[candidateItemIds.size()];
-    Map<String, Integer> firstIndexByKey = new HashMap<>();
-    for (int k = 0; k < candidateItemIds.size(); k++) {
-      String key = candidateKey(this.board, candidateItemIds.get(k));
-      Integer first = key == null ? null : firstIndexByKey.putIfAbsent(key, k);
-      representative[k] = first == null ? k : first;
-      lastDuplicate[representative[k]] = k;
-    }
     Map<Integer, Future<CandidateResult>> futureByIndex = new HashMap<>();
     int nextToSubmit = 0;
     PassStop passStop = new PassStop(this.thread);
@@ -860,9 +849,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
           int submitLimit = Math.min(candidateItemIds.size(), k + chunkSize);
           while (nextToSubmit < submitLimit) {
             int toSubmit = nextToSubmit++;
-            if (representative[toSubmit] != toSubmit) {
-              continue;
-            }
             int itemId = candidateItemIds.get(toSubmit);
             futureByIndex.put(
                 toSubmit,
@@ -881,15 +867,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
                         selection == CommitSelection.SCORE_RANKED ? scoreTracker : null)));
           }
           try {
-            int rep = representative[k];
-            CandidateResult res = futureByIndex.get(rep).get();
-            if (k == lastDuplicate[rep]) {
-              futureByIndex.remove(rep);
-            }
-            if (res != null && rep != k) {
-              int itemId = candidateItemIds.get(k);
-              res = res.forDuplicate(itemId, getItemPosition(this.board.getItem(itemId)));
-            }
+            CandidateResult res = futureByIndex.remove(k).get();
             this.totalItemsOptimized++;
             if (res != null) {
               this.workerCpuNanos.addAndGet(res.cpuUsedNanos);
@@ -1318,11 +1296,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
     routerCountersBefore.incompleteCount = calculateIncompleteCount(routingBoard);
 
     Set<Item> rippedConnections = rippedConnectionsOf(item);
-
-    for (Item currentItem : rippedConnections) {
-      if (currentItem.isUserFixed() || currentItem.hasIgnoredNets()) {
-        return new ItemRouteResult(item.getId());
-      }
+    if (rippedConnections == null) {
+      return new ItemRouteResult(item.getId());
     }
 
     routingBoard.removeItems(rippedConnections);
@@ -1374,7 +1349,11 @@ public final class BatchOptimizer extends NamedAlgorithm {
     return result;
   }
 
-  /** The connections a candidate rips: its own and, for a trace, those of unfixed neighbours. */
+  /**
+   * The connections a candidate rips: its own and, for a trace, those of unfixed neighbours, or
+   * null if one of their items is on an ignored net. A connection ends at the first item that is
+   * not routable, so it holds no fixed item.
+   */
   private static Set<Item> rippedConnectionsOf(Item item) {
     Set<Item> rippedItems = new TreeSet<>();
     rippedItems.add(item);
@@ -1393,19 +1372,41 @@ public final class BatchOptimizer extends NamedAlgorithm {
     for (Item currentItem : rippedItems) {
       rippedConnections.addAll(currentItem.getConnectionItems(Item.StopConnectionOption.NONE));
     }
+    for (Item ripped : rippedConnections) {
+      if (ripped.hasIgnoredNets()) {
+        return null;
+      }
+    }
     return rippedConnections;
+  }
+
+  /**
+   * Returns the candidates of a pass: the items of {@link #optimizationOrder}, one per {@link
+   * #candidateKey}. Candidates with equal keys route identically, so evaluating, counting or
+   * committing more than the first of them only repeats its rip-up and reroute.
+   */
+  static List<Item> candidates(BasicBoard board) {
+    List<Item> result = new ArrayList<>();
+    Set<String> keys = new HashSet<>();
+    for (Item item : optimizationOrder(board)) {
+      String key = candidateKey(item);
+      if (key != null && keys.add(key)) {
+        result.add(item);
+      }
+    }
+    return result;
   }
 
   /**
    * Returns everything {@link #optRouteItemOnBoard} reads of a candidate besides the pass's board
    * image and flags: the connections it rips, the nets whose traces it combines and whether it is a
    * trace (which scales the rip-up cost). Candidates with equal keys, such as the vias of one
-   * connection or the branches beside a fork, produce the same result. Returns null for candidates
-   * that are not shared.
+   * connection or the branches beside a fork, produce the same result. Returns null for a candidate
+   * that would rip an item on an ignored net, which is never rerouted.
    */
-  static String candidateKey(RoutingBoard board, int itemId) {
-    Item item = board.getItem(itemId);
-    if (item == null || item.hasIgnoredNets()) {
+  static String candidateKey(Item item) {
+    Set<Item> rippedConnections = item.hasIgnoredNets() ? null : rippedConnectionsOf(item);
+    if (rippedConnections == null) {
       return null;
     }
     StringBuilder key = new StringBuilder(item.getClass().getName());
@@ -1413,7 +1414,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       key.append(':').append(item.getNetNumber(i));
     }
     key.append('|');
-    for (Item ripped : rippedConnectionsOf(item)) {
+    for (Item ripped : rippedConnections) {
       key.append(ripped.getId()).append(',');
     }
     return key.toString();
@@ -1452,12 +1453,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.itemPosition = itemPosition;
       this.cpuUsedNanos = cpuUsedNanos;
       this.allocUsedBytes = allocUsedBytes;
-    }
-
-    /** This result for a duplicate candidate: same routing, board and changes, its own item. */
-    CandidateResult forDuplicate(int itemId, FloatPoint position) {
-      return new CandidateResult(
-          result.withItemId(itemId), board, changes, scoreGain, position, 0, 0);
     }
 
     /** True if this candidate is a better pick than the other under the commit selection. */
@@ -1791,7 +1786,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
     return board.routingLedger().incompleteCount();
   }
 
-  /** Reads the vias and traces on the board in ascending x order. */
   /**
    * Returns the optimizer's candidate order: one item per distinct (x, y, first layer) key in
    * ascending order, where a via is keyed by its center and a trace by the larger of its end
@@ -1859,14 +1853,5 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
     }
     return false;
-  }
-
-  protected class ReadSortedRouteItems {
-
-    private final Iterator<Item> order = optimizationOrder(board).iterator();
-
-    Item next() {
-      return order.hasNext() ? order.next() : null;
-    }
   }
 }
