@@ -7,6 +7,7 @@ import app.freerouting.api.EnvironmentHostValidationFilter;
 import app.freerouting.api.GsonMessageBodyHandler;
 import app.freerouting.api.JsonStringMessageBodyWriter;
 import app.freerouting.api.NotFoundExceptionMapper;
+import app.freerouting.api.RequestBodyLimitFilter;
 import jakarta.ws.rs.ApplicationPath;
 import jakarta.ws.rs.core.Application;
 import java.util.HashSet;
@@ -33,6 +34,7 @@ public class McpApplication extends Application {
                 McpApiKeyValidationFilter.class,
                 McpRateLimitFilter.class,
                 CorrelationIdFilter.class,
+                RequestBodyLimitFilter.class,
                 EnvironmentHostValidationFilter.class,
                 ApiUsageFilter.class,
                 ApiExceptionMapper.class,

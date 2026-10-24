@@ -195,6 +195,32 @@ class JobOutputStreamLifecycleTest {
     }
   }
 
+  /**
+   * A stream only notices a vanished client when a write fails, and a job without output never
+   * wrote, so the worker of a disconnected client stayed until the job ended. A keep-alive comment
+   * is sent while there is nothing else to send.
+   */
+  @Test
+  @app.freerouting.logger.AllowErrorLogs("Exercises a keep-alive to a disconnected client")
+  void keepAliveReleasesWorkerOfVanishedClientWhileThereIsNoOutput() throws Exception {
+    final Set<Thread> existing = workers();
+    long interval = SseKeepAlive.intervalMillis;
+    SseKeepAlive.intervalMillis = 100;
+    when(sink.send(any(OutboundSseEvent.class)))
+        .thenReturn(CompletableFuture.failedFuture(new java.io.IOException("Vanished client")));
+    try {
+      withJob(() -> startStream(false));
+      verify(sink, timeout(2000)).close();
+      verify(eventBuilder).comment("keep-alive");
+      assertTrue(awaitWorkerExit(existing));
+    } finally {
+      SseKeepAlive.intervalMillis = interval;
+      closed.set(true);
+      job.state = RoutingJobState.CANCELLED;
+      awaitWorkerExit(existing);
+    }
+  }
+
   @Test
   void invalidJobDoesNotPublishEarlierPreview() throws Exception {
     final Set<Thread> existing = workers();

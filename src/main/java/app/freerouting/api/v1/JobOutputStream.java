@@ -31,6 +31,8 @@ final class JobOutputStream {
   private static final int SEND_TIMEOUT_SECONDS = 10;
   private final RoutingJob job;
   private final SseEventSink sink;
+  private final Sse sse;
+  private volatile long nextKeepAliveAt = System.currentTimeMillis() + SseKeepAlive.intervalMillis;
   private final ScheduledExecutorService executor;
   private final Supplier<OutboundSseEvent> nextEvent;
   private final AtomicBoolean closed = new AtomicBoolean();
@@ -38,9 +40,14 @@ final class JobOutputStream {
   private volatile CompletableFuture<?> pendingSend;
 
   private JobOutputStream(
-      RoutingJob job, SseEventSink sink, Supplier<OutboundSseEvent> nextEvent, String workerName) {
+      RoutingJob job,
+      SseEventSink sink,
+      Sse sse,
+      Supplier<OutboundSseEvent> nextEvent,
+      String workerName) {
     this.job = job;
     this.sink = sink;
+    this.sse = sse;
     this.nextEvent = nextEvent;
     executor =
         Executors.newSingleThreadScheduledExecutor(
@@ -58,6 +65,7 @@ final class JobOutputStream {
         new JobOutputStream(
             job,
             sink,
+            sse,
             () -> {
               var output = job.output;
               if (output == null) {
@@ -91,6 +99,7 @@ final class JobOutputStream {
         new JobOutputStream(
             job,
             sink,
+            sse,
             () -> {
               String json = currentJson(job);
               if (json == null) {
@@ -146,12 +155,19 @@ final class JobOutputStream {
         return;
       }
       if (event == null) {
-        sending.set(false);
         if (finalSnapshot) {
+          sending.set(false);
           close();
+          return;
         }
-        return;
+        if (System.currentTimeMillis() < nextKeepAliveAt) {
+          sending.set(false);
+          return;
+        }
+        // Nothing new to send: a keep-alive comment notices a client that went away.
+        event = SseKeepAlive.event(sse);
       }
+      nextKeepAliveAt = System.currentTimeMillis() + SseKeepAlive.intervalMillis;
       pendingSend = sink.send(event).toCompletableFuture();
       pendingSend
           .orTimeout(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS)

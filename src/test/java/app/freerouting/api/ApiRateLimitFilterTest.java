@@ -73,4 +73,26 @@ class ApiRateLimitFilterTest {
     assertEquals(200, r2.statusCode());
     assertEquals(429, r3.statusCode());
   }
+
+  /**
+   * An unauthenticated caller was counted by its client-chosen Freerouting-Profile-ID header, so a
+   * new header value on every request was never limited.
+   */
+  @Test
+  void rotatingProfileHeadersDoNotBypassTheLimit() throws Exception {
+    int[] statuses = new int[3];
+    for (int i = 0; i < statuses.length; i++) {
+      HttpRequest req =
+          HttpRequest.newBuilder(baseUri.resolve("/v1/system/status"))
+              .header("Freerouting-Profile-ID", java.util.UUID.randomUUID().toString())
+              .GET()
+              .timeout(HTTP_TIMEOUT)
+              .build();
+      statuses[i] = httpClient.send(req, HttpResponse.BodyHandlers.ofString()).statusCode();
+    }
+
+    assertEquals(200, statuses[0]);
+    assertEquals(200, statuses[1]);
+    assertEquals(429, statuses[2]);
+  }
 }

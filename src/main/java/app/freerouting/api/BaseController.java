@@ -24,6 +24,18 @@ import java.util.UUID;
  */
 public class BaseController {
 
+  /**
+   * Thrown by {@link #authenticateUser()} when the caller's profile headers are missing or cannot
+   * be resolved. It is a client error: {@link ApiExceptionMapper} answers it with 400 Bad Request.
+   */
+  public static final class MissingProfileException extends IllegalArgumentException {
+    private static final long serialVersionUID = 1L;
+
+    MissingProfileException(String message) {
+      super(message);
+    }
+  }
+
   @Context private HttpHeaders httpHeaders;
   @Context private jakarta.ws.rs.core.SecurityContext securityContext;
   private UUID userIdOverride;
@@ -64,7 +76,7 @@ public class BaseController {
    * </ol>
    *
    * @return the caller's UUID — never {@code null}.
-   * @throws IllegalArgumentException if both headers are missing/empty, or if neither yields a
+   * @throws MissingProfileException if both headers are missing/empty, or if neither yields a
    *     resolvable UUID.
    */
   protected UUID authenticateUser() {
@@ -79,7 +91,7 @@ public class BaseController {
 
     if (((userIdString == null) || (userIdString.isEmpty()))
         && ((userEmailString == null) || (userEmailString.isEmpty()))) {
-      throw new IllegalArgumentException(
+      throw new MissingProfileException(
           "Freerouting-Profile-ID or Freerouting-Profile-Email HTTP request header must be set in"
               + " order to get authenticated.");
     }
@@ -100,7 +112,7 @@ public class BaseController {
     }
 
     if (userId == null) {
-      throw new IllegalArgumentException(
+      throw new MissingProfileException(
           "The user couldn't be authenticated based on the Freerouting-Profile-ID or"
               + " Freerouting-Profile-Email HTTP request header values.");
     }

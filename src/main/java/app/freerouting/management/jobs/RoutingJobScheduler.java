@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -698,8 +699,10 @@ public final class RoutingJobScheduler {
         && job.input.getFilename() != null
         && !job.input.getFilename().isEmpty()
         && job.input.getData() != null) {
-      Path inputFilePath = sessionFolderPath.resolve(job.input.getFilename());
-      Files.write(inputFilePath, job.input.getData().readAllBytes());
+      Path inputFilePath = resolveInFolder(sessionFolderPath, job.input.getFilename());
+      if (inputFilePath != null) {
+        Files.write(inputFilePath, job.input.getData().readAllBytes());
+      }
     }
 
     // Save the output file if the filename is defined and there is data stored in
@@ -707,14 +710,37 @@ public final class RoutingJobScheduler {
     if (job.output != null
         && job.output.getFilename() != null
         && !job.output.getFilename().isEmpty()) {
-      Path outputFilePath = sessionFolderPath.resolve(job.output.getFilename());
+      Path outputFilePath = resolveInFolder(sessionFolderPath, job.output.getFilename());
       var outputData = job.output.getData();
-      if (outputData != null && outputData.available() > 0) {
+      if (outputFilePath == null) {
+        FRLogger.warn("Not saving the output of job '%s': invalid file name.".formatted(job.id));
+      } else if (outputData != null && outputData.available() > 0) {
         Files.write(outputFilePath, outputData.readAllBytes());
       } else {
         Files.deleteIfExists(outputFilePath);
       }
     }
+  }
+
+  /**
+   * Returns the file {@code filename} directly inside {@code folder}, or {@code null} when the name
+   * is not a plain file name (absolute, with a directory, or {@code ..}).
+   */
+  static Path resolveInFolder(Path folder, String filename) {
+    if (filename == null || filename.isBlank()) {
+      return null;
+    }
+    Path name;
+    try {
+      name = Path.of(filename);
+    } catch (InvalidPathException _) {
+      return null;
+    }
+    if (name.isAbsolute() || name.getNameCount() != 1 || "..".equals(name.toString())) {
+      return null;
+    }
+    Path resolved = folder.resolve(name).normalize();
+    return folder.normalize().equals(resolved.getParent()) ? resolved : null;
   }
 
   /**

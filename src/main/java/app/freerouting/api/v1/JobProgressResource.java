@@ -437,17 +437,41 @@ public class JobProgressResource extends BaseController {
 
     job.addLogEntryAddedEventListener(listenerHolder[0]);
 
-    // Periodically verify if job reached a terminal state even if no new log entries were added
+    // Periodically verify if job reached a terminal state even if no new log entries were added,
+    // and send keep-alive comments so that a disconnected client is noticed and released.
+    long[] nextKeepAliveAt = {System.currentTimeMillis() + SseKeepAlive.intervalMillis};
+    Runnable release =
+        () -> {
+          job.removeLogEntryAddedEventListener(listenerHolder[0]);
+          try {
+            eventSink.close();
+          } catch (Exception closeEx) {
+            FRLogger.error("Error closing SSE event sink", closeEx);
+          }
+          executor.shutdown();
+        };
     executor.scheduleAtFixedRate(
         () -> {
-          if (job.state != null && job.state.isTerminal()) {
-            job.removeLogEntryAddedEventListener(listenerHolder[0]);
+          if ((job.state != null && job.state.isTerminal()) || eventSink.isClosed()) {
+            release.run();
+          } else if (System.currentTimeMillis() >= nextKeepAliveAt[0]) {
+            nextKeepAliveAt[0] = System.currentTimeMillis() + SseKeepAlive.intervalMillis;
             try {
-              eventSink.close();
-            } catch (Exception closeEx) {
-              FRLogger.error("Error closing SSE event sink", closeEx);
+              eventSink
+                  .send(SseKeepAlive.event(sse))
+                  .whenComplete(
+                      (ignored, error) -> {
+                        if (error != null) {
+                          try {
+                            executor.execute(release);
+                          } catch (RejectedExecutionException _) {
+                            // Already released.
+                          }
+                        }
+                      });
+            } catch (RuntimeException sendEx) {
+              release.run();
             }
-            executor.shutdown();
           }
         },
         200,

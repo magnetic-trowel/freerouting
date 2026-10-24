@@ -515,9 +515,13 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
     return new BoardFileDetails(this.output.getFile()).toString();
   }
 
+  /**
+   * Orders jobs for scheduling: a higher priority comes first. The scheduler sorts its queue with
+   * this order (a stable sort), so jobs of the same priority keep their queue order.
+   */
   @Override
   public int compareTo(RoutingJob o) {
-    return Integer.compare(effectivePriority().ordinal(), o.effectivePriority().ordinal());
+    return Integer.compare(o.effectivePriority().ordinal(), effectivePriority().ordinal());
   }
 
   /**

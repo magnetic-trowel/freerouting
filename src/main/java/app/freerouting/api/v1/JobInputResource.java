@@ -5,6 +5,7 @@ import static app.freerouting.util.gson.GsonProvider.GSON;
 import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.api.BaseController;
 import app.freerouting.api.dto.BoardFilePayload;
+import app.freerouting.api.dto.EnqueueJobRequest;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
@@ -13,6 +14,7 @@ import app.freerouting.management.jobs.RoutingJobScheduler;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.util.TextManager;
+import com.google.gson.JsonParseException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -70,7 +72,7 @@ public class JobInputResource extends BaseController {
       content =
           @Content(
               mediaType = MediaType.APPLICATION_JSON,
-              schema = @Schema(implementation = RoutingJob.class)))
+              schema = @Schema(implementation = EnqueueJobRequest.class)))
   @ApiResponses(
       value = {
         @ApiResponse(
@@ -96,20 +98,28 @@ public class JobInputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    RoutingJob job = GSON.fromJson(requestBody, RoutingJob.class);
-    if (job == null) {
+    // Only the client-owned fields are read; the server creates the job itself.
+    EnqueueJobRequest jobRequest;
+    try {
+      jobRequest = GSON.fromJson(requestBody, EnqueueJobRequest.class);
+    } catch (JsonParseException _) {
+      jobRequest = null;
+    }
+    if (jobRequest == null || jobRequest.sessionId == null) {
       return Response.status(Response.Status.BAD_REQUEST)
           .entity("{\"error\":\"The job data is invalid.\"}")
           .build();
     }
 
     // Check if the sessionId references a valid session
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
+    Session session =
+        SessionManager.getInstance().getSession(jobRequest.sessionId.toString(), userId);
     if (session == null) {
       return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
+          .entity("{\"error\":\"The session ID '" + jobRequest.sessionId + "' is invalid.\"}")
           .build();
     }
+    RoutingJob job = jobRequest.toRoutingJob();
 
     job.userId = session.userId;
     job.apiKeyHash = session.apiKeyHash;

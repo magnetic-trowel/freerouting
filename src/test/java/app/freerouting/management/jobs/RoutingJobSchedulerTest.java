@@ -360,4 +360,29 @@ public class RoutingJobSchedulerTest {
         "Deleting saved job files and directories must succeed without open handle locks");
     assertFalse(Files.exists(dataDir), "Data directory should be deleted");
   }
+
+  /**
+   * Saved jobs write their input and output under the session folder by file name. A client-chosen
+   * name with a directory or an absolute path made the save write or delete a file elsewhere.
+   */
+  @Test
+  void savedJobFilesStayInsideTheSessionFolder() {
+    Path folder = tempDir.resolve("session");
+
+    assertEquals(
+        folder.resolve("board.dsn"), RoutingJobScheduler.resolveInFolder(folder, "board.dsn"));
+    for (String name :
+        new String[] {
+          tempDir.resolve("victim.txt").toAbsolutePath().toString(),
+          "../victim.txt",
+          "sub/board.dsn",
+          "..",
+          ".",
+          "",
+          " ",
+          null
+        }) {
+      assertNull(RoutingJobScheduler.resolveInFolder(folder, name), String.valueOf(name));
+    }
+  }
 }
