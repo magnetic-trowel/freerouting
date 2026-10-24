@@ -769,24 +769,26 @@ public class Network extends ScopeKeyword {
     int currentClearance = (int) Math.round(coordinateTransform.dsnToBoard(rule.value));
     final String className = netClass.getName();
     int classNo = clearanceMatrix.getNo(className);
-    if (classNo < 0) {
-      // class not yet existing, create a new class
+    boolean newClass = classNo < 0;
+    if (newClass) {
       clearanceMatrix.appendClass(className);
       classNo = clearanceMatrix.getNo(className);
-      // set the clearance values of the new class to the maximum of currentClearance and
-      // the existing values. A layer rule raises them on its own layer only.
+      netClass.defaultItemClearanceClasses.setAll(classNo);
+    }
+    if (newClass || layerIndex >= 0) {
+      // The clearance of the class to every class is the larger of currentClearance and the
+      // default class's clearance to it, on every layer or, for a layer rule, on its layer
+      // (where it replaces the class's general rule).
       for (int i = 1; i < clearanceMatrix.getClassCount(); i++) {
         for (int j = 0; j < clearanceMatrix.getLayerCount(); j++) {
           if (layerIndex >= 0 && j != layerIndex) {
             continue;
           }
-          int currentValue =
-              Math.max(clearanceMatrix.getValue(classNo, i, j, false), currentClearance);
+          int currentValue = Math.max(clearanceMatrix.getValue(1, i, j, false), currentClearance);
           clearanceMatrix.setValue(classNo, i, j, currentValue);
           clearanceMatrix.setValue(i, classNo, j, currentValue);
         }
       }
-      netClass.defaultItemClearanceClasses.setAll(classNo);
     }
     netClass.setTraceClearanceClass(classNo);
     if (rule.clearanceClassPairs.isEmpty()) {

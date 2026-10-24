@@ -31,7 +31,8 @@ class ClassLayerClearanceRuleTest {
           (rule (width 250) (clearance 200))
         )
         (placement
-          (component PAD (place U1 2000 3000 front 0) (place U2 8000 3000 front 0))
+          (component PAD
+            (place U1 2000 3000 front 0) (place U2 8000 3000 front 0) (place U3 14000 3000 front 0))
         )
         (library
           (image PAD (pin CirclePad_800_um 1 0 0))
@@ -41,8 +42,10 @@ class ClassLayerClearanceRuleTest {
         (network
           (net A (pins U1-1))
           (net B (pins U2-1))
+          (net C (pins U3-1))
           (class kicad_default A (rule (width 250) (clearance 200)))
           (class bottom_wide B (rule (width 250)) (layer_rule B.Cu (rule (clearance 800))))
+          (class both C (rule (width 250) (clearance 300)) (layer_rule B.Cu (rule (clearance 700))))
         )
       )
       """;
@@ -52,13 +55,17 @@ class ClassLayerClearanceRuleTest {
     Freerouting.globalSettings = new GlobalSettings();
   }
 
-  @Test
-  void layerRuleClearanceDoesNotLeakToOtherLayers() {
+  private static RoutingBoard board() {
     BoardReadResult result =
         DsnReader.readBoard(
             new ByteArrayInputStream(BOARD.getBytes(StandardCharsets.UTF_8)), null, null);
     assertInstanceOf(BoardReadResult.Success.class, result);
-    RoutingBoard board = (RoutingBoard) ((BoardReadResult.Success) result).board();
+    return (RoutingBoard) ((BoardReadResult.Success) result).board();
+  }
+
+  @Test
+  void layerRuleClearanceDoesNotLeakToOtherLayers() {
+    RoutingBoard board = board();
     ClearanceMatrix matrix = board.rules.clearanceMatrix;
     int wide = matrix.getNo("bottom_wide");
     int defaultClass = matrix.getNo("default");
@@ -70,5 +77,24 @@ class ClassLayerClearanceRuleTest {
     assertEquals(8000, matrix.getValue(wide, wide, backLayer, false));
     assertEquals(2000, matrix.getValue(wide, defaultClass, frontLayer, false));
     assertEquals(2000, matrix.getValue(wide, wide, frontLayer, false));
+  }
+
+  @Test
+  void layerRuleOfAClassWithAGeneralRuleAppliesAgainstEveryClassOnItsLayer() {
+    RoutingBoard board = board();
+    ClearanceMatrix matrix = board.rules.clearanceMatrix;
+    int both = matrix.getNo("both");
+    int wide = matrix.getNo("bottom_wide");
+    int defaultClass = matrix.getNo("default");
+    int frontLayer = board.layerStructure.getNo("F.Cu");
+    int backLayer = board.layerStructure.getNo("B.Cu");
+    assertEquals(7000, matrix.getValue(both, both, backLayer, false));
+    assertEquals(7000, matrix.getValue(both, defaultClass, backLayer, false));
+    assertEquals(7000, matrix.getValue(defaultClass, both, backLayer, false));
+    // the larger of the two classes on B.Cu
+    assertEquals(8000, matrix.getValue(both, wide, backLayer, false));
+    assertEquals(3000, matrix.getValue(both, both, frontLayer, false));
+    assertEquals(3000, matrix.getValue(both, defaultClass, frontLayer, false));
+    assertEquals(3000, matrix.getValue(both, wide, frontLayer, false));
   }
 }
