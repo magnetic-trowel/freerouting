@@ -7,7 +7,6 @@ import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.BoardImage;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
-import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.Unit;
@@ -175,8 +174,18 @@ public final class BatchOptimizer extends NamedAlgorithm {
 
     float initialScore = stats.getOptimizerScore(this.job.routerSettings);
 
-    // Guard 2: Zero vias and optimal trace length
-    if (stats.vias.totalCount == 0) {
+    // Guard 2: Score ceiling / theoretical optimum
+    if (initialScore >= 995.0f) {
+      return String.format(
+          Locale.US,
+          "the initial optimizer score (%.2f) is already at or near theoretical maximum (995.00)",
+          initialScore);
+    }
+
+    // Guard 3: No via above the via bound and a near-optimal trace length
+    int minViaCount =
+        stats.bounds != null && stats.bounds.minViaCount != null ? stats.bounds.minViaCount : 0;
+    if (stats.vias.totalCount <= minViaCount) {
       if (initialScore >= 950.0f) {
         return String.format(
             Locale.US,
@@ -196,89 +205,12 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
     }
 
-    // Guard 3: Score ceiling / theoretical optimum
-    if (initialScore >= 995.0f) {
-      return String.format(
-          Locale.US,
-          "the initial optimizer score (%.2f) is already at or near theoretical maximum (995.00)",
-          initialScore);
-    }
-    if (stats.bounds != null
-        && stats.bounds.minTraceLengthMm != null
-        && stats.bounds.minTraceLengthMm > 0
-        && stats.traces.totalLengthMm != null
-        && stats.traces.totalLengthMm <= stats.bounds.minTraceLengthMm * 1.02f
-        && (stats.bounds.minViaCount == null
-            || stats.vias.totalCount <= stats.bounds.minViaCount)) {
-      return String.format(
-          Locale.US,
-          "total trace length (%.2f mm) is already within 2%% of the theoretical minimum (%.2f mm)",
-          stats.traces.totalLengthMm,
-          stats.bounds.minTraceLengthMm);
-    }
-
-    // Guard 4: All vias mandatory layer transitions
-    if (this.board != null && areAllViasMandatoryLayerTransitions(this.board)) {
-      return "all vias on the board are mandatory layer transitions between SMD pins that cannot be eliminated";
+    // Guard 4: Nothing to reroute
+    if (this.board != null && candidates(this.board).isEmpty()) {
+      return "the board has no unfixed via or trace to reroute";
     }
 
     return null;
-  }
-
-  /**
-   * Checks if all vias on the board are mandatory layer transitions between SMD pins on different
-   * layers, with no alternative routing possible.
-   */
-  public static boolean areAllViasMandatoryLayerTransitions(RoutingBoard routingBoard) {
-    Collection<Via> vias = routingBoard.getVias();
-    if (vias.isEmpty()) {
-      return false;
-    }
-    for (Via via : vias) {
-      if (via.isUserFixed()) {
-        continue;
-      }
-      if (via.netCount() == 0) {
-        return false;
-      }
-      int netNo = via.getNetNumber(0);
-      Set<Item> connected = via.getConnectedSet(netNo, true);
-      List<Pin> smdPins = new ArrayList<>();
-      boolean onlySmdPinsAndTraces = true;
-      for (Item item : connected) {
-        if (item instanceof Pin pin) {
-          if (pin.firstLayer() == pin.lastLayer()) {
-            smdPins.add(pin);
-          } else {
-            onlySmdPinsAndTraces = false;
-            break;
-          }
-        } else if (item instanceof Via v) {
-          if (v != via) {
-            onlySmdPinsAndTraces = false;
-            break;
-          }
-        } else if (!(item instanceof Trace)) {
-          onlySmdPinsAndTraces = false;
-          break;
-        }
-      }
-      if (!onlySmdPinsAndTraces || smdPins.size() < 2) {
-        return false;
-      }
-      int firstLayer = smdPins.get(0).firstLayer();
-      boolean crossesLayers = false;
-      for (Pin pin : smdPins) {
-        if (pin.firstLayer() != firstLayer) {
-          crossesLayers = true;
-          break;
-        }
-      }
-      if (!crossesLayers) {
-        return false;
-      }
-    }
-    return true;
   }
 
   /** Optimize the route on the board. */

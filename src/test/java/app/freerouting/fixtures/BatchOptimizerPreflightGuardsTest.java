@@ -5,25 +5,24 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import app.freerouting.autoroute.pipeline.BatchOptimizer;
 import app.freerouting.board.actions.ItemIdGenerator;
 import app.freerouting.board.facade.RoutingBoard;
-import app.freerouting.board.model.items.Pin;
+import app.freerouting.board.model.items.Item;
+import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
+import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.core.scoring.BoardStatisticsBounds;
+import app.freerouting.io.specctra.DsnTestFixtures;
 import app.freerouting.io.specctra.SesReader;
 import app.freerouting.management.HeadlessBoardManager;
 import app.freerouting.settings.sources.TestingSettings;
 import java.io.InputStream;
-import java.util.List;
-import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -56,6 +55,12 @@ class BatchOptimizerPreflightGuardsTest extends RoutingFixtureTest {
           app.freerouting.TestFixtures.resolvePath(SES_BM08).toUri().toURL().openStream();
       SesReader.read(sesStream, board);
       board.finishAutoroute();
+      // The session is imported fixed; unfix it so that the optimizer has candidates.
+      for (Item item : board.getItems()) {
+        if (item instanceof Trace || item instanceof Via) {
+          item.setFixedState(FixedState.UNFIXED);
+        }
+      }
       return board;
     } catch (Exception e) {
       throw new RuntimeException("Failed to load test board", e);
@@ -231,100 +236,79 @@ class BatchOptimizerPreflightGuardsTest extends RoutingFixtureTest {
   }
 
   @Test
-  void areAllViasMandatoryLayerTransitionsReturnsFalseWhenNoVias() {
-    RoutingBoard board = mock(RoutingBoard.class);
-    when(board.getVias()).thenReturn(List.of());
+  void guard3BypassesOptimizerWhenViasAtBoundAndTraceLengthWithin5Percent() {
+    TestingSettings settings = new TestingSettings();
+    RoutingJob job = getRoutingJob(DSN_BM08, settings);
+    job.board = fullyRoutedBm08.deepCopy();
+    job.thread = new NoOpStoppableThread();
 
-    assertFalse(BatchOptimizer.areAllViasMandatoryLayerTransitions(board));
+    BatchOptimizer optimizer = BatchOptimizer.create(job);
+    BoardStatistics stats = statsWithScore(900.0f);
+    stats.connections.incompleteCount = 0;
+    stats.vias.totalCount = 4;
+    stats.bounds = new BoardStatisticsBounds();
+    stats.bounds.minTraceLengthMm = 100.0f;
+    stats.bounds.minViaCount = 4;
+    stats.traces.totalLengthMm = 104.0f; // the vias cannot improve, the length by under 5%
+
+    String bypassReason = optimizer.evaluatePreFlightGuards(stats);
+    assertNotNull(bypassReason);
+    assertTrue(bypassReason.contains("within 5% of theoretical minimum"));
   }
 
   @Test
-  void areAllViasMandatoryLayerTransitionsReturnsTrueForSingleViaAcrossSmdLayers() {
-    RoutingBoard board = mock(RoutingBoard.class);
-    Via via = mock(Via.class);
-    when(via.isUserFixed()).thenReturn(false);
-    when(via.netCount()).thenReturn(1);
-    when(via.getNetNumber(0)).thenReturn(1);
+  void guard4BypassesOptimizerWhenEveryViaAndTraceIsFixed() {
+    TestingSettings settings = new TestingSettings();
+    RoutingJob job = getRoutingJob(DSN_BM08, settings);
+    job.board = fullyRoutedBm08.deepCopy();
+    job.thread = new NoOpStoppableThread();
+    for (Item item : job.board.getItems()) {
+      if (item instanceof Trace || item instanceof Via) {
+        item.setFixedState(FixedState.USER_FIXED);
+      }
+    }
 
-    Pin pinTop = mock(Pin.class);
-    when(pinTop.firstLayer()).thenReturn(0);
-    when(pinTop.lastLayer()).thenReturn(0);
+    BatchOptimizer optimizer = BatchOptimizer.create(job);
+    BoardStatistics stats = statsWithScore(800.0f);
+    stats.connections.incompleteCount = 0;
+    stats.vias.totalCount = 10;
 
-    Pin pinBottom = mock(Pin.class);
-    when(pinBottom.firstLayer()).thenReturn(1);
-    when(pinBottom.lastLayer()).thenReturn(1);
-
-    when(via.getConnectedSet(1, true)).thenReturn(Set.of(via, pinTop, pinBottom));
-    when(board.getVias()).thenReturn(List.of(via));
-
-    assertTrue(BatchOptimizer.areAllViasMandatoryLayerTransitions(board));
+    String bypassReason = optimizer.evaluatePreFlightGuards(stats);
+    assertNotNull(bypassReason);
+    assertTrue(bypassReason.contains("no unfixed via or trace"));
   }
 
+  /** Fixed vias used to make the "all vias are mandatory" guard skip the optimizer vacuously. */
   @Test
-  void areAllViasMandatoryLayerTransitionsReturnsFalseWhenSmdPinsOnSameLayer() {
-    RoutingBoard board = mock(RoutingBoard.class);
-    Via via = mock(Via.class);
-    when(via.isUserFixed()).thenReturn(false);
-    when(via.netCount()).thenReturn(1);
-    when(via.getNetNumber(0)).thenReturn(1);
+  void fixedViasDoNotBypassTheOptimizerWhenTheTracesCanImprove() throws Exception {
+    TestingSettings settings = new TestingSettings();
+    RoutingJob job = getRoutingJob(DSN_BM08, settings);
+    job.board = DsnTestFixtures.loadBoard("Issue103-Board-Routed.dsn");
+    job.thread = new NoOpStoppableThread();
+    assertFalse(job.board.getVias().isEmpty());
+    for (Via via : job.board.getVias()) {
+      via.setFixedState(FixedState.USER_FIXED);
+    }
 
-    Pin pin1 = mock(Pin.class);
-    when(pin1.firstLayer()).thenReturn(0);
-    when(pin1.lastLayer()).thenReturn(0);
+    BatchOptimizer optimizer = BatchOptimizer.create(job);
+    BoardStatistics stats = statsWithScore(800.0f);
+    stats.connections.incompleteCount = 0;
+    stats.vias.totalCount = 10;
+    stats.bounds = new BoardStatisticsBounds();
+    stats.bounds.minTraceLengthMm = 100.0f;
+    stats.bounds.minViaCount = 0;
+    stats.traces.totalLengthMm = 130.0f;
 
-    Pin pin2 = mock(Pin.class);
-    when(pin2.firstLayer()).thenReturn(0);
-    when(pin2.lastLayer()).thenReturn(0);
-
-    when(via.getConnectedSet(1, true)).thenReturn(Set.of(via, pin1, pin2));
-    when(board.getVias()).thenReturn(List.of(via));
-
-    assertFalse(BatchOptimizer.areAllViasMandatoryLayerTransitions(board));
+    assertNull(optimizer.evaluatePreFlightGuards(stats));
   }
 
-  @Test
-  void areAllViasMandatoryLayerTransitionsReturnsFalseWhenMultipleViasInConnectedComponent() {
-    RoutingBoard board = mock(RoutingBoard.class);
-    Via via1 = mock(Via.class);
-    Via via2 = mock(Via.class);
-    when(via1.isUserFixed()).thenReturn(false);
-    when(via1.netCount()).thenReturn(1);
-    when(via1.getNetNumber(0)).thenReturn(1);
-
-    Pin pinTop = mock(Pin.class);
-    when(pinTop.firstLayer()).thenReturn(0);
-    when(pinTop.lastLayer()).thenReturn(0);
-
-    Pin pinBottom = mock(Pin.class);
-    when(pinBottom.firstLayer()).thenReturn(1);
-    when(pinBottom.lastLayer()).thenReturn(1);
-
-    when(via1.getConnectedSet(1, true)).thenReturn(Set.of(via1, via2, pinTop, pinBottom));
-    when(board.getVias()).thenReturn(List.of(via1));
-
-    assertFalse(BatchOptimizer.areAllViasMandatoryLayerTransitions(board));
-  }
-
-  @Test
-  void areAllViasMandatoryLayerTransitionsReturnsFalseWhenConnectedToThroughHolePin() {
-    RoutingBoard board = mock(RoutingBoard.class);
-    Via via = mock(Via.class);
-    when(via.isUserFixed()).thenReturn(false);
-    when(via.netCount()).thenReturn(1);
-    when(via.getNetNumber(0)).thenReturn(1);
-
-    Pin thPin = mock(Pin.class);
-    when(thPin.firstLayer()).thenReturn(0);
-    when(thPin.lastLayer()).thenReturn(3); // Through-hole pin across layers
-
-    Pin pinBottom = mock(Pin.class);
-    when(pinBottom.firstLayer()).thenReturn(1);
-    when(pinBottom.lastLayer()).thenReturn(1);
-
-    when(via.getConnectedSet(1, true)).thenReturn(Set.of(via, thPin, pinBottom));
-    when(board.getVias()).thenReturn(List.of(via));
-
-    assertFalse(BatchOptimizer.areAllViasMandatoryLayerTransitions(board));
+  private static BoardStatistics statsWithScore(float score) {
+    return new BoardStatistics() {
+      @Override
+      public float getOptimizerScore(app.freerouting.settings.RouterSettings routerSettings) {
+        return score;
+      }
+    };
   }
 
   @Test
