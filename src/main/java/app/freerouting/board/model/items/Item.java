@@ -216,11 +216,13 @@ public abstract class Item
       return null;
     }
     TileShape[] precalculatedTreeShapes = this.getPrecalculatedTreeShapes(tree);
-    if (precalculatedTreeShapes == null || index < 0 || index >= precalculatedTreeShapes.length) {
-      this.clearDerivedData();
-      precalculatedTreeShapes = this.getPrecalculatedTreeShapes(tree);
+    if (index >= precalculatedTreeShapes.length) {
+      // The cache does not match the tree's entries: recalculate this tree's shapes only. Clearing
+      // all derived data here also dropped the autoroute info of an item a search may be using.
+      precalculatedTreeShapes = this.calculateTreeShapes((ShapeSearchTree) tree);
+      this.searchTreesInfo.setPrecalculatedTreeShapes(precalculatedTreeShapes, tree);
     }
-    if (precalculatedTreeShapes == null || index < 0 || index >= precalculatedTreeShapes.length) {
+    if (index < 0 || index >= precalculatedTreeShapes.length) {
       return null;
     }
     return precalculatedTreeShapes[index];
