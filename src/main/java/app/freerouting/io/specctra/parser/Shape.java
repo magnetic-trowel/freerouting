@@ -315,8 +315,12 @@ public abstract class Shape {
   /**
    * Reads a closed polygon scope from a Specctra dsn file. If layerStructure == null, only
    * Layer.PCB and Layer.Signal are expected, no individual layers.
+   *
+   * <p>A polygon with fewer than three points encloses no area; it is the line it draws with its
+   * aperture width (for example a pad {@code (polygon 1 0.01 0 -3.5 0 3.5)}), so it is read as that
+   * path.
    */
-  public static Polygon readPolygonScope(IJFlexScanner scanner, LayerStructure layerStructure) {
+  public static Shape readPolygonScope(IJFlexScanner scanner, LayerStructure layerStructure) {
     try {
       Layer polygonLayer = null;
       boolean layerOk = true;
@@ -354,8 +358,8 @@ public abstract class Shape {
         }
       }
 
-      // overread the aperture width
       nextToken = scanner.nextToken();
+      double apertureWidth = nextToken instanceof Number number ? number.doubleValue() : 0;
 
       Collection<Object> coorList = new LinkedList<>();
 
@@ -397,6 +401,9 @@ public abstract class Shape {
                   + "'");
           return null;
         }
+      }
+      if (coorArr.length >= 2 && coorArr.length < 6) {
+        return new PolygonPath(polygonLayer, apertureWidth, coorArr);
       }
       return new Polygon(polygonLayer, coorArr);
     } catch (IOException e) {
