@@ -24,6 +24,23 @@ import org.junit.jupiter.api.Test;
 class LogEntriesTest {
 
   @Test
+  void throwingListenerDoesNotReachTheLoggingThreadOrOtherListeners() {
+    LogEntries logEntries = new LogEntries();
+    AtomicInteger laterListenerCalls = new AtomicInteger(0);
+    logEntries.addLogEntryAddedListener(
+        _ -> {
+          throw new IllegalStateException("listener failure");
+        });
+    logEntries.addLogEntryAddedListener(_ -> laterListenerCalls.incrementAndGet());
+
+    LogEntry entry = logEntries.add(LogEntryType.Info, "routing progress", null);
+
+    assertNotNull(entry, "add must return normally although a listener threw");
+    assertEquals(1, laterListenerCalls.get(), "the next listener must still be notified");
+    assertEquals(1, logEntries.size(), "the failure must not be recorded as another entry");
+  }
+
+  @Test
   void addAndRemoveLogEntryAddedListener() {
     LogEntries logEntries = new LogEntries();
     AtomicInteger listenerCallCount = new AtomicInteger(0);

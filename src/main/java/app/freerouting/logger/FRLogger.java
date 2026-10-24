@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -519,8 +520,26 @@ public final class FRLogger {
   }
 
   private static void publishTraceEvent(TraceEvent event) {
-    for (TraceEventListener listener : traceEventListeners) {
-      listener.onTraceEvent(event);
+    notifyListeners(traceEventListeners, listener -> listener.onTraceEvent(event));
+  }
+
+  /**
+   * Calls {@code notification} for each listener, on the thread that logged. A listener that throws
+   * is reported to the console and file log; it neither stops the other listeners nor reaches the
+   * code that logged, which may be a routing thread.
+   *
+   * @param listeners the listeners to notify
+   * @param notification the call to make on each listener
+   * @param <L> the listener type
+   */
+  public static <L> void notifyListeners(Iterable<L> listeners, Consumer<? super L> notification) {
+    for (L listener : listeners) {
+      try {
+        notification.accept(listener);
+      } catch (RuntimeException e) {
+        // Not through the log entries: that would notify the failing listener again.
+        getLogger().error("Log listener " + listener.getClass().getName() + " failed", e);
+      }
     }
   }
 }

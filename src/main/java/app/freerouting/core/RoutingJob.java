@@ -638,9 +638,8 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   /** Notifies listeners that a log entry was added. */
   public void fireLogEntryAddedEvent(LogEntry logEntry) {
     RoutingJobLogEntryAddedEvent event = new RoutingJobLogEntryAddedEvent(this, this, logEntry);
-    for (RoutingJobLogEntryAddedEventListener listener : logEntryAddedEventListeners) {
-      listener.onLogEntryAdded(event);
-    }
+    FRLogger.notifyListeners(
+        logEntryAddedEventListeners, listener -> listener.onLogEntryAdded(event));
   }
 
   /** Adds an informational log entry for this job. */

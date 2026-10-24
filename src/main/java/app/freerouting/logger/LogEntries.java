@@ -24,7 +24,7 @@ import java.util.stream.Stream;
  * console and file logs are not affected by these limits.
  *
  * <p>All methods are safe to call from several threads. Listeners are notified on the thread that
- * logged, outside the collection's lock.
+ * logged, outside the collection's lock; a listener that throws does not reach that thread.
  */
 public class LogEntries {
 
@@ -187,10 +187,7 @@ public class LogEntries {
       }
     }
 
-    // Raise the event
-    for (LogEntryAddedListener listener : listeners) {
-      listener.logEntryAdded(logEntry);
-    }
+    FRLogger.notifyListeners(listeners, listener -> listener.logEntryAdded(logEntry));
 
     return logEntry;
   }
