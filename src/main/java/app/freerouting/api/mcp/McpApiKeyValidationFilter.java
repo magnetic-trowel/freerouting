@@ -1,6 +1,7 @@
 package app.freerouting.api.mcp;
 
 import app.freerouting.api.RequestThrottle;
+import app.freerouting.api.security.ApiKeyPrincipal;
 import app.freerouting.logger.FRLogger;
 import jakarta.annotation.Priority;
 import jakarta.servlet.http.HttpServletRequest;
@@ -73,7 +74,9 @@ public class McpApiKeyValidationFilter implements ContainerRequestFilter {
       apiKey = authHeader.substring(BEARER_PREFIX.length()).trim();
     }
 
-    if (apiKey == null || apiKey.isEmpty() || !validationService.validateApiKey(apiKey)) {
+    ApiKeyPrincipal principal =
+        apiKey == null || apiKey.isEmpty() ? null : validationService.authenticate(apiKey);
+    if (principal == null) {
       FRLogger.debug(
           "MCP API key validation failed for path " + requestContext.getUriInfo().getPath());
       RequestThrottle.MCP.countFailedAuthentication(servletRequest);
@@ -86,32 +89,10 @@ public class McpApiKeyValidationFilter implements ContainerRequestFilter {
       return;
     }
 
-    final String authenticatedPrincipal = apiKey;
-    final boolean isSecure =
+    // The caller (key and the profile it is issued to) becomes the principal.
+    boolean isSecure =
         requestContext.getSecurityContext() != null
             && requestContext.getSecurityContext().isSecure();
-    requestContext.setProperty("app.freerouting.authenticatedApiKey", authenticatedPrincipal);
-    requestContext.setSecurityContext(
-        new jakarta.ws.rs.core.SecurityContext() {
-          @Override
-          public java.security.Principal getUserPrincipal() {
-            return () -> authenticatedPrincipal;
-          }
-
-          @Override
-          public boolean isUserInRole(String role) {
-            return true;
-          }
-
-          @Override
-          public boolean isSecure() {
-            return isSecure;
-          }
-
-          @Override
-          public String getAuthenticationScheme() {
-            return "BEARER";
-          }
-        });
+    requestContext.setSecurityContext(principal.asSecurityContext(isSecure));
   }
 }

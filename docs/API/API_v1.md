@@ -55,6 +55,8 @@ Authorization: Bearer <API_KEY>
 
 With authentication enabled, a session belongs to its `Freerouting-Profile-ID` **and** to the API key that created it: requests with another key cannot list or reach that session or its jobs, even with the same profile ID.
 
+A key can be **bound to a profile**. A bound key acts only as that profile: a request whose `Freerouting-Profile-ID` names another profile (or is not a UUID) is answered with **HTTP 403 Forbidden**, and a request without the header acts as the key's profile. `Freerouting-Profile-Email` cannot be checked against a bound key and is ignored for it. A key without a profile is unbound: the `Freerouting-Profile-ID` header decides, as before. Keys are never bound implicitly (for example by first use), so the binding comes only from the key provider. The key provider decides which keys are bound (the Google Sheets provider's optional `Profile ID` column, see [API_authentication.md](API_authentication.md)). With authentication disabled, nothing changes: the header decides.
+
 For complete details on how to configure and enable authentication on your own server, please see the [API Authentication System Documentation](API_authentication.md).
 
 ## Required headers

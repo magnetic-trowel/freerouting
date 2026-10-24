@@ -1,5 +1,7 @@
 package app.freerouting.api.security;
 
+import java.util.UUID;
+
 /**
  * Interface for API key validation providers.
  *
@@ -47,6 +49,18 @@ public interface ApiKeyProvider {
    * @return {@link ApiKeyValidationResult} indicating the outcome of the validation.
    */
   ApiKeyValidationResult validateApiKey(String apiKey);
+
+  /**
+   * Returns the profile an API key is issued to, or {@code null} when the key is not bound to a
+   * profile (see {@link ApiKeyPrincipal}). Called only for a key this provider granted.
+   *
+   * @param apiKey an API key for which {@link #validateApiKey} returned {@link
+   *     ApiKeyValidationResult#ACCESS_GRANTED}
+   * @return the key's profile, or {@code null}
+   */
+  default UUID getProfileId(String apiKey) {
+    return null;
+  }
 
   /**
    * Refreshes the cached API keys from the data source.

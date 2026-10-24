@@ -153,41 +153,19 @@ public class ApiKeyValidationFilter implements ContainerRequestFilter {
     }
 
     // Validate the API key using the service
-    if (!validationService.validateApiKey(apiKey)) {
+    ApiKeyPrincipal principal = validationService.authenticate(apiKey);
+    if (principal == null) {
       FRLogger.warn("API key validation failed: invalid or unauthorized API key for path " + path);
       RequestThrottle.API.countFailedAuthentication(servletRequest);
       abortWithUnauthorized(requestContext, "Invalid or unauthorized API key.");
       return;
     }
 
-    // API key is valid, attach the authenticated principal to the SecurityContext
-    final String authenticatedPrincipal = apiKey;
-    final boolean isSecure =
+    // API key is valid: the caller (key and the profile it is issued to) becomes the principal
+    boolean isSecure =
         requestContext.getSecurityContext() != null
             && requestContext.getSecurityContext().isSecure();
-    requestContext.setProperty("app.freerouting.authenticatedApiKey", authenticatedPrincipal);
-    requestContext.setSecurityContext(
-        new jakarta.ws.rs.core.SecurityContext() {
-          @Override
-          public java.security.Principal getUserPrincipal() {
-            return () -> authenticatedPrincipal;
-          }
-
-          @Override
-          public boolean isUserInRole(String role) {
-            return true;
-          }
-
-          @Override
-          public boolean isSecure() {
-            return isSecure;
-          }
-
-          @Override
-          public String getAuthenticationScheme() {
-            return "BEARER";
-          }
-        });
+    requestContext.setSecurityContext(principal.asSecurityContext(isSecure));
 
     FRLogger.debug("API key validation successful for path: " + path);
   }

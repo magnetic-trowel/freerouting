@@ -83,6 +83,12 @@ public class MyCustomApiKeyProvider implements ApiKeyProvider {
   }
 
   @Override
+  public UUID getProfileId(String apiKey) {
+    // Optional: the profile a granted key is issued to, or null for an unbound key
+    return null;
+  }
+
+  @Override
   public boolean isHealthy() {
     // Return true if provider can validate keys
     return true;
@@ -124,15 +130,22 @@ The Google Sheets provider requires:
 
 The sheet must have the following columns (order doesn't matter):
 
-| API Key                              | Access granted? | (other columns...) |
-|--------------------------------------|-----------------|--------------------|
-| 550e8400-e29b-41d4-a716-446655440000 | Yes             | ...                |
-| 660e8400-e29b-41d4-a716-446655440001 | No              | ...                |
+| API Key                              | Access granted? | Profile ID (optional)                | (other columns...) |
+|--------------------------------------|-----------------|--------------------------------------|--------------------|
+| 550e8400-e29b-41d4-a716-446655440000 | Yes             | 9a1c0f3e-2b47-4c58-9d6e-7f8a9b0c1d2e | ...                |
+| 660e8400-e29b-41d4-a716-446655440001 | No              |                                      | ...                |
+| 770e8400-e29b-41d4-a716-446655440002 | Yes             |                                      | ...                |
 
 **Required Columns**:
 
 - **API Key**: Must contain valid GUID strings (RFC 4122 format)
 - **Access granted?**: Must contain "Yes" (case-insensitive) to grant access
+
+**Optional Column**:
+
+- **Profile ID**: The Freerouting profile UUID the key is issued to. An empty cell, or a sheet without this column, leaves the key unbound. A row whose Profile ID is not a UUID is skipped (the key is not granted), so a typo never turns a bound key into an unbound one.
+
+A key can be **bound to a profile**. A bound key acts only as that profile: a request whose `Freerouting-Profile-ID` names another profile (or is not a UUID) is answered with **HTTP 403 Forbidden**, and a request without the header acts as the key's profile. `Freerouting-Profile-Email` cannot be checked against a bound key and is ignored for it. A key without a profile is unbound: the `Freerouting-Profile-ID` header decides, as before. Keys are never bound implicitly (for example by first use), so the binding comes only from the key provider.
 
 #### Google API Key Setup
 
@@ -292,6 +305,16 @@ Response:
 ```json
 {
   "error": "Invalid or unauthorized API key."
+}
+```
+
+### 403 Forbidden - Profile Does Not Match the Key
+
+A key bound to a profile (see the `Profile ID` column) was sent with a `Freerouting-Profile-ID` header naming another profile:
+
+```json
+{
+  "error": "The API key is issued to another profile than the one in the Freerouting-Profile-ID header. Send the key's own profile ID, or omit the header."
 }
 ```
 

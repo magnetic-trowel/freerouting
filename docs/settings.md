@@ -301,6 +301,7 @@ Configures the SMD-pin fanout pre-pass stage.
   - CLI: `--api_server.endpoints=http://0.0.0.0:37864,http://127.0.0.1:37864`
   - Env var: `FREEROUTING__API_SERVER__ENDPOINTS=http://0.0.0.0:37864,http://127.0.0.1:37864`
 - *`cors_origins`*: A comma-separated list of origins for the `Access-Control-Allow-Origin` CORS header. Set to `*` to accept all origins (this can be a security risk). When CORS is enabled, the server automatically allows the following request headers in preflight responses: `Content-Type`, `Accept`, `Origin`, `X-Requested-With`, `Authorization`, `Freerouting-Profile-ID`, `Freerouting-Profile-Email`, and `Freerouting-Environment-Host`. This ensures browser-based clients (e.g. EasyEDA at `https://pro.lceda.cn`) can authenticate successfully without being blocked by CORS preflight checks.
+- **`authentication`**: API-key authentication (`enabled`, `providers`, provider credentials). A key that the provider binds to a profile (Google Sheets: optional `Profile ID` column) acts only as that profile: a request naming another `Freerouting-Profile-ID` gets `403`, a request without the header acts as the key's profile. Unbound keys and disabled authentication keep using the header. See [API_authentication.md](API/API_authentication.md).
 - **`rate_limit`**: Fixed-window throttling for API requests.
   - `enabled`: Enable/disable API-side rate limiting.
   - `requests_per_window`: Maximum accepted requests per identity in each window. An authenticated request counts against its API key, any other request against its address. Failed API-key attempts (missing or invalid key) count separately against their address under the same limit: once they fill the window, further requests from that address get `429` without their key being checked, until the window ends.
@@ -322,7 +323,7 @@ Configures the SMD-pin fanout pre-pass stage.
 - **`enabled`**: Enables or disables the dedicated MCP server.
 - **`http_allowed`**: Allows or disallows HTTP connections to the MCP server.
 - **`endpoints`**: A list of MCP listen endpoints (`[protocol]://[host]:[port]`).
-- **`authentication`**: API-key authentication settings specific to MCP (`enabled`, `providers`, provider credentials).
+- **`authentication`**: API-key authentication settings specific to MCP (`enabled`, `providers`, provider credentials). As for the REST API, a key that the provider binds to a profile (Google Sheets: optional `Profile ID` column) acts only as that profile; see [API_authentication.md](API/API_authentication.md).
 - **`cors_origins`**: Optional CORS allowlist for browser-hosted MCP clients.
 - **`target_api_base_url`**: Base URL of the REST API server used by MCP tools to execute operations.
   Must point to the REST API base URL (for example `http://127.0.0.1:37864`) and not to MCP paths such as `/v1/mcp` or `/.well-known/*`.

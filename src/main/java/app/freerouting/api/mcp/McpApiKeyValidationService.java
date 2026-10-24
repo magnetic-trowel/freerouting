@@ -1,8 +1,9 @@
 package app.freerouting.api.mcp;
 
 import app.freerouting.Freerouting;
+import app.freerouting.api.security.ApiKeyPrincipal;
 import app.freerouting.api.security.ApiKeyProvider;
-import app.freerouting.api.security.ApiKeyValidationResult;
+import app.freerouting.api.security.ApiKeyValidationService;
 import app.freerouting.api.security.GoogleSheetsApiKeyProvider;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.ApiAuthenticationSettings;
@@ -79,6 +80,11 @@ public final class McpApiKeyValidationService {
     return isEnabled;
   }
 
+  /** Returns the configured providers (for tests). */
+  List<ApiKeyProvider> getProviders() {
+    return providers;
+  }
+
   /**
    * Validates the provided API key against configured providers.
    *
@@ -86,27 +92,26 @@ public final class McpApiKeyValidationService {
    * @return {@code true} if valid or auth disabled; {@code false} otherwise
    */
   public boolean validateApiKey(String apiKey) {
-    if (!isEnabled) {
-      return true;
-    }
+    return authenticate(apiKey) != null;
+  }
 
+  /**
+   * Validates the API key and returns the caller it authenticates, with the profile the key is
+   * issued to (see {@link ApiKeyValidationService#authenticate(List, String)}).
+   *
+   * @return the caller, or {@code null} when the key is denied or unresolved; with authentication
+   *     disabled every key is accepted, unbound
+   */
+  public ApiKeyPrincipal authenticate(String apiKey) {
+    if (!isEnabled) {
+      return new ApiKeyPrincipal(apiKey, null);
+    }
     if (providers.isEmpty()) {
       FRLogger.warn(
           "MCP authentication is enabled but no providers are correctly configured. Denying"
               + " access.");
-      return false;
+      return null;
     }
-
-    for (ApiKeyProvider provider : providers) {
-      ApiKeyValidationResult result = provider.validateApiKey(apiKey);
-      if (result == ApiKeyValidationResult.ACCESS_GRANTED) {
-        return true;
-      }
-      if (result == ApiKeyValidationResult.ACCESS_DENIED) {
-        return false;
-      }
-    }
-
-    return false;
+    return ApiKeyValidationService.authenticate(providers, apiKey);
   }
 }

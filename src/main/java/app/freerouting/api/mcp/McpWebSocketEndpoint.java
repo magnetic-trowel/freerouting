@@ -1,6 +1,8 @@
 package app.freerouting.api.mcp;
 
 import app.freerouting.api.ApiUsageFilter;
+import app.freerouting.api.security.ApiKeyPrincipal;
+import app.freerouting.api.security.ProfileMismatchException;
 import com.google.gson.JsonObject;
 import jakarta.websocket.CloseReason;
 import jakarta.websocket.EndpointConfig;
@@ -29,13 +31,21 @@ public class McpWebSocketEndpoint {
   public void onOpen(Session session, EndpointConfig config) {
     Map<String, List<String>> headers = McpWebSocketConfigurator.getHeaders(config);
 
-    if (!isAuthorized(headers)) {
+    ApiKeyPrincipal caller = authenticate(headers);
+    if (caller == null) {
       close(session, CloseReason.CloseCodes.VIOLATED_POLICY, "Unauthorized");
       return;
     }
 
-    UUID profileId = profileId(headers);
+    UUID profileId;
+    try {
+      profileId = caller.resolveProfile(firstHeader(headers, PROFILE_ID_HEADER));
+    } catch (ProfileMismatchException e) {
+      close(session, CloseReason.CloseCodes.VIOLATED_POLICY, "Profile does not match the API key");
+      return;
+    }
     if (profileId == null) {
+      // Events are pushed to the subscribers of their caller, so the caller needs a profile UUID.
       close(session, CloseReason.CloseCodes.VIOLATED_POLICY, "Missing Freerouting profile header");
       return;
     }
@@ -76,14 +86,14 @@ public class McpWebSocketEndpoint {
     session.getAsyncRemote().sendText(payload.toString());
   }
 
-  private boolean isAuthorized(Map<String, List<String>> headers) {
+  /** The caller, as the JSON-RPC endpoint sees it; {@code null} when the key is refused. */
+  private static ApiKeyPrincipal authenticate(Map<String, List<String>> headers) {
     McpApiKeyValidationService validationService = McpApiKeyValidationService.getInstance();
     if (!validationService.isAuthenticationEnabled()) {
-      return true;
+      return new ApiKeyPrincipal(null, null);
     }
-
     String apiKey = bearerToken(headers);
-    return apiKey != null && validationService.validateApiKey(apiKey);
+    return apiKey != null ? validationService.authenticate(apiKey) : null;
   }
 
   private static String bearerToken(Map<String, List<String>> headers) {
@@ -103,19 +113,6 @@ public class McpWebSocketEndpoint {
     }
     String apiKey = bearerToken(headers);
     return apiKey != null ? ApiUsageFilter.sha256Hex(apiKey) : null;
-  }
-
-  /**
-   * The caller's profile id. Events are pushed to the subscribers of their caller, so the profile
-   * must be a UUID, as on the JSON-RPC endpoint.
-   */
-  private static UUID profileId(Map<String, List<String>> headers) {
-    String profileId = firstHeader(headers, PROFILE_ID_HEADER);
-    try {
-      return profileId != null ? UUID.fromString(profileId.trim()) : null;
-    } catch (IllegalArgumentException _) {
-      return null;
-    }
   }
 
   private boolean isValidEnvironmentHost(String host) {

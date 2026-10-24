@@ -2,6 +2,7 @@ package app.freerouting.api;
 
 import static app.freerouting.util.gson.GsonProvider.GSON;
 
+import app.freerouting.api.security.ProfileMismatchException;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import jakarta.ws.rs.Produces;
@@ -23,7 +24,8 @@ import jakarta.ws.rs.ext.Provider;
  * <p>Client errors keep their 4xx status: a {@link WebApplicationException} raised by the JAX-RS
  * runtime (405, 406, 413, 415, ...) keeps its own status, a request body that is not valid JSON for
  * the expected type is a 400, and so is a missing or unparsable profile header ({@link
- * BaseController.MissingProfileException}).
+ * BaseController.MissingProfileException}). A profile header that names another profile than the
+ * one the API key is issued to is a 403 ({@link ProfileMismatchException}).
  */
 @Provider
 public class ApiExceptionMapper implements ExceptionMapper<Throwable> {
@@ -58,6 +60,9 @@ public class ApiExceptionMapper implements ExceptionMapper<Throwable> {
     if (exception instanceof JsonParseException
         || exception instanceof BaseController.MissingProfileException) {
       return Response.Status.BAD_REQUEST.getStatusCode();
+    }
+    if (exception instanceof ProfileMismatchException) {
+      return Response.Status.FORBIDDEN.getStatusCode();
     }
     return Response.Status.INTERNAL_SERVER_ERROR.getStatusCode();
   }

@@ -195,6 +195,8 @@ To prevent confusion, both **single underscore** (convention in Python CLI) and 
    - **Local Self-Hosted Mode**: Resolves to the local `userId` stored in `freerouting.json`.
 3. Defaults to `00000000-0000-0000-0000-000000000000` if resolving fails.
 
+4. With MCP authentication enabled and an API key bound to a profile (the provider's optional `Profile ID` column), the key's profile is used when no profile is configured, and a different profile is refused: `tools/call` and `initialize` answer with a JSON-RPC error (`-32602`, "Authentication failed: The API key is issued to another profile ..."), the REST calls of the tools answer **403**, and `/v1/mcp/events` answers **403**, while `/v1/mcp/ws` closes with "Profile does not match the API key". Unbound keys keep using the configured profile.
+
 #### Profile Email (`Freerouting-Profile-Email`)
 1. Resolves first to environment variables if provided.
 2. If not defined:

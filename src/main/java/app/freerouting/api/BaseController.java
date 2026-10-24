@@ -1,5 +1,7 @@
 package app.freerouting.api;
 
+import app.freerouting.api.security.ApiKeyPrincipal;
+import app.freerouting.api.security.ProfileMismatchException;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.Session;
 import app.freerouting.management.jobs.RoutingJobScheduler;
@@ -59,6 +61,11 @@ public class BaseController {
     this.httpHeaders = httpHeaders;
   }
 
+  /** Sets the security context (for testing). */
+  public void setSecurityContext(jakarta.ws.rs.core.SecurityContext securityContext) {
+    this.securityContext = securityContext;
+  }
+
   /**
    * Returns the authenticated principal from the request's {@link
    * jakarta.ws.rs.core.SecurityContext}, or {@code null} if unauthenticated.
@@ -76,6 +83,9 @@ public class BaseController {
    *
    * <ol>
    *   <li>Use {@code userIdOverride} if set (e.g. in unit tests).
+   *   <li>When the API key is issued to a profile, use that profile; a {@code
+   *       Freerouting-Profile-ID} header that names another profile is refused with {@link
+   *       ProfileMismatchException} (403). The email header cannot be checked and is ignored then.
    *   <li>Parse {@code Freerouting-Profile-ID} header as a UUID.
    *   <li>If that header is absent or unparsable, fall back to {@code Freerouting-Profile-Email}
    *       (email-to-UUID look-up is not yet implemented).
@@ -83,7 +93,9 @@ public class BaseController {
    *
    * @return the caller's UUID — never {@code null}.
    * @throws MissingProfileException if both headers are missing/empty, or if neither yields a
-   *     resolvable UUID.
+   *     resolvable UUID, and the API key is not issued to a profile.
+   * @throws ProfileMismatchException if the API key is issued to another profile than the header
+   *     names.
    */
   protected UUID authenticateUser() {
     if (userIdOverride != null) {
@@ -94,6 +106,11 @@ public class BaseController {
         httpHeaders != null ? httpHeaders.getHeaderString("Freerouting-Profile-ID") : null;
     String userEmailString =
         httpHeaders != null ? httpHeaders.getHeaderString("Freerouting-Profile-Email") : null;
+
+    // A key issued to a profile acts only as that profile (see ApiKeyPrincipal).
+    if (getAuthenticatedPrincipal() instanceof ApiKeyPrincipal key && key.profileId() != null) {
+      return key.resolveProfile(userIdString);
+    }
 
     if (((userIdString == null) || (userIdString.isEmpty()))
         && ((userEmailString == null) || (userEmailString.isEmpty()))) {
