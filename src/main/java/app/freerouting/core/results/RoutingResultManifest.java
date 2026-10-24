@@ -82,6 +82,15 @@ public final class RoutingResultManifest {
   @SerializedName("cpu_score")
   public Integer cpuScore;
 
+  /**
+   * True when the routing thread was still changing the board as the manifest was built: it did not
+   * stop within the grace period after the job timed out. The manifest then has no board statistics
+   * or scores, since reading a board another thread is changing gives no consistent answer and on
+   * large boards takes minutes of its own.
+   */
+  @SerializedName("routing_thread_running")
+  public boolean routingThreadRunning;
+
   /** Input fixture identity for the run. */
   public static class FixtureInfo {
     @SerializedName("filename")
@@ -240,7 +249,8 @@ public final class RoutingResultManifest {
     manifest.resourceUsage = job.resourceUsage;
     manifest.cpuScore = cpuScore;
 
-    if (job.board != null) {
+    manifest.routingThreadRunning = job.thread != null && job.thread.isAlive();
+    if (job.board != null && !manifest.routingThreadRunning) {
       manifest.boardStatistics = new BoardStatistics(job.board);
       manifest.bounds = manifest.boardStatistics.bounds;
       if (job.routerSettings != null && job.routerSettings.scoring != null) {
