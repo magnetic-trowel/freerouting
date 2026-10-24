@@ -9,7 +9,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -587,12 +586,15 @@ public class PolygonShape extends PolylineShape {
     if (convexPieces == null) {
       return null;
     }
-    TileShape[] result = new TileShape[convexPieces.size()];
-    Iterator<PolygonShape> it = convexPieces.iterator();
-    for (int i = 0; i < result.length; i++) {
-      result[i] = TileShape.getInstance(it.next().corners);
+    List<TileShape> result = new ArrayList<>(convexPieces.size());
+    for (PolygonShape piece : convexPieces) {
+      // Rounding a division point onto a corner can leave a piece without area. As a tile its
+      // degenerate border lines would bound a half-plane or a whole line instead of nothing.
+      if (piece.dimension() == 2 || piece == this) {
+        result.add(TileShape.getInstance(piece.corners));
+      }
     }
-    return result;
+    return result.toArray(new TileShape[0]);
   }
 
   /**

@@ -89,6 +89,36 @@ class PolygonShapeSelfIntersectingSplitTest {
     assertCoversItsRegion(shape);
   }
 
+  /**
+   * A hole of a copper pour on Issue756-tomu-fpga9: a division point of its split rounds onto a
+   * corner and leaves a piece with one corner. As a tile that piece was a half-plane, and cutting
+   * the hole out of the pour removed almost all of the pour.
+   */
+  @Test
+  void piecesWithoutAreaAreLeftOut() {
+    PolygonShape shape =
+        polygon(
+            977511, -649969, 978489, -649969, 979449, -649778, 980354, -649403, 981168, -648860,
+            981860, -648168, 982403, -647354, 982778, -646449, 982969, -645489, 982969, -644511,
+            982778, -643551, 982403, -642646, 981860, -641832, 981168, -641140, 980354, -640597,
+            979449, -640222, 979186, -640169, 978728, -639980, 978535, -639822, 966041, -627328,
+            965957, -627235, 965871, -627129, 965765, -627043, 965672, -626959, 961912, -623199,
+            961637, -622787, 961540, -622301, 961540, -614802, 961482, -614208, 961251, -613446,
+            960875, -612745, 960361, -612117, 960207, -611963, 959645, -611278, 959539, -611192,
+            959446, -611108, 943041, -594703, 942957, -594610, 942871, -594504, 942255, -594000,
+            941554, -593624, 940792, -593393, 940136, -593329, 940000, -593315, 939864, -593329,
+            939739, -593335, 933244, -593335, 932758, -593238, 932346, -592963, 932325, -592941,
+            980000, -643000, 969761, -643000, 970247, -643097, 970659, -643372, 972822, -645535,
+            973097, -645947, 973169, -646186, 973222, -646449, 973597, -647354, 974140, -648168,
+            974832, -648860, 975646, -649403, 976551, -649778);
+
+    assertTrue(shape.borderIsSimple());
+    for (TileShape piece : shape.splitToConvex()) {
+      assertTrue(piece.isBounded(), "unbounded piece " + piece);
+    }
+    assertCoversItsRegion(shape);
+  }
+
   @Test
   void simpleBorderIsRecognised() {
     assertTrue(polygon(0, 0, 100, 0, 100, 100, 0, 100).borderIsSimple());
