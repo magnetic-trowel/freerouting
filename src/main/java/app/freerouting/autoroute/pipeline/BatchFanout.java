@@ -117,7 +117,10 @@ public final class BatchFanout {
     long previousBoardState = Long.MIN_VALUE;
     int identicalPasses = 0;
     String lastBoardHash = board.getHash();
-    for (int i = 0; i < maxPasses; ++i) {
+    // A pass returns at the first pin after a stop request, so the loop stops there too, as the
+    // autorouter and optimizer pass loops do: another pass would compute its statistics and try
+    // one more pin with the stopped thread.
+    for (int i = 0; i < maxPasses && (thread == null || !thread.isStopAutoRouterRequested()); ++i) {
       if (fanoutInstance.deadlineMs != null
           && System.currentTimeMillis() >= fanoutInstance.deadlineMs) {
         fanoutInstance.isTimedOut = true;
