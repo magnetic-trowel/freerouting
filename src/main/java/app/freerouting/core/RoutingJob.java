@@ -176,6 +176,16 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   }
 
   /**
+   * Returns whether a stop of this job is a timeout: {@link #timeoutAt} has passed and the user did
+   * not cancel the job. The scheduler asks the job thread to stop when {@code timeoutAt} passes and
+   * sets {@link RoutingJobState#TIMED_OUT} only when the pipeline returns, so code that sees the
+   * stop request uses this to tell a timeout from a cancel.
+   */
+  public boolean isTimedOut() {
+    return !isCancelledByUser && timeoutAt != null && !Instant.now().isBefore(timeoutAt);
+  }
+
+  /**
    * Drops the board of a finished job so that its memory can be reclaimed. The output, the input,
    * the settings and {@link #finalStatistics} stay on the job. Only the scheduler calls this, for
    * finished jobs whose routing thread has ended.

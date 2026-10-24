@@ -20,6 +20,7 @@ import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.DefaultSettings;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -99,5 +100,31 @@ class AutorouteBatchLoopStopTest {
     assertFalse(run.job().thread.isStopAutoRouterRequested());
     assertEquals(TaskState.FINISHED, lastState(run));
     assertEquals(0, run.job().board.getViaCount(), "the final cleanup removes the fanout stub");
+  }
+
+  @Test
+  void stopAfterTheTimeoutIsATimeoutBeforeTheJobStateSaysSo() {
+    Run run = prepare(5);
+    // What the scheduler's monitor does when timeoutAt passes; the job state stays RUNNING until
+    // the pipeline returns.
+    run.job().timeoutAt = Instant.now().minusSeconds(1);
+    run.job().thread.requestStop();
+    run.router().runBatchLoop();
+
+    assertEquals(BatchAutorouter.StopReason.TIMED_OUT, run.router().lastStopReason);
+    assertEquals(TaskState.TIMED_OUT, lastState(run));
+    assertEquals(1, run.job().board.getViaCount(), "a stopped loop does not clean up");
+  }
+
+  @Test
+  void userCancelIsACancelEvenAfterTheTimeout() {
+    Run run = prepare(5);
+    run.job().timeoutAt = Instant.now().minusSeconds(1);
+    run.job().setCancelledByUser(true);
+    run.job().thread.requestStop();
+    run.router().runBatchLoop();
+
+    assertEquals(BatchAutorouter.StopReason.CANCELLED, run.router().lastStopReason);
+    assertEquals(TaskState.CANCELLED, lastState(run));
   }
 }

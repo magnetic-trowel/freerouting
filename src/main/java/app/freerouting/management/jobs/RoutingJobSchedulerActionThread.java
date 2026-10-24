@@ -166,9 +166,7 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
               String completionStatus = "completed:";
               boolean isTimedOut =
                   (job.state == RoutingJobState.TIMED_OUT)
-                      || ((job.timeoutAt != null)
-                          && !Instant.now().isBefore(job.timeoutAt)
-                          && job.thread.isStopRequested());
+                      || (job.isTimedOut() && job.thread.isStopRequested());
 
               if (isTimedOut) {
                 completionStatus = "completed with timeout:";
@@ -402,7 +400,7 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
         job.state = RoutingJobState.CANCELLED;
         return;
       }
-      if (jobClockExpired()) {
+      if (job.isTimedOut()) {
         job.state = RoutingJobState.TIMED_OUT;
         return;
       }
@@ -429,9 +427,5 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
     return settings == null
         || Boolean.TRUE.equals(settings.apiServerSettings.isRunning)
         || Boolean.TRUE.equals(settings.mcpServerSettings.isRunning);
-  }
-
-  private boolean jobClockExpired() {
-    return job.timeoutAt != null && !Instant.now().isBefore(job.timeoutAt);
   }
 }

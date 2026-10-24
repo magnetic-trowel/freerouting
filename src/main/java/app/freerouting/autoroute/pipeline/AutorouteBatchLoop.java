@@ -18,7 +18,6 @@ import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.core.RouterCounters;
 import app.freerouting.core.RoutingJob;
-import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
@@ -630,12 +629,12 @@ final class AutorouteBatchLoop {
     job.board = router.board;
 
     if (router.lastStopReason == null) {
-      if (job.state == RoutingJobState.TIMED_OUT) {
-        router.lastStopReason = BatchAutorouter.StopReason.TIMED_OUT;
-      } else if (thread.isStopAutoRouterRequested()) {
-        router.lastStopReason = BatchAutorouter.StopReason.CANCELLED;
-      } else {
+      if (!thread.isStopAutoRouterRequested()) {
         router.lastStopReason = BatchAutorouter.StopReason.COMPLETED;
+      } else if (job.isTimedOut()) {
+        router.lastStopReason = BatchAutorouter.StopReason.TIMED_OUT;
+      } else {
+        router.lastStopReason = BatchAutorouter.StopReason.CANCELLED;
       }
     }
 

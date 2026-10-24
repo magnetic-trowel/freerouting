@@ -3,7 +3,6 @@ package app.freerouting.autoroute.pipeline;
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.core.RoutingJob;
-import app.freerouting.core.RoutingJobState;
 import app.freerouting.drc.ClearanceBaseline;
 import app.freerouting.settings.RouterSettings;
 import java.util.ArrayList;
@@ -351,7 +350,7 @@ final class RoutingFallbackRunner {
   }
 
   private static boolean stopped(RoutingJob job) {
-    return job.thread.isStopAutoRouterRequested() || job.state == RoutingJobState.TIMED_OUT;
+    return job.thread.isStopAutoRouterRequested();
   }
 
   private static List<RoutingFallback.Strategy> automaticContinuations(RouterSettings settings) {
