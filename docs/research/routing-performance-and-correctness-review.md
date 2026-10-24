@@ -99,6 +99,23 @@ What changed, in order of measured effect:
 - `Item.setFixedState` and `unfix` were invisible to the shove-check cache (the content version
   does not count the fixed state), so a cached answer could reflect fixed states that
   `DirectPinRouting` had already restored.
+- A pass that throws no longer ends the loop on whatever state the exception left: the board the
+  pass started from is restored and the loop stops with the reason ERROR.
+- A stub joining a found connection to a trace has the width of that trace's layer (it had the
+  other end's layer width).
+- Board copies (`deepCopy`, `BoardImage`) keep the transient baseline of pre-existing clearance
+  violations. Without it a fallback continuation counted the input's violations as new (Issue313:
+  "40 new violations (40 total)") and could never replace the incumbent.
+- The zone-island DRC finds islands by containment depth and merges the band contours that
+  `java.awt.geom.Area` cuts one region into. The old contour-by-contour merge was quadratic (the
+  reload DRC of tairakb ran for over 30 minutes, now 14 s) and counted one pour as several islands
+  (wavefolder: 114 dead-copper islands, now 0). Thermal spokes of same-net vias now reach the pour,
+  and pour fills are clipped to the board outline.
+- The DRC of a DSN plus SES no longer doubles the design's own wiring (the session carries it too),
+  merges the router settings before loading (copper-to-edge and hole-clearance overrides), applies
+  the via rule to session vias on SMD pads, and reads v2.5.0 via padstack names. Hole-clearance
+  counts after reload now equal the input's and the router's (Mars-64 194 to 64, RelayModule 44 to
+  0).
 
 ## Measured and not adopted
 
@@ -121,6 +138,20 @@ and 716 vias (-7%); BBD Mars-64 reached 1 open connection but hit the 15-minute 
 ran under heavier machine load than the others, so its times are not comparable. A paired campaign
 on 21 further boards is in progress; the change is not adopted until it completes.
 
+Maze door tie-break (`MazeListElement.compareTo` returned 0 for distinct doors whose hash-like ids
+collide at equal cost, so the expansion set dropped one): with insertion order as the last
+tie-break, 8 of 9 easy boards change, all still complete, vias +11 (+3%), length -0.9% to +2.1%.
+Held on a local branch until the boards with open connections are measured.
+
+Dropping the `clearance_safety_margin` from the path locators (it makes bm06's default pass loop
+stall, so the fallback chain runs 92 passes instead of 7): bm06 converges in 8 passes, but over 10
+boards vias go from 414 to 427. Not adopted.
+
+Checking each optimizer commit for clearance as it lands, instead of dropping commits from the end
+at pass end: the drop path never fired in 30 optimizer runs. Reusing an optimizer candidate's
+result in the next pass when its region is unchanged: not possible as stated, because passes
+alternate the preferred-direction setting.
+
 ## Confirmed bugs that remain open
 
 Security (described only as far as needed to fix them):
@@ -137,13 +168,16 @@ Geometry and DRC:
   lose area, and a keepout with a `(window ...)` lost 57% of its coverage in one repro, so traces
   route through solid keepout and DRC does not see it. The first-division-line merge is the main
   cause; limiting it to corners that start a ray cut the failure rate from 954 to 79 in 50,000 pairs,
-  so a complete fix needs a rework with property tests. A coverage check with a conservative
-  fallback is safe for keepouts but would mark plane windows as copper.
-- `MazeListElement.compareTo` returns 0 for distinct doors whose hash-like ids collide
-  (`ExpansionDoor.getId` is `min * 31 + max`) and whose costs are exactly equal, and the TreeSet then
-  drops one of them.
-- `FoundConnectionInserter.connectToTrace` builds the stubs with the other end's layer width; only
-  boards with per-layer widths are affected.
+  so a complete fix needs a rework with property tests. A fix is held on a local branch: the
+  division's result is checked (no overlap with the cut shape or between pieces, areas add up) and
+  an exact half-plane sweep replaces it when the check fails; the fuzz harness then finds no
+  failure at any coordinate scale. Only Issue756 tomu-fpga8/9 have areas with holes in the
+  fixtures.
+- Plane nets: an item counts as connected (CONNECTED_TO_PLANE) as soon as its connected set touches
+  the pour polygon, but foreign-net tracks routed through the pour can cut it off from the actual
+  fill. On tairakb pad U3-23 ends up connected to neither GND pour and nothing reports it.
+- The zone-island DRC checks connectivity per layer, so an island reached through a through-hole
+  pin or via on another layer is reported as unconnected.
 - `PolygonShape.contains(FloatPoint)` rejects interior points on its convex-split seams, and
   `contains` means border-inclusive on octagons and circles but border-exclusive on simplices and
   boxes.
@@ -160,8 +194,10 @@ Optimizer and scoring:
 
 Pipeline and jobs:
 
-- An exception in a pass is logged and treated as "nothing left to route", so the job reports
-  COMPLETED with open connections.
+- The routing fallback chain runs up to five more full pass loops after a stalled default loop:
+  bm06 takes 92 passes (7 in v2.5.0, 3x the CPU) although each pass is faster than in v2.5.0.
+  Trying `short-escape` first halves that with identical output on bm06, Issue313 and Issue367,
+  but changes which strategy wins elsewhere.
 - `router.fanout.timeout` hands the partially fanned-out board to the autorouter, so the routing
   depends on machine speed when that timeout is set.
 - Finished jobs keep their board, input and output until 5000 jobs exist; session eviction at 5000
@@ -183,6 +219,7 @@ Result-preserving:
 2. Run the routing-fallback alternatives in parallel and fold the results in strategy order. All
    alternatives start from the same input bytes; the fold is the existing sequence of `replaces()`
    and stop checks. Blockers: shared `RoutingJob` fields and the global `PerformanceProfiler`.
+   bm06 spends 61% of its job in four sequential fallback pass loops.
 3. Parallel read-only analysis at quiescent points (full DRC, incomplete counts, the integer parts of
    `BoardStatistics`), merged in item order. Lazy caches written during reads (`Pin`/`Via` shape
    arrays, `Item.getPrecalculatedTreeShapes`, `BoardOutline.getEdgePinNets`) must be made
