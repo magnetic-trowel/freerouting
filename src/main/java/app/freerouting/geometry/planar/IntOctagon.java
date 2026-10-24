@@ -1260,7 +1260,7 @@ public final class IntOctagon extends RegularTileShape implements Serializable {
               o.leftX,
               o.bottomY,
               o.rightX,
-              o.topY,
+              b.ll.y,
               o.upperLeftDiagonalX,
               o.lowerRightDiagonalX,
               o.lowerLeftDiagonalX,
