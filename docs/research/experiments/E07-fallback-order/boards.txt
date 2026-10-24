@@ -1,0 +1,31 @@
+# E07 boards. Common flags (paired_campaign --flags): -mt 1 -mp 25 --router.optimizer.enabled=false
+#
+# Boards whose default pass loop entered the routing fallback in SP/camp3/run1/master
+# (grep "Routing fallback" master/*/console.log, excluding "Routing fallback skipped").
+# master CPU s / fallback winner in brackets.
+fixtures/Issue508-DAC2020_bm06.dsn
+# [82 s, short-escape won after continue + direct-first + fanout-retry; v2.5.0 26 s]
+fixtures/Issue313-FastTest.dsn
+# [40 s, default kept, every alternative ran]
+fixtures/Issue367-Charger.dsn
+# [16 s, default kept, two fanout-only repeats]
+fixtures/Issue015-StackOverflow.dsn
+# [101 s, default kept, every alternative ran]
+fixtures/Issue157-TeamAdapt-LinePCB.dsn
+# [124 s, default kept, every alternative ran]
+fixtures/Issue684-Autorouter_PCB1_2026-5-8.dsn
+# [322 s, direct-first won; the only board where direct-first is the winner]
+fixtures/Issue110-Pajalnaja_stancija.dsn
+# [69 s, no SMD fanout, continuation only: must be byte-identical across order variants]
+fixtures/Issue297-myboard.dsn
+# [timed out at 20 min in master; direct-first was cancelled. Reported separately if it times out]
+#
+# Regression boards that do not enter the fallback (complete, or stopped at the pass limit):
+# every order variant must give a byte-identical SES here. residual0/residual8 must too unless
+# the board ends with 1..8 open connections after a stagnation stop.
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue508-DAC2020_bm07.dsn
+fixtures/Issue155-CH376_MCP795_Module.dsn
+fixtures/Issue558-dev-board.dsn
+fixtures/Issue508-DAC2020_bm11.dsn
+fixtures/Issue508-DAC2020_bm05.dsn

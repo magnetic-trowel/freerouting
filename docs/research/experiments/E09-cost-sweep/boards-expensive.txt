@@ -1,0 +1,9 @@
+# E09 optional tier (run only in the confirmation stage, or with more than 8 CPUs).
+fixtures/Issue508-DAC2020_bm01.dsn
+# 2L-MIX | 0/0/141/149 s CPU (475 s wall)
+fixtures/Issue107-freq_teiler_200kHz_kicad.dsn
+# 2L-MIX | 0/0/0/122 s CPU
+fixtures/Issue297-myboard.dsn
+# 2L-SMD | 3/8/80, 1464 s CPU, TIMED_OUT at 20 min in the master arm (v2.5.0: 1 open in 262 s)
+fixtures/Issue732-RoyalBlue54L-Feather.dsn
+# ML | 24/195/81, TIMED_OUT in every arm; excluded from comparisons unless it finishes

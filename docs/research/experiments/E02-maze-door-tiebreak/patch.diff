@@ -1,0 +1,324 @@
+diff --git a/src/main/java/app/freerouting/autoroute/maze/MazeListElement.java b/src/main/java/app/freerouting/autoroute/maze/MazeListElement.java
+index bc6c84e5..501b0966 100644
+--- a/src/main/java/app/freerouting/autoroute/maze/MazeListElement.java
++++ b/src/main/java/app/freerouting/autoroute/maze/MazeListElement.java
+@@ -50,6 +50,13 @@ public class MazeListElement implements Comparable<MazeListElement> {
+    */
+   int ripupCost;
+ 
++  /**
++   * The position of this element in the insertion order of the expansion list, assigned by {@link
++   * MazeTieBreak} when the insertion order is selected; 0 otherwise. It is the last tie-break, see
++   * {@link #compareTo}.
++   */
++  long insertionNo;
++
+   /** Creates a new instance of ExpansionInfo. */
+   public MazeListElement(
+       ExpandableObject door,
+@@ -78,6 +85,20 @@ public class MazeListElement implements Comparable<MazeListElement> {
+ 
+   @Override
+   public int compareTo(MazeListElement other) {
++    int result = compareLegacyKeys(other);
++    if (result != 0) {
++      return result;
++    }
++    // Tie-break 4: insertion order (experiment E02, see MazeTieBreak). Door ids combine room ids
++    // by hashing, so two different doors can share one; returning 0 here makes the set drop the
++    // second door. Both insertion numbers are 0 in the legacy order, which returns 0 as before.
++    // For two elements of the same door section the earlier one still comes first, and the later
++    // one is skipped when it is polled because the section is occupied by then.
++    return Long.compare(this.insertionNo, other.insertionNo);
++  }
++
++  /** Compares by sorting value, expansion value, door id and door section, in this order. */
++  int compareLegacyKeys(MazeListElement other) {
+     if (this.sortingValue < other.sortingValue) {
+       return -1;
+     }
+@@ -107,8 +128,6 @@ public class MazeListElement implements Comparable<MazeListElement> {
+     if (this.sectionNoOfDoor > other.sectionNoOfDoor) {
+       return 1;
+     }
+-    // If truly equal (same door, same section, same values), return 0 to avoid duplicates in the
+-    // set.
+     return 0;
+   }
+ }
+diff --git a/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java b/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java
+index 6744f768..02f636e3 100644
+--- a/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java
++++ b/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java
+@@ -83,6 +83,8 @@ public class MazeSearchEngine {
+     this.ripupResolver = new MazeRipupResolver(this);
+     mazeExpansionList =
+         new TreeSet<>() {
++          private final MazeTieBreak tieBreak = new MazeTieBreak();
++
+           @Override
+           public boolean add(MazeListElement element) {
+             if (ctrl.isFanout && !ctrl.ignoreEscapeWindow && ctrl.fanoutStartPinCenter != null) {
+@@ -120,6 +122,7 @@ public class MazeSearchEngine {
+                 }
+               }
+             }
++            tieBreak.beforeAdd(this, element);
+             return super.add(element);
+           }
+         };
+diff --git a/src/main/java/app/freerouting/autoroute/maze/MazeTieBreak.java b/src/main/java/app/freerouting/autoroute/maze/MazeTieBreak.java
+new file mode 100644
+index 00000000..ccfc611b
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/maze/MazeTieBreak.java
+@@ -0,0 +1,123 @@
++package app.freerouting.autoroute.maze;
++
++import java.util.Locale;
++import java.util.NavigableSet;
++import java.util.concurrent.atomic.LongAdder;
++
++/**
++ * Experiment switch for the last tie-break of the maze expansion list (experiment E02).
++ *
++ * <p>{@link MazeListElement#compareTo} orders by sorting value, expansion value, door id and door
++ * section. Door ids combine room ids by hashing, so two different doors can share one; at equal
++ * costs the expansion set then holds only the first of them. With the property {@code
++ * freerouting.exp.maze_tiebreak=insertion} each element gets its insertion number as the last
++ * tie-break, so such doors both stay in the list. The default {@code legacy} leaves every insertion
++ * number at 0, which keeps the old order and the old drops.
++ *
++ * <p>With {@code -Dfreerouting.exp.maze_tiebreak_stats=true} the process counts, for every element
++ * added to an expansion list, whether the list already held an element with equal legacy keys of
++ * the same or of a different door; see {@link #statsSummary()}.
++ */
++public final class MazeTieBreak {
++
++  /** System property that selects the tie-break: {@code legacy} (default) or {@code insertion}. */
++  public static final String PROPERTY = "freerouting.exp.maze_tiebreak";
++
++  /** System property that enables the tie counters. */
++  public static final String STATS_PROPERTY = "freerouting.exp.maze_tiebreak_stats";
++
++  static final boolean INSERTION_ORDER =
++      "insertion".equalsIgnoreCase(System.getProperty(PROPERTY, "legacy").trim());
++
++  static final boolean STATS = Boolean.getBoolean(STATS_PROPERTY);
++
++  private static final LongAdder TOTAL_ADDS = new LongAdder();
++  private static final LongAdder TOTAL_SAME_DOOR_TIES = new LongAdder();
++  private static final LongAdder TOTAL_DISTINCT_DOOR_TIES = new LongAdder();
++  private static final LongAdder TOTAL_DISTINCT_CLASS_TIES = new LongAdder();
++
++  private final boolean insertionOrder;
++  private final boolean stats;
++  private long nextInsertionNo = 1;
++
++  /** Elements offered to the list since its creation (only counted with stats). */
++  long adds;
++
++  /** Adds that tied with an element of the same door object (benign duplicates). */
++  long sameDoorTies;
++
++  /** Adds that tied with an element of a different door object (dropped by the legacy order). */
++  long distinctDoorTies;
++
++  /** The subset of {@link #distinctDoorTies} where the two doors are of different classes. */
++  long distinctClassTies;
++
++  /** Creates the tie-break state of one expansion list, configured from the system properties. */
++  MazeTieBreak() {
++    this(INSERTION_ORDER, STATS);
++  }
++
++  MazeTieBreak(boolean insertionOrder, boolean stats) {
++    this.insertionOrder = insertionOrder;
++    this.stats = stats;
++  }
++
++  /** Whether the tie counters are enabled for this process. */
++  public static boolean statsEnabled() {
++    return STATS;
++  }
++
++  /** The tie counters of all expansion lists of this process, as one log line. */
++  public static String statsSummary() {
++    return String.format(
++        Locale.US,
++        "Experiment %s=%s: %d maze list adds, %d tied with an element of the same door, %d tied"
++            + " with an element of a different door with the same id (%d of them a door of"
++            + " another class)",
++        PROPERTY,
++        INSERTION_ORDER ? "insertion" : "legacy",
++        TOTAL_ADDS.sum(),
++        TOTAL_SAME_DOOR_TIES.sum(),
++        TOTAL_DISTINCT_DOOR_TIES.sum(),
++        TOTAL_DISTINCT_CLASS_TIES.sum());
++  }
++
++  /**
++   * Called by the expansion list just before {@code element} is added to {@code list}: counts ties
++   * if enabled and assigns the insertion number if the insertion order is selected. An element
++   * keeps the number of its first insertion.
++   */
++  void beforeAdd(NavigableSet<MazeListElement> list, MazeListElement element) {
++    if (stats) {
++      countTies(list, element);
++    }
++    if (insertionOrder && element.insertionNo == 0) {
++      element.insertionNo = nextInsertionNo++;
++    }
++  }
++
++  private void countTies(NavigableSet<MazeListElement> list, MazeListElement element) {
++    adds++;
++    TOTAL_ADDS.increment();
++    if (element.insertionNo != 0) {
++      return;
++    }
++    // Elements with equal legacy keys follow an element with insertion number 0 directly, and
++    // in the legacy order they compare equal to it, so the ceiling is the tied element if any.
++    MazeListElement tied = list.ceiling(element);
++    if (tied == null || tied.compareLegacyKeys(element) != 0) {
++      return;
++    }
++    if (tied.door == element.door) {
++      sameDoorTies++;
++      TOTAL_SAME_DOOR_TIES.increment();
++      return;
++    }
++    distinctDoorTies++;
++    TOTAL_DISTINCT_DOOR_TIES.increment();
++    if (tied.door.getClass() != element.door.getClass()) {
++      distinctClassTies++;
++      TOTAL_DISTINCT_CLASS_TIES.increment();
++    }
++  }
++}
+diff --git a/src/test/java/app/freerouting/autoroute/maze/MazeListElementTest.java b/src/test/java/app/freerouting/autoroute/maze/MazeListElementTest.java
+index 3abd7aae..ec3f0cfc 100644
+--- a/src/test/java/app/freerouting/autoroute/maze/MazeListElementTest.java
++++ b/src/test/java/app/freerouting/autoroute/maze/MazeListElementTest.java
+@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
+ 
+ import app.freerouting.autoroute.expansion.CompleteExpansionRoom;
+ import app.freerouting.autoroute.expansion.ExpandableObject;
++import java.util.NavigableSet;
+ import java.util.SortedSet;
+ import java.util.TreeSet;
+ import org.junit.jupiter.api.Test;
+@@ -34,6 +35,92 @@ class MazeListElementTest {
+     assertSame(lowerCost, first, "Lower sortingValue must be expanded first");
+   }
+ 
++  @Test
++  void legacyOrderKeepsOnlyTheFirstOfTwoDoorsWithTheSameIdAndCost() {
++    // Door ids are hash combinations of room ids, so two different doors can share one.
++    NavigableSet<MazeListElement> queue = new TreeSet<>();
++    MazeTieBreak tieBreak = new MazeTieBreak(false, true);
++    MazeListElement first = tiedElement(new TestDoor(7));
++    MazeListElement second = tiedElement(new TestDoor(7));
++
++    add(queue, tieBreak, first);
++    add(queue, tieBreak, second);
++
++    assertEquals(1, queue.size(), "The legacy order drops the second door");
++    assertSame(first, queue.first());
++    assertEquals(0, second.insertionNo, "The legacy order assigns no insertion numbers");
++    assertEquals(2, tieBreak.adds);
++    assertEquals(1, tieBreak.distinctDoorTies);
++    assertEquals(0, tieBreak.sameDoorTies);
++  }
++
++  @Test
++  void insertionOrderKeepsDistinctDoorsWithTheSameIdAndCost() {
++    NavigableSet<MazeListElement> queue = new TreeSet<>();
++    MazeTieBreak tieBreak = new MazeTieBreak(true, true);
++    MazeListElement first = tiedElement(new TestDoor(7));
++    MazeListElement second = tiedElement(new TestDoor(7));
++
++    add(queue, tieBreak, first);
++    add(queue, tieBreak, second);
++
++    assertEquals(2, queue.size(), "A door must not be dropped because its id collides");
++    assertSame(first, queue.first(), "Full ties are expanded in insertion order");
++    assertEquals(1, tieBreak.distinctDoorTies, "The tie is counted as in the legacy order");
++  }
++
++  @Test
++  void insertionOrderStillSortsByCostBeforeInsertion() {
++    NavigableSet<MazeListElement> queue = new TreeSet<>();
++    MazeTieBreak tieBreak = new MazeTieBreak(true, false);
++    MazeListElement expensive =
++        new MazeListElement(new TestDoor(1), 0, null, 0, 3.0, 9.0, null, null, false, null, false);
++    MazeListElement cheap = tiedElement(new TestDoor(2));
++
++    add(queue, tieBreak, expensive);
++    add(queue, tieBreak, cheap);
++
++    assertSame(cheap, queue.first());
++    assertEquals(0, tieBreak.adds, "Nothing is counted without stats");
++  }
++
++  @Test
++  void sameDoorTiesAreCountedSeparately() {
++    NavigableSet<MazeListElement> queue = new TreeSet<>();
++    MazeTieBreak tieBreak = new MazeTieBreak(false, true);
++    TestDoor door = new TestDoor(3);
++
++    add(queue, tieBreak, tiedElement(door));
++    add(queue, tieBreak, tiedElement(door));
++
++    assertEquals(1, tieBreak.sameDoorTies);
++    assertEquals(0, tieBreak.distinctDoorTies);
++  }
++
++  @Test
++  void anElementKeepsTheInsertionNumberOfItsFirstInsertion() {
++    NavigableSet<MazeListElement> queue = new TreeSet<>();
++    MazeTieBreak tieBreak = new MazeTieBreak(true, false);
++    MazeListElement element = tiedElement(new TestDoor(4));
++
++    add(queue, tieBreak, element);
++    queue.pollFirst();
++    add(queue, tieBreak, tiedElement(new TestDoor(5)));
++    add(queue, tieBreak, element);
++
++    assertEquals(1, element.insertionNo);
++  }
++
++  private static MazeListElement tiedElement(ExpandableObject door) {
++    return new MazeListElement(door, 0, null, 0, 3.0, 5.0, null, null, false, null, false);
++  }
++
++  private static void add(
++      NavigableSet<MazeListElement> queue, MazeTieBreak tieBreak, MazeListElement element) {
++    tieBreak.beforeAdd(queue, element);
++    queue.add(element);
++  }
++
+   private static final class TestDoor implements ExpandableObject {
+     private final int id;
+ 
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+@@ -14,6 +14,7 @@
+ import app.freerouting.autoroute.BoardHistory;
+ import app.freerouting.autoroute.PerformanceProfiler;
+ import app.freerouting.autoroute.events.TaskStateChangedEvent;
++import app.freerouting.autoroute.maze.MazeTieBreak;
+ import app.freerouting.board.facade.RoutingBoard;
+ import app.freerouting.board.model.items.Item;
+ import app.freerouting.core.RouterCounters;
+@@ -695,6 +696,9 @@
+     // Print all profiling results at the end of session
+     PerformanceProfiler.printResults();
+     PerformanceProfiler.reset();
++    if (MazeTieBreak.statsEnabled()) {
++      job.logInfo(MazeTieBreak.statsSummary());
++    }
+ 
+     if (!router.thread.isStopAutoRouterRequested()) {
+       router.fireTaskStateChangedEvent(

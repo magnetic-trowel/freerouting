@@ -1,0 +1,3 @@
+control head
+report head -Dfreerouting.exp.plane_fill_check=report
+repair head -Dfreerouting.exp.plane_fill_check=true

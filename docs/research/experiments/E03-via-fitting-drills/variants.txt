@@ -1,0 +1,2 @@
+control head -Dfreerouting.exp.via_fitting_drills=false -Dfreerouting.exp.via_fitting_drills_stats=true
+via_fitting head -Dfreerouting.exp.via_fitting_drills=true -Dfreerouting.exp.via_fitting_drills_stats=true

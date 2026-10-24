@@ -1,0 +1,390 @@
+diff --git a/src/main/java/app/freerouting/autoroute/maze/AutorouteControl.java b/src/main/java/app/freerouting/autoroute/maze/AutorouteControl.java
+index cea2c910..c4bcea00 100644
+--- a/src/main/java/app/freerouting/autoroute/maze/AutorouteControl.java
++++ b/src/main/java/app/freerouting/autoroute/maze/AutorouteControl.java
+@@ -74,6 +74,15 @@ public class AutorouteControl {
+   public int ripupCosts;
+   public int ripupPassNo;
+ 
++  /**
++   * Experiment E04: rip-ups per net number so far in the routing session, or null when the
++   * negotiated rip cost is off. Read only by {@link MazeRipupResolver}.
++   */
++  public int[] netRipHistory;
++
++  /** Experiment E04: rip cost factor per earlier rip-up of the victim's net. */
++  public double ripHistoryWeight;
++
+   /** If true, the autoroute algorithm completes after the first drill. */
+   public boolean isFanout;
+ 
+diff --git a/src/main/java/app/freerouting/autoroute/maze/MazeRipupResolver.java b/src/main/java/app/freerouting/autoroute/maze/MazeRipupResolver.java
+index e0274a8c..dc07480d 100644
+--- a/src/main/java/app/freerouting/autoroute/maze/MazeRipupResolver.java
++++ b/src/main/java/app/freerouting/autoroute/maze/MazeRipupResolver.java
+@@ -126,6 +126,9 @@ final class MazeRipupResolver {
+     }
+ 
+     double ripupCost = ctrl.ripupCosts * costFactor;
++    if (ctrl.netRipHistory != null && ctrl.ripHistoryWeight > 0) {
++      ripupCost *= ripHistoryFactor(obstacleItem, ctrl.netRipHistory, ctrl.ripHistoryWeight);
++    }
+     double detour = 1;
+     Connection obstacleConnection = null;
+     if (fanoutViaCostFactor <= 1 && !ctrl.isFanout) {
+@@ -151,6 +154,21 @@ final class MazeRipupResolver {
+     return result;
+   }
+ 
++  /**
++   * Experiment E04 (negotiated rip cost): {@code 1 + weight * r}, where r is the largest number of
++   * earlier rip-ups among the nets of the obstacle.
++   */
++  static double ripHistoryFactor(Item obstacleItem, int[] netRipHistory, double weight) {
++    int ripped = 0;
++    for (int i = 0; i < obstacleItem.netCount(); i++) {
++      int netNo = obstacleItem.getNetNumber(i);
++      if (netNo >= 0 && netNo < netRipHistory.length) {
++        ripped = Math.max(ripped, netRipHistory[netNo]);
++      }
++    }
++    return 1 + weight * ripped;
++  }
++
+   private void traceCheckRipup(
+       Item obstacleItem,
+       Connection obstacleConnection,
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteConnectionRouter.java b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteConnectionRouter.java
+index 25e25550..8feb09cc 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteConnectionRouter.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteConnectionRouter.java
+@@ -110,6 +110,7 @@ final class AutorouteConnectionRouter {
+               router.board, routeNetNo, router.settings, currentViaCosts, router.getTraceCosts());
+       autorouteControl.ripupAllowed = true;
+       autorouteControl.ripupCosts = router.getStartRipupCosts() * ripupPassNo;
++      router.ripHistory.applyTo(autorouteControl, router.board);
+       autorouteControl.removeUnconnectedVias = router.isRemoveUnconnectedVias();
+ 
+       Set<Item> unconnectedSet = item.getUnconnectedSet(routeNetNo);
+@@ -296,6 +297,7 @@ final class AutorouteConnectionRouter {
+             router.board, routeNetNo, router.settings, viaCosts, router.getTraceCosts());
+     neckControl.ripupAllowed = true;
+     neckControl.ripupCosts = router.getStartRipupCosts() * ripupPassNo;
++    router.ripHistory.applyTo(neckControl, router.board);
+     neckControl.removeUnconnectedVias = router.isRemoveUnconnectedVias();
+     for (int i = 0; i < neckControl.layerCount; i++) {
+       int compensation = neckControl.compensatedTraceHalfWidth[i] - neckControl.traceHalfWidth[i];
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java b/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
+index 48c77f14..57be8c08 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
+@@ -149,6 +149,7 @@ final class AutoroutePassRunner {
+           if (BatchAutorouter.isBenchmarkProfileEnabled()) {
+             router.profileAutorouteItemNanos += System.nanoTime() - routeItemStart;
+           }
++          router.ripHistory.record(rippedItemList, router.board);
+ 
+           if (FRLogger.isTraceEnabled()) {
+             logRippedItems(currentItem, i, rippedItemList, rippedItemCosts);
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/BatchAutorouter.java b/src/main/java/app/freerouting/autoroute/pipeline/BatchAutorouter.java
+index 1b55d92f..d038cbe0 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/BatchAutorouter.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/BatchAutorouter.java
+@@ -86,6 +86,9 @@ public final class BatchAutorouter extends NamedAlgorithm {
+   int totalItemsRouted;
+   boolean fanoutTimedOut;
+ 
++  /** Experiment E04: per-net rip history, kept across passes and board restores. */
++  final NetRipHistory ripHistory = new NetRipHistory(NetRipHistory.WEIGHT);
++
+   /** Time when the routing session started. */
+   Random random;
+ 
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/NetRipHistory.java b/src/main/java/app/freerouting/autoroute/pipeline/NetRipHistory.java
+new file mode 100644
+index 00000000..b9648ed4
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/pipeline/NetRipHistory.java
+@@ -0,0 +1,97 @@
++package app.freerouting.autoroute.pipeline;
++
++import app.freerouting.autoroute.maze.AutorouteControl;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Item;
++import java.util.Collection;
++import java.util.SortedSet;
++import java.util.TreeSet;
++
++/**
++ * Experiment E04 (negotiated rip cost): counts, per net, how often a connection attempt ripped the
++ * net's copper. The counts live in the autorouter, not on the board, so they survive passes and the
++ * board restores of the pass loop. Each rip of a victim net then costs {@code 1 + weight * count}
++ * times its normal rip cost, as in the history term of PathFinder-style negotiated congestion. A
++ * weight of 0 (the default) turns the history off and leaves routing unchanged.
++ */
++final class NetRipHistory {
++
++  /** System property holding the weight; 0, negative, unparsable or absent disables the history. */
++  static final String PROPERTY = "freerouting.exp.rip_history";
++
++  /** The weight from {@link #PROPERTY}, read once at startup. */
++  static final double WEIGHT = parseWeight(System.getProperty(PROPERTY));
++
++  private final double weight;
++  private int[] ripCounts;
++
++  NetRipHistory(double weight) {
++    this.weight = weight;
++  }
++
++  static double parseWeight(String value) {
++    if (value == null) {
++      return 0;
++    }
++    try {
++      double parsed = Double.parseDouble(value.trim());
++      return Double.isFinite(parsed) && parsed > 0 ? parsed : 0;
++    } catch (NumberFormatException e) {
++      return 0;
++    }
++  }
++
++  boolean isEnabled() {
++    return this.weight > 0;
++  }
++
++  /** Lets the maze search of {@code control} price rips with the history; no-op when disabled. */
++  void applyTo(AutorouteControl control, RoutingBoard board) {
++    if (!isEnabled()) {
++      return;
++    }
++    control.netRipHistory = counts(board);
++    control.ripHistoryWeight = this.weight;
++  }
++
++  /**
++   * Counts one rip-up for every net of the given ripped items (each net once per attempt). Called
++   * after every connection attempt whose ripped items were removed from the board.
++   */
++  void record(Collection<Item> rippedItems, RoutingBoard board) {
++    if (!isEnabled() || rippedItems.isEmpty()) {
++      return;
++    }
++    SortedSet<Integer> nets = new TreeSet<>();
++    for (Item ripped : rippedItems) {
++      for (int i = 0; i < ripped.netCount(); i++) {
++        nets.add(ripped.getNetNumber(i));
++      }
++    }
++    int[] counts = counts(board);
++    for (int net : nets) {
++      if (net >= 0 && net < counts.length) {
++        counts[net]++;
++      }
++    }
++  }
++
++  /** The rip-up count of the given net so far. */
++  int count(int netNumber) {
++    return this.ripCounts != null && netNumber >= 0 && netNumber < this.ripCounts.length
++        ? this.ripCounts[netNumber]
++        : 0;
++  }
++
++  private int[] counts(RoutingBoard board) {
++    int size = board.rules.nets.maxNetNumber() + 1;
++    if (this.ripCounts == null || this.ripCounts.length < size) {
++      int[] grown = new int[size];
++      if (this.ripCounts != null) {
++        System.arraycopy(this.ripCounts, 0, grown, 0, this.ripCounts.length);
++      }
++      this.ripCounts = grown;
++    }
++    return this.ripCounts;
++  }
++}
+diff --git a/src/test/java/app/freerouting/autoroute/maze/RipHistoryFactorTest.java b/src/test/java/app/freerouting/autoroute/maze/RipHistoryFactorTest.java
+new file mode 100644
+index 00000000..18dd67ab
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/maze/RipHistoryFactorTest.java
+@@ -0,0 +1,49 @@
++package app.freerouting.autoroute.maze;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertInstanceOf;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.io.BoardReadResult;
++import app.freerouting.io.specctra.DsnReader;
++import java.io.ByteArrayInputStream;
++import java.nio.charset.StandardCharsets;
++import org.junit.jupiter.api.Test;
++
++/** Experiment E04: the rip cost factor grows linearly with the victim net's rip history. */
++class RipHistoryFactorTest {
++
++  private static final String DSN =
++      """
++      (pcb factor (resolution um 1)
++        (structure (layer top (type signal))
++          (boundary (rect pcb 0 0 20000 10000))
++          (via V) (rule (width 400) (clearance 200)))
++        (placement (component C (place A 3000 3000 front 0) (place B 17000 3000 front 0)))
++        (library (image C (pin S 1 0 0)) (padstack S (shape (circle top 800)))
++          (padstack V (shape (circle top 600)) (attach off)))
++        (network (net X (pins A-1 B-1))))
++      """;
++
++  @Test
++  void factorIsOnePlusWeightTimesTheNetsRipCount() {
++    BoardReadResult result =
++        DsnReader.readBoard(
++            new ByteArrayInputStream(DSN.getBytes(StandardCharsets.UTF_8)), null, null, "factor");
++    assertInstanceOf(BoardReadResult.Success.class, result);
++    RoutingBoard board = (RoutingBoard) ((BoardReadResult.Success) result).board();
++    Item pin = board.getPins().stream().findFirst().map(Item.class::cast).orElse(null);
++    assertNotNull(pin);
++    int net = pin.getNetNumber(0);
++    int[] history = new int[net + 1];
++
++    assertEquals(1.0, MazeRipupResolver.ripHistoryFactor(pin, history, 2.0));
++    history[net] = 3;
++    assertEquals(7.0, MazeRipupResolver.ripHistoryFactor(pin, history, 2.0));
++    assertEquals(2.5, MazeRipupResolver.ripHistoryFactor(pin, history, 0.5));
++    // Nets beyond the history array have no history.
++    assertEquals(1.0, MazeRipupResolver.ripHistoryFactor(pin, new int[0], 2.0));
++  }
++}
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/NetRipHistoryTest.java b/src/test/java/app/freerouting/autoroute/pipeline/NetRipHistoryTest.java
+new file mode 100644
+index 00000000..4368264b
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/NetRipHistoryTest.java
+@@ -0,0 +1,124 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertInstanceOf;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertSame;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.autoroute.maze.AutorouteControl;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Pin;
++import app.freerouting.board.model.structure.FixedState;
++import app.freerouting.geometry.planar.IntPoint;
++import app.freerouting.geometry.planar.Point;
++import app.freerouting.geometry.planar.Polyline;
++import app.freerouting.io.BoardReadResult;
++import app.freerouting.io.specctra.DsnReader;
++import app.freerouting.settings.RouterSettings;
++import app.freerouting.settings.SettingsMerger;
++import app.freerouting.settings.sources.DefaultSettings;
++import java.io.ByteArrayInputStream;
++import java.nio.charset.StandardCharsets;
++import java.util.List;
++import org.junit.jupiter.api.Test;
++
++/** Experiment E04: the per-net rip history counts rips and stays off by default. */
++class NetRipHistoryTest {
++
++  private static final String DSN =
++      """
++      (pcb riphistory (resolution um 1)
++        (structure (layer top (type signal))
++          (boundary (rect pcb 0 0 20000 10000))
++          (via V) (rule (width 400) (clearance 200)))
++        (placement (component C (place A 3000 3000 front 0) (place B 17000 3000 front 0)))
++        (library (image C (pin S 1 0 0)) (padstack S (shape (circle top 800)))
++          (padstack V (shape (circle top 600)) (attach off)))
++        (network (net X (pins A-1 B-1))))
++      """;
++
++  @Test
++  void parseWeightAcceptsOnlyPositiveFiniteNumbers() {
++    assertEquals(0, NetRipHistory.parseWeight(null));
++    assertEquals(0, NetRipHistory.parseWeight(""));
++    assertEquals(0, NetRipHistory.parseWeight("abc"));
++    assertEquals(0, NetRipHistory.parseWeight("-1"));
++    assertEquals(0, NetRipHistory.parseWeight("NaN"));
++    assertEquals(0, NetRipHistory.parseWeight("Infinity"));
++    assertEquals(0, NetRipHistory.parseWeight("0"));
++    assertEquals(0.5, NetRipHistory.parseWeight(" 0.5 "));
++    assertEquals(2, NetRipHistory.parseWeight("2"));
++  }
++
++  @Test
++  void disabledHistoryLeavesTheControlUntouched() {
++    RoutingBoard board = board();
++    NetRipHistory history = new NetRipHistory(0);
++    assertFalse(history.isEnabled());
++    AutorouteControl control = control(board);
++    history.applyTo(control, board);
++    assertNull(control.netRipHistory);
++    history.record(List.of(trace(board)), board);
++    assertEquals(0, history.count(net(board)));
++  }
++
++  @Test
++  void enabledHistoryCountsEachRippedNetOncePerAttempt() {
++    RoutingBoard board = board();
++    NetRipHistory history = new NetRipHistory(1.5);
++    assertTrue(history.isEnabled());
++    Item trace = trace(board);
++    int net = net(board);
++
++    history.record(List.of(trace, trace), board);
++    assertEquals(1, history.count(net));
++    history.record(List.of(), board);
++    history.record(List.of(trace), board);
++    assertEquals(2, history.count(net));
++
++    AutorouteControl control = control(board);
++    history.applyTo(control, board);
++    assertNotNull(control.netRipHistory);
++    assertEquals(2, control.netRipHistory[net]);
++    assertEquals(1.5, control.ripHistoryWeight);
++    AutorouteControl other = control(board);
++    history.applyTo(other, board);
++    assertSame(control.netRipHistory, other.netRipHistory);
++  }
++
++  static RoutingBoard board() {
++    BoardReadResult result =
++        DsnReader.readBoard(
++            new ByteArrayInputStream(DSN.getBytes(StandardCharsets.UTF_8)), null, null, "rip");
++    assertInstanceOf(BoardReadResult.Success.class, result);
++    return (RoutingBoard) ((BoardReadResult.Success) result).board();
++  }
++
++  static int net(RoutingBoard board) {
++    return board.rules.nets.get("X").iterator().next().netNumber;
++  }
++
++  static Item trace(RoutingBoard board) {
++    Point[] pins = board.getPins().stream().map(Pin::getCenter).toArray(Point[]::new);
++    Item trace =
++        board.insertTraceWithoutCleaning(
++            new Polyline(new Point[] {pins[0], new IntPoint(10000, 3000), pins[1]}),
++            0,
++            200,
++            new int[] {net(board)},
++            1,
++            FixedState.UNFIXED);
++    assertNotNull(trace);
++    return trace;
++  }
++
++  private static AutorouteControl control(RoutingBoard board) {
++    RouterSettings settings = new SettingsMerger(new DefaultSettings()).merge();
++    settings.setLayerCount(board.getLayerCount());
++    return new AutorouteControl(board, net(board), settings);
++  }
++}

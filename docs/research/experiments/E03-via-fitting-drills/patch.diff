@@ -1,0 +1,305 @@
+diff --git a/src/main/java/app/freerouting/autoroute/drill/DrillPage.java b/src/main/java/app/freerouting/autoroute/drill/DrillPage.java
+index 0938eeb5..065be8fa 100644
+--- a/src/main/java/app/freerouting/autoroute/drill/DrillPage.java
++++ b/src/main/java/app/freerouting/autoroute/drill/DrillPage.java
+@@ -9,17 +9,45 @@ import app.freerouting.board.facade.RoutingBoard;
+ import app.freerouting.board.model.items.Item;
+ import app.freerouting.board.model.items.Pin;
+ import app.freerouting.board.searchtree.ShapeSearchTree;
++import app.freerouting.core.library.Padstack;
+ import app.freerouting.datastructures.ShapeTree.TreeEntry;
++import app.freerouting.datastructures.Stoppable;
++import app.freerouting.geometry.planar.ConvexShape;
+ import app.freerouting.geometry.planar.IntBox;
+ import app.freerouting.geometry.planar.Point;
+ import app.freerouting.geometry.planar.PolylineArea;
+ import app.freerouting.geometry.planar.TileShape;
++import app.freerouting.rules.Net;
++import app.freerouting.rules.ViaInfo;
++import app.freerouting.rules.ViaRule;
+ import java.util.Collection;
+ import java.util.Iterator;
+ import java.util.LinkedList;
++import java.util.Locale;
++import java.util.concurrent.atomic.LongAdder;
+ 
+ public class DrillPage implements ExpandableObject {
+ 
++  /**
++   * Experiment E03: with {@code -Dfreerouting.exp.via_fitting_drills=true} a drill piece whose
++   * centre of gravity lies too close to an obstacle for a via also gets drills at the centres of
++   * the parts of the piece where a via fits, see {@link #addViaFittingDrills}. Off by default.
++   */
++  public static final String VIA_FITTING_DRILLS_PROPERTY = "freerouting.exp.via_fitting_drills";
++
++  /** Enables the counters of experiment E03, see {@link #viaFittingStatsSummary()}. */
++  public static final String VIA_FITTING_STATS_PROPERTY =
++      "freerouting.exp.via_fitting_drills_stats";
++
++  static final boolean VIA_FITTING_DRILLS = Boolean.getBoolean(VIA_FITTING_DRILLS_PROPERTY);
++  private static final boolean VIA_FITTING_STATS = Boolean.getBoolean(VIA_FITTING_STATS_PROPERTY);
++
++  private static final LongAdder STAT_PAGES = new LongAdder();
++  private static final LongAdder STAT_PIECES = new LongAdder();
++  private static final LongAdder STAT_BLOCKED_PIECES = new LongAdder();
++  private static final LongAdder STAT_EXTRA_DRILLS = new LongAdder();
++  private static final LongAdder STAT_NANOS = new LongAdder();
++
+   /** The shape of the page. */
+   public final IntBox shape;
+ 
+@@ -105,6 +133,12 @@ public class DrillPage implements ExpandableObject {
+         return this.drills;
+       }
+ 
++      long statStart = VIA_FITTING_STATS ? System.nanoTime() : 0;
++      TileShape[] viaHoles = VIA_FITTING_DRILLS ? viaHoles(autorouteEngine, attachSmd) : null;
++      if (VIA_FITTING_STATS) {
++        STAT_PAGES.increment();
++        STAT_NANOS.add(System.nanoTime() - statStart);
++      }
+       // Use the center points of these drill shapes to try making a via.
+       int drillFirstLayer = 0;
+       int drillLastLayer = this.board.getLayerCount() - 1;
+@@ -129,6 +163,9 @@ public class DrillPage implements ExpandableObject {
+         if (newDrill.calculateExpansionRooms(autorouteEngine)) {
+           this.drills.add(newDrill);
+         }
++        if (pinCenter == null && viaHoles != null) {
++          addViaFittingDrills(autorouteEngine, currentDrillShape, currentDrillLocation, viaHoles);
++        }
+         if (pinCenter != null) {
+           Point centreOfGravity = currentDrillShape.centreOfGravity().round();
+           if (!centreOfGravity.equals(pinCenter)) {
+@@ -145,6 +182,151 @@ public class DrillPage implements ExpandableObject {
+     return this.drills;
+   }
+ 
++  /**
++   * The drill pieces are cut from the page with obstacle shapes compensated for traces, so the
++   * centre of gravity of a piece can lie closer to an obstacle than a via fits. In a narrow pocket
++   * that holds every candidate of the pocket outside the smaller region where a via fits, and the
++   * pocket cannot be left through a via. When the centre of gravity of {@code piece} lies inside an
++   * obstacle enlarged by the via compensation, adds a drill at the centre of gravity of each part
++   * of the piece outside the enlarged obstacles.
++   */
++  private void addViaFittingDrills(
++      AutorouteEngine autorouteEngine,
++      TileShape piece,
++      Point centreOfGravity,
++      TileShape[] viaHoles) {
++    long statStart = VIA_FITTING_STATS ? System.nanoTime() : 0;
++    TileShape[] fittingParts =
++        viaFittingParts(piece, centreOfGravity, viaHoles, autorouteEngine.stoppableThread);
++    int added = 0;
++    if (fittingParts != null) {
++      for (TileShape part : fittingParts) {
++        Point location = part.centreOfGravity().round();
++        if (!part.contains(location)) {
++          continue;
++        }
++        ExpansionDrill drill =
++            new ExpansionDrill(part, location, 0, this.board.getLayerCount() - 1);
++        if (drill.calculateExpansionRooms(autorouteEngine)) {
++          this.drills.add(drill);
++          added++;
++        }
++      }
++    }
++    if (VIA_FITTING_STATS) {
++      STAT_PIECES.increment();
++      if (fittingParts != null) {
++        STAT_BLOCKED_PIECES.increment();
++      }
++      STAT_EXTRA_DRILLS.add(added);
++      STAT_NANOS.add(System.nanoTime() - statStart);
++    }
++  }
++
++  /**
++   * Returns the convex parts of {@code piece} outside {@code viaHoles}, or null if {@code
++   * centreOfGravity} lies outside every via hole (the centre drill of the piece fits a via then) or
++   * the split was stopped. Holes whose bounding box misses the piece's bounding box enlarged by one
++   * unit (against rounding of the box corners) are skipped before the exact intersection; that does
++   * not change the result.
++   */
++  static TileShape[] viaFittingParts(
++      TileShape piece, Point centreOfGravity, TileShape[] viaHoles, Stoppable stoppable) {
++    IntBox pieceBox = piece.boundingBox().offset(1);
++    Collection<TileShape> cutouts = new LinkedList<>();
++    boolean centreBlocked = false;
++    for (TileShape viaHole : viaHoles) {
++      if (!pieceBox.intersects(viaHole.boundingBox())) {
++        continue;
++      }
++      TileShape cutout = viaHole.intersection(piece);
++      if (cutout.dimension() == 2) {
++        cutouts.add(cutout);
++        centreBlocked |= cutout.containsInside(centreOfGravity);
++      }
++    }
++    if (!centreBlocked) {
++      return null;
++    }
++    return new PolylineArea(piece, cutouts.toArray(new TileShape[0])).splitToConvex(stoppable);
++  }
++
++  /** Whether the counters of experiment E03 are enabled for this process. */
++  public static boolean viaFittingStatsEnabled() {
++    return VIA_FITTING_STATS;
++  }
++
++  /** The counters of experiment E03 for all drill pages of this process, as one log line. */
++  public static String viaFittingStatsSummary() {
++    return String.format(
++        Locale.US,
++        "Experiment %s=%s: %d drill pages computed, %d pieces checked, %d with a blocked centre,"
++            + " %d extra drills, %.2f s in the via-fitting code",
++        VIA_FITTING_DRILLS_PROPERTY,
++        VIA_FITTING_DRILLS,
++        STAT_PAGES.sum(),
++        STAT_PIECES.sum(),
++        STAT_BLOCKED_PIECES.sum(),
++        STAT_EXTRA_DRILLS.sum(),
++        STAT_NANOS.sum() / 1e9);
++  }
++
++  /**
++   * The obstacles of the page as in {@link #getDrills}, enlarged by the radius and the clearance
++   * compensation of the smallest via the net may use, or null if the net has no via.
++   */
++  private TileShape[] viaHoles(AutorouteEngine autorouteEngine, boolean attachSmd) {
++    double offset = viaCompensation();
++    if (offset <= 0) {
++      return null;
++    }
++    ShapeSearchTree searchTree = autorouteEngine.autorouteSearchTree;
++    Collection<TreeEntry> overlaps = new LinkedList<>();
++    searchTree.overlappingTreeEntries(this.shape.offset(Math.ceil(offset)), -1, overlaps);
++    Collection<TileShape> result = new LinkedList<>();
++    for (TreeEntry currentEntry : overlaps) {
++      if (!(currentEntry.object instanceof Item currentItem)
++          || currentItem.isDrillable(this.netNumber)) {
++        continue;
++      }
++      if (currentItem instanceof Pin pin
++          && attachSmd
++          && pin.drillAllowed()
++          && pin.containsNet(this.netNumber)) {
++        continue;
++      }
++      TileShape obstacleShape =
++          currentItem.getTreeShape(searchTree, currentEntry.shapeIndexInObject);
++      result.add((TileShape) obstacleShape.enlarge(offset));
++    }
++    return result.toArray(new TileShape[0]);
++  }
++
++  private double viaCompensation() {
++    Net net = this.board.rules.nets.get(this.netNumber);
++    ViaRule viaRule =
++        net == null || net.getNetClass() == null ? null : net.getNetClass().getViaRule();
++    if (viaRule == null) {
++      return 0;
++    }
++    double result = Double.MAX_VALUE;
++    for (int i = 0; i < viaRule.viaCount(); i++) {
++      ViaInfo viaInfo = viaRule.getVia(i);
++      Padstack padstack = viaInfo.getPadstack();
++      double radius = 0;
++      for (int layer = padstack.fromLayer(); layer <= padstack.toLayer(); layer++) {
++        ConvexShape shape = padstack.getShape(layer);
++        double layerRadius =
++            (shape == null ? 0 : 0.5 * shape.maxWidth())
++                + this.board.rules.clearanceMatrix.clearanceCompensationValue(
++                    viaInfo.getClearanceClassIndex(), layer);
++        radius = Math.max(radius, layerRadius);
++      }
++      result = Math.min(result, radius);
++    }
++    return result == Double.MAX_VALUE ? 0 : result;
++  }
++
+   @Override
+   public TileShape getShape() {
+     return this.shape;
+diff --git a/src/test/java/app/freerouting/autoroute/drill/DrillPageViaFittingTest.java b/src/test/java/app/freerouting/autoroute/drill/DrillPageViaFittingTest.java
+new file mode 100644
+index 00000000..34630bb3
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/drill/DrillPageViaFittingTest.java
+@@ -0,0 +1,59 @@
++package app.freerouting.autoroute.drill;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.geometry.planar.IntBox;
++import app.freerouting.geometry.planar.IntPoint;
++import app.freerouting.geometry.planar.Point;
++import app.freerouting.geometry.planar.TileShape;
++import org.junit.jupiter.api.Test;
++
++class DrillPageViaFittingTest {
++
++  private static final IntBox PIECE = new IntBox(0, 0, 1000, 100);
++  private static final Point CENTRE = new IntPoint(500, 50);
++
++  @Test
++  void viaFittingDrillsAreOffByDefault() {
++    assertEquals(
++        Boolean.getBoolean(DrillPage.VIA_FITTING_DRILLS_PROPERTY), DrillPage.VIA_FITTING_DRILLS);
++  }
++
++  @Test
++  void aBlockedCentreGivesThePartsOutsideTheViaHoles() {
++    IntBox hole = new IntBox(400, -50, 600, 150);
++
++    TileShape[] parts = DrillPage.viaFittingParts(PIECE, CENTRE, new TileShape[] {hole}, null);
++
++    assertNotNull(parts);
++    assertTrue(parts.length >= 2, "The hole splits the piece into a left and a right part");
++    double area = 0;
++    for (TileShape part : parts) {
++      Point location = part.centreOfGravity().round();
++      assertTrue(PIECE.contains(location), "A via-fitting location lies inside the piece");
++      assertFalse(hole.containsInside(location), "A via-fitting location lies outside the hole");
++      assertFalse(part.containsInside(CENTRE), "No part holds the blocked centre");
++      area += part.area();
++    }
++    assertEquals(800 * 100, area, 1e-6, "The parts cover the piece outside the hole");
++  }
++
++  @Test
++  void aFreeCentreGivesNoExtraParts() {
++    IntBox hole = new IntBox(-50, -50, 100, 150);
++
++    assertNull(DrillPage.viaFittingParts(PIECE, CENTRE, new TileShape[] {hole}, null));
++  }
++
++  @Test
++  void holesAwayFromThePieceAreIgnored() {
++    IntBox farHole = new IntBox(5000, 5000, 6000, 6000);
++
++    assertNull(DrillPage.viaFittingParts(PIECE, CENTRE, new TileShape[] {farHole}, null));
++    assertNull(DrillPage.viaFittingParts(PIECE, CENTRE, new TileShape[0], null));
++  }
++}
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+@@ -681,6 +681,11 @@
+       phase.peakHeapMb = AutorouteRuntimeMetrics.peakHeapMbSnapshot(job);
+     }
+ 
++    // Experiment E03 counters (fully qualified so that the E02 and E03 patches stack).
++    if (app.freerouting.autoroute.drill.DrillPage.viaFittingStatsEnabled()) {
++      job.logInfo(app.freerouting.autoroute.drill.DrillPage.viaFittingStatsSummary());
++    }
++
+     bh.clear();
+ 
+     if (router.startNeckedRouted + router.startNeckedFailed > 0) {

@@ -1,0 +1,596 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+index 4a0812e2..e6a10a42 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+@@ -645,6 +645,14 @@ final class AutorouteBatchLoop {
+       }
+     }
+ 
++    if (PlaneFillRepair.ENABLED
++        && !isOptimizerAutorouter
++        && job.state != RoutingJobState.TIMED_OUT
++        && !router.thread.isStopRequested()
++        && router.lastStopReason != BatchAutorouter.StopReason.REPEATED) {
++      PlaneFillRepair.run(router);
++    }
++
+     boolean wasRouterRun =
+         router.settings.getRunRouter()
+             && (router.settings.autorouter.maxPasses == null
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/PlaneFillRepair.java b/src/main/java/app/freerouting/autoroute/pipeline/PlaneFillRepair.java
+new file mode 100644
+index 00000000..c02886b1
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/pipeline/PlaneFillRepair.java
+@@ -0,0 +1,208 @@
++package app.freerouting.autoroute.pipeline;
++
++import app.freerouting.autoroute.AutorouteAttemptResult;
++import app.freerouting.autoroute.AutorouteAttemptState;
++import app.freerouting.autoroute.maze.AutorouteControl;
++import app.freerouting.autoroute.maze.AutorouteEngine;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.ConductionArea;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.datastructures.TimeLimit;
++import app.freerouting.drc.PlaneFillConnectivity;
++import app.freerouting.logger.FRLogger;
++import app.freerouting.rules.Net;
++import app.freerouting.rules.NetClass;
++import java.util.Collection;
++import java.util.Locale;
++import java.util.Set;
++import java.util.SortedSet;
++import java.util.TreeSet;
++
++/**
++ * Experiment E14 ({@code -Dfreerouting.exp.plane_fill_check}): at the end of a pass loop, finds the
++ * items that the board counts as connected through a pour polygon although foreign copper has cut
++ * them off from the pour's actual fill ({@link PlaneFillConnectivity}), and routes each cut-off
++ * group to the main group of its net, without rip-up.
++ *
++ * <p>Values: {@code false} (default, nothing runs), {@code report} (analyse and log only; the
++ * result is unchanged), {@code true} (analyse, repair, analyse again and log).
++ */
++final class PlaneFillRepair {
++
++  static final String MODE =
++      System.getProperty("freerouting.exp.plane_fill_check", "false")
++          .trim()
++          .toLowerCase(Locale.ROOT);
++
++  static final boolean ENABLED = MODE.equals("true") || MODE.equals("report");
++
++  private static final boolean REPAIR = MODE.equals("true");
++
++  /** Per-connection search limit, the same as the first pass of the router (a safety stop). */
++  private static final int SEARCH_TIME_LIMIT_MS = 100000;
++
++  private static final int TIME_LIMIT_TO_PREVENT_ENDLESS_LOOP = 1000;
++
++  private PlaneFillRepair() {}
++
++  /** Runs the check (and the repair) on the router's board and logs one summary line. */
++  static void run(BatchAutorouter router) {
++    if (!ENABLED) {
++      return;
++    }
++    long start = System.nanoTime();
++    RoutingBoard board = router.board;
++    Set<Integer> pourNets = pourNets(board);
++    int cutOffGroupsBefore = 0;
++    int cutOffItemsBefore = 0;
++    int repaired = 0;
++    int failed = 0;
++    int cutOffGroupsAfter = 0;
++    int cutOffItemsAfter = 0;
++    StringBuilder examples = new StringBuilder();
++    for (int netNumber : pourNets) {
++      if (router.thread.isStopRequested()) {
++        break;
++      }
++      PlaneFillConnectivity.Result result = PlaneFillConnectivity.analyze(board, netNumber);
++      cutOffGroupsBefore += result.cutOffGroups.size();
++      cutOffItemsBefore += result.cutOffItemCount();
++      for (Set<Item> group : result.cutOffGroups) {
++        if (examples.length() < 400) {
++          examples.append(examples.length() == 0 ? "" : "; ").append(describe(board, group));
++        }
++      }
++      if (!REPAIR || result.cutOffGroups.isEmpty()) {
++        continue;
++      }
++      for (Set<Item> group : result.cutOffGroups) {
++        if (router.thread.isStopRequested()) {
++          break;
++        }
++        if (reconnect(router, netNumber, group, result.mainGroup)) {
++          repaired++;
++        } else {
++          failed++;
++        }
++      }
++      PlaneFillConnectivity.Result after = PlaneFillConnectivity.analyze(board, netNumber);
++      cutOffGroupsAfter += after.cutOffGroups.size();
++      cutOffItemsAfter += after.cutOffItemCount();
++    }
++    double seconds = (System.nanoTime() - start) / 1e9;
++    String message =
++        String.format(
++            Locale.US,
++            "Experiment plane_fill_check (%s): %d pour net(s), %d group(s) with %d item(s) cut off"
++                + " from the pour fill",
++            MODE,
++            pourNets.size(),
++            cutOffGroupsBefore,
++            cutOffItemsBefore);
++    if (REPAIR) {
++      message +=
++          String.format(
++              Locale.US,
++              ", %d reconnected, %d not; afterwards %d group(s) with %d item(s) cut off",
++              repaired,
++              failed,
++              cutOffGroupsAfter,
++              cutOffItemsAfter);
++    }
++    message += String.format(Locale.US, "; %.2f s.", seconds);
++    if (examples.length() > 0) {
++      message += " Cut off: " + examples;
++    }
++    router.job.logInfo(message);
++  }
++
++  private static Set<Integer> pourNets(RoutingBoard board) {
++    Set<Integer> nets = new TreeSet<>();
++    Collection<ConductionArea> areas = board.getConductionAreas();
++    if (areas == null) {
++      return nets;
++    }
++    for (ConductionArea area : areas) {
++      if (area.getComponentId() <= 0) {
++        for (int i = 0; i < area.netCount(); i++) {
++          nets.add(area.getNetNumber(i));
++        }
++      }
++    }
++    return nets;
++  }
++
++  /**
++   * Routes one cut-off group to the main group of its net without rip-up, pulls the new copper
++   * tight and removes it again if it violates clearance. Returns true if the connection was kept.
++   */
++  private static boolean reconnect(
++      BatchAutorouter router, int netNumber, Set<Item> group, Set<Item> mainGroup) {
++    RoutingBoard board = router.board;
++    if (mainGroup.isEmpty()) {
++      return false;
++    }
++    AutorouteControl control =
++        new AutorouteControl(
++            board,
++            netNumber,
++            router.settings,
++            router.settings.getPlaneViaCosts(),
++            router.getTraceCosts());
++    control.ripupAllowed = false;
++    control.removeUnconnectedVias = router.isRemoveUnconnectedVias();
++    board.startMarkingChangedArea();
++    AutorouteEngine engine =
++        board.initAutoroute(
++            netNumber,
++            control.traceClearanceClassIndex,
++            router.thread,
++            new TimeLimit(SEARCH_TIME_LIMIT_MS),
++            false);
++    int maxItemIdBefore = board.communication.idGenerator.maxGeneratedId();
++    // The board counts the cut-off group as connected through the pour polygon, so the new trace
++    // closes a cycle through the pour and trace normalization would remove it again at once.
++    Net net = board.rules.nets.get(netNumber);
++    NetClass netClass = net != null ? net.getNetClass() : null;
++    boolean ignoredCyclesWithAreas = netClass != null && netClass.getIgnoreCyclesWithAreas();
++    if (netClass != null) {
++      netClass.setIgnoreCyclesWithAreas(true);
++    }
++    try {
++      SortedSet<Item> rippedItems = new TreeSet<>();
++      AutorouteAttemptResult result =
++          engine.autorouteConnection(group, mainGroup, control, rippedItems, null);
++      if (result.state != AutorouteAttemptState.ROUTED) {
++        FRLogger.debug(
++            "plane_fill_check: could not reconnect "
++                + describe(board, group)
++                + ": "
++                + result.state
++                + " "
++                + result.details);
++        return false;
++      }
++      board.optChangedArea(
++          new int[0],
++          null,
++          router.getTracePullTightAccuracy(),
++          control.traceCosts,
++          router.thread,
++          TIME_LIMIT_TO_PREVENT_ENDLESS_LOOP);
++    } finally {
++      if (netClass != null) {
++        netClass.setIgnoreCyclesWithAreas(ignoredCyclesWithAreas);
++      }
++    }
++    return BatchAutorouter.enforceStrictDrc(board, netNumber, maxItemIdBefore) == null;
++  }
++
++  private static String describe(RoutingBoard board, Set<Item> group) {
++    Item first = group.iterator().next();
++    var net = board.rules.nets.get(first.getNetNumber(0));
++    return (net != null ? net.name : "net#" + first.getNetNumber(0))
++        + " "
++        + first
++        + (group.size() > 1 ? " (+" + (group.size() - 1) + ")" : "");
++  }
++}
+diff --git a/src/main/java/app/freerouting/drc/PlaneFillConnectivity.java b/src/main/java/app/freerouting/drc/PlaneFillConnectivity.java
+new file mode 100644
+index 00000000..c49a8c9c
+--- /dev/null
++++ b/src/main/java/app/freerouting/drc/PlaneFillConnectivity.java
+@@ -0,0 +1,220 @@
++package app.freerouting.drc;
++
++import app.freerouting.board.facade.BasicBoard;
++import app.freerouting.board.model.items.ConductionArea;
++import app.freerouting.board.model.items.DrillItem;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Trace;
++import app.freerouting.geometry.planar.FloatPoint;
++import app.freerouting.geometry.planar.Point;
++import java.awt.geom.Area;
++import java.awt.geom.Rectangle2D;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.Comparator;
++import java.util.List;
++import java.util.Set;
++import java.util.TreeSet;
++
++/**
++ * Connectivity of a net through the actual fill of its pours instead of the pour polygons.
++ *
++ * <p>The board's connectivity ({@link Item#getConnectedSet(int)}) treats a pour ({@link
++ * ConductionArea} without a component) as one conductor wherever its polygon reaches. The fill is
++ * the polygon minus the clearances of foreign copper, so foreign tracks routed through a pour can
++ * cut a pad or via off from the copper around it. This class groups the net's items by copper
++ * contacts that do not run through a pour, joins the groups whose items lie in the same fill island
++ * of a pour (the islands of {@link DesignRulesChecker#decomposeAreaIntoIslands}), and reports the
++ * groups the board believes connected to the largest group although no fill connects them.
++ */
++public final class PlaneFillConnectivity {
++
++  /** The largest fill-connected group of a net and the groups cut off from it. */
++  public static final class Result {
++    /** The items of the largest group (most items, then lowest item id), empty if none. */
++    public final Set<Item> mainGroup;
++
++    /**
++     * Groups the board counts as connected to the main group through a pour polygon, but which no
++     * copper and no fill island joins to it; ordered by their lowest item id.
++     */
++    public final List<Set<Item>> cutOffGroups;
++
++    Result(Set<Item> mainGroup, List<Set<Item>> cutOffGroups) {
++      this.mainGroup = mainGroup;
++      this.cutOffGroups = cutOffGroups;
++    }
++
++    /** Returns the number of items in all cut-off groups. */
++    public int cutOffItemCount() {
++      int count = 0;
++      for (Set<Item> group : cutOffGroups) {
++        count += group.size();
++      }
++      return count;
++    }
++  }
++
++  private static final Result EMPTY = new Result(new TreeSet<>(), List.of());
++
++  private PlaneFillConnectivity() {}
++
++  /** Returns true for a pour: a conduction area that does not belong to a component. */
++  static boolean isPour(Item item) {
++    return item instanceof ConductionArea && item.getComponentId() <= 0;
++  }
++
++  /**
++   * Analyses the net with number {@code netNumber}. Computes (or reuses the cached) detailed fill
++   * of each pour of the net, which costs as much as the zone-island DRC of those pours.
++   */
++  public static Result analyze(BasicBoard board, int netNumber) {
++    List<ConductionArea> pours = new ArrayList<>();
++    Collection<ConductionArea> areas = board.getConductionAreas();
++    if (areas != null) {
++      for (ConductionArea area : areas) {
++        if (isPour(area) && area.containsNet(netNumber)) {
++          pours.add(area);
++        }
++      }
++    }
++    if (pours.isEmpty()) {
++      return EMPTY;
++    }
++    pours.sort(Comparator.comparingInt(Item::getId));
++
++    // Copper groups: connected without running through a pour.
++    List<Item> items = new ArrayList<>();
++    for (Item item : board.getConnectableItems(netNumber)) {
++      if (!isPour(item)) {
++        items.add(item);
++      }
++    }
++    items.sort(Comparator.comparingInt(Item::getId));
++    List<Set<Item>> groups = new ArrayList<>();
++    java.util.Map<Item, Integer> groupOf = new java.util.HashMap<>();
++    for (Item item : items) {
++      if (groupOf.containsKey(item)) {
++        continue;
++      }
++      Set<Item> group = new TreeSet<>();
++      for (Item member : item.getConnectedSet(netNumber, true)) {
++        if (!isPour(member)) {
++          group.add(member);
++        }
++      }
++      for (Item member : group) {
++        groupOf.put(member, groups.size());
++      }
++      groups.add(group);
++    }
++    if (groups.size() <= 1) {
++      return EMPTY;
++    }
++
++    int[] parent = new int[groups.size()];
++    for (int i = 0; i < parent.length; i++) {
++      parent[i] = i;
++    }
++    for (ConductionArea pour : pours) {
++      Area fill = pour.getDetailedFillArea();
++      if (fill == null || fill.isEmpty()) {
++        continue;
++      }
++      List<Area> islands = DesignRulesChecker.decomposeAreaIntoIslands(fill);
++      List<Rectangle2D> bounds = new ArrayList<>(islands.size());
++      for (Area island : islands) {
++        bounds.add(island.getBounds2D());
++      }
++      int[] firstGroupInIsland = new int[islands.size()];
++      java.util.Arrays.fill(firstGroupInIsland, -1);
++      for (Item item : items) {
++        if (!item.sharesLayer(pour)) {
++          continue;
++        }
++        for (FloatPoint point : contactPoints(item)) {
++          for (int i = 0; i < islands.size(); i++) {
++            if (bounds.get(i).contains(point.x, point.y)
++                && islands.get(i).contains(point.x, point.y)) {
++              int group = groupOf.get(item);
++              if (firstGroupInIsland[i] < 0) {
++                firstGroupInIsland[i] = group;
++              } else {
++                union(parent, firstGroupInIsland[i], group);
++              }
++            }
++          }
++        }
++      }
++    }
++
++    // The main group is the fill-connected class with the most items, ties to the lowest id.
++    int[] classSize = new int[groups.size()];
++    for (int i = 0; i < groups.size(); i++) {
++      classSize[find(parent, i)] += groups.get(i).size();
++    }
++    int mainClass = -1;
++    for (int i = 0; i < groups.size(); i++) {
++      int root = find(parent, i);
++      if (mainClass < 0 || classSize[root] > classSize[mainClass]) {
++        mainClass = root;
++      }
++    }
++    Set<Item> mainGroup = new TreeSet<>();
++    for (int i = 0; i < groups.size(); i++) {
++      if (find(parent, i) == mainClass) {
++        mainGroup.addAll(groups.get(i));
++      }
++    }
++    Set<Item> boardConnected = mainGroup.iterator().next().getConnectedSet(netNumber);
++
++    // Classes outside the main one that the board counts as connected to it are cut off.
++    java.util.Map<Integer, Set<Item>> cutOff = new java.util.TreeMap<>();
++    for (int i = 0; i < groups.size(); i++) {
++      int root = find(parent, i);
++      if (root == mainClass) {
++        continue;
++      }
++      Set<Item> group = groups.get(i);
++      if (!boardConnected.contains(group.iterator().next())) {
++        continue;
++      }
++      cutOff.computeIfAbsent(root, k -> new TreeSet<>()).addAll(group);
++    }
++    List<Set<Item>> cutOffGroups = new ArrayList<>(cutOff.values());
++    cutOffGroups.sort(Comparator.comparingInt(group -> group.iterator().next().getId()));
++    return new Result(mainGroup, cutOffGroups);
++  }
++
++  /** The points at which an item meets the fill: drill centers and trace ends. */
++  private static List<FloatPoint> contactPoints(Item item) {
++    List<FloatPoint> points = new ArrayList<>(2);
++    if (item instanceof DrillItem drillItem) {
++      Point center = drillItem.getCenter();
++      if (center != null) {
++        points.add(center.toFloat());
++      }
++    } else if (item instanceof Trace trace) {
++      points.add(trace.firstCorner().toFloat());
++      points.add(trace.lastCorner().toFloat());
++    }
++    return points;
++  }
++
++  private static int find(int[] parent, int i) {
++    while (parent[i] != i) {
++      parent[i] = parent[parent[i]];
++      i = parent[i];
++    }
++    return i;
++  }
++
++  private static void union(int[] parent, int a, int b) {
++    int rootA = find(parent, a);
++    int rootB = find(parent, b);
++    if (rootA != rootB) {
++      // The lower root wins, so the classes do not depend on the union order.
++      parent[Math.max(rootA, rootB)] = Math.min(rootA, rootB);
++    }
++  }
++}
+diff --git a/src/test/java/app/freerouting/drc/PlaneFillConnectivityTest.java b/src/test/java/app/freerouting/drc/PlaneFillConnectivityTest.java
+new file mode 100644
+index 00000000..5dc5873a
+--- /dev/null
++++ b/src/test/java/app/freerouting/drc/PlaneFillConnectivityTest.java
+@@ -0,0 +1,131 @@
++package app.freerouting.drc;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Via;
++import app.freerouting.board.model.structure.FixedState;
++import app.freerouting.board.model.structure.Layer;
++import app.freerouting.board.model.structure.LayerStructure;
++import app.freerouting.board.state.Communication;
++import app.freerouting.core.library.Padstack;
++import app.freerouting.geometry.planar.ConvexShape;
++import app.freerouting.geometry.planar.IntBox;
++import app.freerouting.geometry.planar.IntPoint;
++import app.freerouting.geometry.planar.Point;
++import app.freerouting.geometry.planar.PolylineShape;
++import app.freerouting.geometry.planar.TileShape;
++import app.freerouting.rules.BoardRules;
++import app.freerouting.rules.ClearanceMatrix;
++import app.freerouting.rules.Net;
++import app.freerouting.rules.ViaRule;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++/** Tests connectivity through the actual fill of a pour (experiment E14). */
++class PlaneFillConnectivityTest {
++
++  private RoutingBoard board;
++  private Net gndNet;
++  private Net sigNet;
++  private Padstack viaPadstack;
++
++  @BeforeEach
++  void setUp() {
++    LayerStructure layerStructure =
++        new LayerStructure(new Layer[] {new Layer("Top", true), new Layer("Bottom", true)});
++    BoardRules boardRules =
++        new BoardRules(layerStructure, ClearanceMatrix.getDefaultInstance(layerStructure, 10));
++    boardRules.createDefaultNetClass();
++    ViaRule viaRule = new ViaRule("defaultViaRule");
++    boardRules.viaRules.add(viaRule);
++    boardRules.getDefaultNetClass().setViaRule(viaRule);
++    board =
++        new RoutingBoard(
++            new IntBox(0, 0, 10000000, 10000000),
++            layerStructure,
++            new PolylineShape[] {TileShape.getInstance(0, 0, 10000000, 10000000)},
++            0,
++            boardRules,
++            new Communication());
++    gndNet = board.rules.nets.add("GND", 1, true);
++    sigNet = board.rules.nets.add("SIG", 1, false);
++    board.library.padstacks = new app.freerouting.core.library.Padstacks(layerStructure);
++    ConvexShape square = TileShape.getInstance(-100000, -100000, 100000, 100000);
++    viaPadstack =
++        board.library.padstacks.add("TestVia", new ConvexShape[] {square, square}, true, false);
++    board.insertConductionArea(
++        TileShape.getInstance(0, 0, 4000000, 4000000),
++        0,
++        new int[] {gndNet.netNumber},
++        0,
++        false,
++        FixedState.UNFIXED);
++  }
++
++  private Via gndVia(int x, int y) {
++    return board.insertVia(
++        viaPadstack, new IntPoint(x, y), new int[] {gndNet.netNumber}, 0, FixedState.UNFIXED, true);
++  }
++
++  private void trace(int layer, int netNumber, int x1, int y1, int x2, int y2) {
++    board.insertTrace(
++        new Point[] {new IntPoint(x1, y1), new IntPoint(x2, y2)},
++        layer,
++        50000,
++        new int[] {netNumber},
++        0,
++        FixedState.UNFIXED);
++  }
++
++  @Test
++  void continuousPourCutsNothingOff() {
++    gndVia(500000, 2000000);
++    gndVia(3500000, 2000000);
++
++    PlaneFillConnectivity.Result result = PlaneFillConnectivity.analyze(board, gndNet.netNumber);
++
++    assertTrue(result.cutOffGroups.isEmpty());
++  }
++
++  @Test
++  void foreignTrackAcrossThePourCutsTheFartherViaOff() {
++    Via left = gndVia(500000, 2000000);
++    Via right = gndVia(3500000, 2000000);
++    trace(0, sigNet.netNumber, 2000000, 0, 2000000, 4000000);
++    // The board still counts both vias as connected through the pour polygon.
++    assertTrue(left.getConnectedSet(gndNet.netNumber).contains(right));
++
++    PlaneFillConnectivity.Result result = PlaneFillConnectivity.analyze(board, gndNet.netNumber);
++
++    assertEquals(1, result.cutOffGroups.size());
++    assertTrue(result.mainGroup.contains(left), "ties go to the group with the lowest item id");
++    assertTrue(result.cutOffGroups.get(0).contains(right));
++  }
++
++  @Test
++  void copperOnTheOtherLayerKeepsTheGroupsJoined() {
++    gndVia(500000, 2000000);
++    gndVia(3500000, 2000000);
++    trace(0, sigNet.netNumber, 2000000, 0, 2000000, 4000000);
++    trace(1, gndNet.netNumber, 500000, 2000000, 3500000, 2000000);
++
++    PlaneFillConnectivity.Result result = PlaneFillConnectivity.analyze(board, gndNet.netNumber);
++
++    assertTrue(result.cutOffGroups.isEmpty());
++  }
++
++  @Test
++  void itemOutsideThePourIsAnOrdinaryIncompleteNotACutOff() {
++    gndVia(500000, 2000000);
++    gndVia(3500000, 2000000);
++    gndVia(8000000, 8000000);
++    trace(0, sigNet.netNumber, 2000000, 0, 2000000, 4000000);
++
++    PlaneFillConnectivity.Result result = PlaneFillConnectivity.analyze(board, gndNet.netNumber);
++
++    assertEquals(1, result.cutOffGroups.size());
++    assertEquals(1, result.cutOffItemCount());
++  }
++}

@@ -1,0 +1,352 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+index 4a0812e2..dc1d2a73 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+@@ -320,6 +320,10 @@ final class AutorouteBatchLoop {
+     // the degenerate case where plane-net items repeatedly fail or are inserted+removed each
+     // pass without updating the board state.
+     Set<String> alreadyRoutedBoardHashes = new java.util.HashSet<>();
++    final TransactionalLastMile transactionalLastMile =
++        TransactionalLastMile.MAX_ATTEMPTS > 0
++            ? new TransactionalLastMile(router, TransactionalLastMile.MAX_ATTEMPTS)
++            : null;
+     while (continueAutorouting && !router.thread.isStopAutoRouterRequested()) {
+       if (job.state == RoutingJobState.TIMED_OUT) {
+         stopFor(BatchAutorouter.StopReason.TIMED_OUT);
+@@ -380,6 +384,13 @@ final class AutorouteBatchLoop {
+         break;
+       }
+ 
++      if (transactionalLastMile != null
++          && continueAutorouting
++          && !router.thread.isStopAutoRouterRequested()
++          && transactionalLastMile.afterPass(currentPass)) {
++        board = router.board;
++      }
++
+       BoardStatistics boardStatisticsAfter = router.boardStatistics();
+       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
+ 
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/TransactionalLastMile.java b/src/main/java/app/freerouting/autoroute/pipeline/TransactionalLastMile.java
+new file mode 100644
+index 00000000..f9dd0543
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/pipeline/TransactionalLastMile.java
+@@ -0,0 +1,213 @@
++package app.freerouting.autoroute.pipeline;
++
++import app.freerouting.autoroute.AutorouteAttemptResult;
++import app.freerouting.autoroute.AutorouteAttemptState;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.logger.FRLogger;
++import java.util.ArrayList;
++import java.util.Comparator;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.SortedSet;
++import java.util.TreeSet;
++
++/**
++ * Experiment E06 (transactional last-mile repair): when the pass loop stagnates with few open
++ * connections, routes one open connection on a copy of the board with rip-up at the cheapest (pass
++ * 1) rip cost, then re-routes the nets it ripped at the current pass's rip cost, removes tails like
++ * a pass end, and adopts the copy only if the open count dropped and the clearance violation count
++ * did not grow. Otherwise the copy is dropped and the board, the necked-net set and the necked
++ * counters are exactly as before. Off by default ({@code -Dfreerouting.exp.last_mile=<max
++ * attempts>} enables it, bounding the transactions of one pass loop).
++ */
++final class TransactionalLastMile {
++
++  /** System property holding the maximum number of transactions per pass loop. */
++  static final String PROPERTY = "freerouting.exp.last_mile";
++
++  /** The value of {@link #PROPERTY}, read once at startup; 0 (the default) disables it. */
++  static final int MAX_ATTEMPTS = parseMaxAttempts(System.getProperty(PROPERTY));
++
++  /** Passes without a new lowest open count before a transaction is tried. */
++  static final int STAGNATION_PASSES = 2;
++
++  /** Transactions run only while at most this many connections are open. */
++  static final int OPEN_CONNECTION_LIMIT = 16;
++
++  private final BatchAutorouter router;
++  private final int maxAttempts;
++  private int attempts;
++  private int accepted;
++  private int lowestOpenCount = Integer.MAX_VALUE;
++  private int passesWithoutNewLowest;
++
++  TransactionalLastMile(BatchAutorouter router, int maxAttempts) {
++    this.router = router;
++    this.maxAttempts = maxAttempts;
++  }
++
++  static int parseMaxAttempts(String value) {
++    if (value == null) {
++      return 0;
++    }
++    try {
++      return Math.max(0, Integer.parseInt(value.trim()));
++    } catch (NumberFormatException e) {
++      return 0;
++    }
++  }
++
++  int attempts() {
++    return this.attempts;
++  }
++
++  int accepted() {
++    return this.accepted;
++  }
++
++  /**
++   * Updates the stagnation state after pass {@code passNo} and, on stagnation, runs transactions
++   * until one is adopted or the attempt budget or the open connections of this pass are used up.
++   * Returns true if {@code router.board} was replaced.
++   */
++  boolean afterPass(int passNo) {
++    int open = router.calculateIncompleteCount(router.board);
++    if (open < this.lowestOpenCount) {
++      this.lowestOpenCount = open;
++      this.passesWithoutNewLowest = 0;
++    } else {
++      this.passesWithoutNewLowest++;
++    }
++    if (open == 0
++        || open > OPEN_CONNECTION_LIMIT
++        || this.passesWithoutNewLowest < STAGNATION_PASSES
++        || this.attempts >= this.maxAttempts) {
++      return false;
++    }
++    List<int[]> candidates = candidates(router.board);
++    for (int[] candidate : candidates) {
++      if (this.attempts >= this.maxAttempts || router.thread.isStopAutoRouterRequested()) {
++        break;
++      }
++      this.attempts++;
++      if (tryTransaction(candidate[0], candidate[1], passNo, open)) {
++        this.accepted++;
++        int openAfter = router.calculateIncompleteCount(router.board);
++        if (openAfter < this.lowestOpenCount) {
++          this.lowestOpenCount = openAfter;
++        }
++        this.passesWithoutNewLowest = 0;
++        return true;
++      }
++    }
++    return false;
++  }
++
++  /** The open connections as (item id, net number), in ascending net number and item id. */
++  private List<int[]> candidates(RoutingBoard board) {
++    List<int[]> result = new ArrayList<>();
++    for (Item item : router.getAutorouteItems(board)) {
++      for (int i = 0; i < item.netCount(); i++) {
++        if (!AutoroutePassRunner.designBlocked(board, item, item.getNetNumber(i))) {
++          result.add(new int[] {item.getId(), item.getNetNumber(i)});
++        }
++      }
++    }
++    result.sort(Comparator.<int[]>comparingInt(c -> c[1]).thenComparingInt(c -> c[0]));
++    return result;
++  }
++
++  private boolean tryTransaction(int itemId, int netNo, int passNo, int openBefore) {
++    RoutingBoard original = router.board;
++    int violationsBefore = router.boardStatistics().clearanceViolations.totalCount;
++    RoutingBoard copy = original.deepCopy();
++    if (copy == null) {
++      return false;
++    }
++    SortedSet<Integer> neckedBefore = new TreeSet<>(router.neckedRouteNets);
++    int startNeckedRoutedBefore = router.startNeckedRouted;
++    int startNeckedFailedBefore = router.startNeckedFailed;
++    boolean keep = false;
++    int openAfter = -1;
++    int violationsAfter = -1;
++    router.board = copy;
++    try {
++      Item target = copy.getItem(itemId);
++      if (target == null) {
++        return false;
++      }
++      SortedSet<Item> ripped = new TreeSet<>();
++      copy.startMarkingChangedArea();
++      AutorouteAttemptResult result =
++          router.autorouteItem(target, netNo, ripped, new LinkedHashMap<>(), 1);
++      if (result.state != AutorouteAttemptState.ROUTED) {
++        return false;
++      }
++      SortedSet<Integer> victimNets = new TreeSet<>();
++      for (Item rippedItem : ripped) {
++        for (int i = 0; i < rippedItem.netCount(); i++) {
++          victimNets.add(rippedItem.getNetNumber(i));
++        }
++      }
++      if (!victimNets.isEmpty()) {
++        List<Item> victims = new ArrayList<>();
++        for (Item item : router.getAutorouteItems(copy)) {
++          if (item.netCount() == 1 && victimNets.contains(item.getNetNumber(0))) {
++            victims.add(item);
++          }
++        }
++        for (Item victim : victims) {
++          copy.startMarkingChangedArea();
++          router.autorouteItem(
++              victim, victim.getNetNumber(0), new TreeSet<>(), new LinkedHashMap<>(), passNo);
++        }
++      }
++      router.removeTails(
++          router.removeUnconnectedVias
++              ? Item.StopConnectionOption.NONE
++              : Item.StopConnectionOption.FANOUT_VIA);
++      openAfter = router.calculateIncompleteCount(copy);
++      violationsAfter = router.boardStatistics().clearanceViolations.totalCount;
++      keep = openAfter < openBefore && violationsAfter <= violationsBefore;
++      return keep;
++    } catch (RuntimeException e) {
++      // A failed transaction must not end the pass loop; the live board was never touched.
++      FRLogger.error("Transactional last-mile attempt on net #" + netNo + " failed", e);
++      return false;
++    } finally {
++      if (!keep) {
++        router.board = original;
++        router.neckedRouteNets.clear();
++        router.neckedRouteNets.addAll(neckedBefore);
++        router.startNeckedRouted = startNeckedRoutedBefore;
++        router.startNeckedFailed = startNeckedFailedBefore;
++      }
++      router.airLine = null;
++      if (router.job != null) {
++        router.job.logInfo(
++            "Transactional last-mile attempt "
++                + this.attempts
++                + " after pass #"
++                + passNo
++                + " on net #"
++                + netNo
++                + " (item "
++                + itemId
++                + "): "
++                + (keep ? "kept" : "rolled back")
++                + ", open "
++                + openBefore
++                + " -> "
++                + openAfter
++                + ", clearance violations "
++                + violationsBefore
++                + " -> "
++                + violationsAfter
++                + ".");
++      } else {
++        FRLogger.debug("Transactional last-mile attempt on net #" + netNo + ": keep=" + keep);
++      }
++    }
++  }
++}
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/TransactionalLastMileTest.java b/src/test/java/app/freerouting/autoroute/pipeline/TransactionalLastMileTest.java
+new file mode 100644
+index 00000000..775fb574
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/TransactionalLastMileTest.java
+@@ -0,0 +1,98 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertInstanceOf;
++import static org.junit.jupiter.api.Assertions.assertNotSame;
++import static org.junit.jupiter.api.Assertions.assertSame;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.core.StoppableThread;
++import app.freerouting.io.BoardReadResult;
++import app.freerouting.io.specctra.DsnReader;
++import app.freerouting.settings.RouterSettings;
++import app.freerouting.settings.SettingsMerger;
++import app.freerouting.settings.sources.DefaultSettings;
++import java.io.ByteArrayInputStream;
++import java.nio.charset.StandardCharsets;
++import org.junit.jupiter.api.Test;
++
++/** Experiment E06: the transaction runs only on stagnation and is adopted only if it helps. */
++class TransactionalLastMileTest {
++
++  private static final String DSN =
++      """
++      (pcb lastmile (resolution um 1)
++        (structure (layer top (type signal))
++          (boundary (rect pcb 0 0 20000 10000))
++          (via V) (rule (width 400) (clearance 200)))
++        (placement (component C (place A 3000 3000 front 0) (place B 17000 3000 front 0)))
++        (library (image C (pin S 1 0 0)) (padstack S (shape (circle top 800)))
++          (padstack V (shape (circle top 600)) (attach off)))
++        (network (net X (pins A-1 B-1))))
++      """;
++
++  @Test
++  void parseMaxAttemptsDefaultsToOff() {
++    assertEquals(0, TransactionalLastMile.MAX_ATTEMPTS);
++    assertEquals(0, TransactionalLastMile.parseMaxAttempts(null));
++    assertEquals(0, TransactionalLastMile.parseMaxAttempts("x"));
++    assertEquals(0, TransactionalLastMile.parseMaxAttempts("-3"));
++    assertEquals(4, TransactionalLastMile.parseMaxAttempts(" 4 "));
++  }
++
++  @Test
++  void runsOnlyAfterStagnationAndAdoptsAnImprovingCopy() {
++    BatchAutorouter router = router();
++    final RoutingBoard original = router.board;
++    TransactionalLastMile lastMile = new TransactionalLastMile(router, 3);
++
++    assertFalse(lastMile.afterPass(1));
++    assertFalse(lastMile.afterPass(2));
++    assertEquals(0, lastMile.attempts());
++    assertSame(original, router.board);
++
++    assertTrue(lastMile.afterPass(3));
++    assertEquals(1, lastMile.attempts());
++    assertEquals(1, lastMile.accepted());
++    assertNotSame(original, router.board);
++    assertEquals(0, router.calculateIncompleteCount(router.board));
++    // The original board is untouched by the transaction.
++    assertEquals(1, router.calculateIncompleteCount(original));
++    // Nothing is open any more, so no further transactions run.
++    assertFalse(lastMile.afterPass(4));
++    assertEquals(1, lastMile.attempts());
++  }
++
++  @Test
++  void stopsAtTheAttemptBudget() {
++    BatchAutorouter router = router();
++    TransactionalLastMile lastMile = new TransactionalLastMile(router, 0);
++    for (int pass = 1; pass <= 5; pass++) {
++      assertFalse(lastMile.afterPass(pass));
++    }
++    assertEquals(0, lastMile.attempts());
++  }
++
++  private static BatchAutorouter router() {
++    BoardReadResult result =
++        DsnReader.readBoard(
++            new ByteArrayInputStream(DSN.getBytes(StandardCharsets.UTF_8)), null, null, "lm");
++    assertInstanceOf(BoardReadResult.Success.class, result);
++    RoutingBoard board = (RoutingBoard) ((BoardReadResult.Success) result).board();
++    RouterSettings settings = new SettingsMerger(new DefaultSettings()).merge();
++    settings.setLayerCount(board.getLayerCount());
++    return new BatchAutorouter(
++        new StoppableThread() {
++          @Override
++          protected void threadAction() {}
++        },
++        board,
++        settings,
++        true,
++        true,
++        settings.getStartRipupCosts(),
++        500);
++  }
++}

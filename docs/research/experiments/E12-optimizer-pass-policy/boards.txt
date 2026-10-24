@@ -1,0 +1,11 @@
+# E12 boards. Common flags: -mt 1 --router.optimizer.enabled=true --router.optimizer.max_threads=1
+# (the per-board -mp bounds the routing stage, which is identical in every variant).
+#
+# Optimizer only: an already routed board; the cost is all optimizer.
+fixtures/Issue103-Board-Routed.dsn --router.optimizer.enable_preflight_guards=false
+fixtures/Issue508-DAC2020_bm01.dsn -mp 25
+fixtures/Issue029-hw48na.dsn --router.max_items=150
+fixtures/Issue508-DAC2020_bm05.dsn -mp 8
+fixtures/Issue555-BBD_Mars-64.dsn -mp 10
+fixtures/Issue143-rpi_splitter.dsn -mp 8
+fixtures/Issue155-CH376_MCP795_Module.dsn -mp 25

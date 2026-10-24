@@ -1,0 +1,2 @@
+control head
+verify head -Dfreerouting.exp.verify_connection=true

@@ -1,0 +1,15 @@
+# E20 memory footprint: boards from small to large. Pass/item bounds keep every run short; the
+# heap question is answered by the shape of the run, not by its length.
+# cheap smoke boards
+fixtures/Issue957-smoke-ldo-led.dsn -mp 25
+fixtures/Issue508-DAC2020_bm02.dsn -mp 25
+# mid-size two-layer boards
+fixtures/Issue110-RelayModule.dsn -mp 25
+fixtures/Issue217-8088sbc.dsn -mp 10
+fixtures/Issue102-Mars-64-revE-rot00.dsn -mp 8
+# exercises the routing fallback (continuations + 5 alternatives) and history restores
+fixtures/Issue157-TeamAdapt-LinePCB.dsn -mp 25 --router.max_items=300
+# larger / multi-layer boards where serialized history entries are biggest
+fixtures/Issue732-RoyalBlue54L-Feather.dsn -mp 6
+fixtures/Issue297-myboard.dsn -mp 6
+fixtures/Issue508-DAC2020_bm01.dsn -mp 6

@@ -1,0 +1,24 @@
+# E02 maze door tie-break. Paths are relative to the repository root.
+# Group A: boards with open connections in the head-like master arm of camp3/run1
+# (router "unrouted" > 0 at -mp 25, one thread, optimizer off). These are unmeasured so far.
+fixtures/Issue313-FastTest.dsn
+fixtures/Issue157-TeamAdapt-LinePCB.dsn
+fixtures/Issue110-Pajalnaja_stancija.dsn
+fixtures/Issue508-DAC2020_bm04.dsn
+fixtures/Issue508-DAC2020_bm05.dsn
+fixtures/Issue684-Autorouter_PCB1_2026-5-8.dsn
+fixtures/Issue039-bug-design.dsn
+fixtures/Issue367-Charger.dsn
+# These two hit the 20-minute limit in camp3/run1; run them with the longer --timeout below.
+fixtures/Issue297-myboard.dsn
+fixtures/Issue732-RoyalBlue54L-Feather.dsn
+# Group B: the nine easy boards of the first measurement (complete in every arm; must not regress).
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue508-DAC2020_bm06.dsn
+fixtures/Issue508-DAC2020_bm07.dsn
+fixtures/Issue508-DAC2020_bm09.dsn
+fixtures/Issue508-DAC2020_bm10.dsn
+fixtures/Issue508-DAC2020_bm11.dsn
+fixtures/Issue110-RelayModule.dsn
+fixtures/Issue153-wavefolder.dsn
+fixtures/Issue034-Green14SegLED.dsn

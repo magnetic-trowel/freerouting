@@ -1,0 +1,2 @@
+control head
+speedup build/e18.jar

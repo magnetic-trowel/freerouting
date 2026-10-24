@@ -1,0 +1,9 @@
+# E10 stage 0 (H1): EasyEDA exports with (resolution mil 1000): 500 units = 12.7 um.
+fixtures/Issue313-FastTest.dsn
+fixtures/Issue684-Autorouter_PCB1_2026-5-8.dsn
+fixtures/Issue179-Autorouter_PCB1_2023-3-24.dsn
+fixtures/Issue721-Autorouter_CE2632_HarryMu_2026-6-15.dsn
+fixtures/Issue070-Autorouter_FQ101_PCB_2022-05-13.dsn
+# The two largest (807 and 989 pins): expensive, keep last.
+fixtures/Issue289-Autorouter_PCB_FHT-8086_2024-03-08.dsn
+fixtures/Issue289-Autorouter_PCB_FHT-VGA_2024-03-25.dsn

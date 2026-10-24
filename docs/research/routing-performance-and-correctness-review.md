@@ -168,8 +168,6 @@ Security (described only as far as needed to fix them):
 - MCP local-file tools and the `file_path` field of `/v1/autoroute` read and write paths chosen by
   the client, guarded only by a short denylist. An allowlisted root resolved with `toRealPath`, a
   size cap and loopback-only enablement are needed.
-- `POST /v1/jobs/enqueue` builds the whole `RoutingJob` from client JSON, including fields the
-  server should own. A request DTO with an explicit field list is needed.
 
 Geometry and DRC:
 
@@ -198,8 +196,9 @@ Optimizer and scoring:
   (Camera-Modules LG-G2 shim, induction-hob temperature sensor).
 - Commits are only checked for clearance at pass end; one violating commit makes the drop loop revert
   every later, clean commit.
-- Optimizer candidates share the job's stop flag; a nested router that reaches `max_items` stops the
-  whole optimizer, and in-flight candidates are then counted as not improved.
+- A nested optimizer router that reaches `max_items` calls `requestStop()` on the shared job thread
+  (`AutoroutePassRunner.java:119`) and stops the whole job. The interrupted pass now commits nothing
+  instead of a winner from a cut-off candidate set.
 
 Pipeline and jobs:
 
@@ -217,6 +216,68 @@ Pipeline and jobs:
 - The router reports a connection ROUTED without checking that the inserted path reaches its
   target (`AutorouteEngine.autorouteConnection`); off-centre fixed track ends made this loop
   silently on caniot.
+
+## Second red-team round (October 2026)
+
+Nine red-team reviews covered the autorouter, the optimizer, geometry, DRC, file formats, settings,
+the REST and MCP servers, the GUI and concurrency. Fixed on this branch from that round: the GUI
+file-dialog and settings-reload defects, the rules-file precedence and settings parsing defects,
+the REST and MCP request hardening, the optimizer's leftover candidates and cut-off passes, and
+the DRC report order, `-drc` post-load race and pin and via shape-cache publication.
+
+No routing nondeterminism was found: SES files were byte-identical for `-mt 1` against `-mt 3`
+(bm02, Green14SegLED and tairakb, with optimizer commits) and across G1, Serial and Parallel GC and
+`-XX:hashCode=2`. A brute-force clearance checker (exact distances between every pair of tree
+shapes) agrees with `DesignRulesChecker.getAllClearanceViolations()` on 9 routed boards and two
+synthetic boards built to sit just below and above each clearance.
+
+Open, by area:
+
+- **SES reload drops wires.** `SesPathGeometry.crossingLines` rejects wires whose corners have
+  fractional coordinates and `SesReader.processWireScope` drops the whole wire: 38 of 354 wires on
+  Issue209-split05 and 14 of 406 on Issue297-myboard. The reload DRC's unconnected count is
+  inflated on those boards.
+- **Geometry.** `Polyline.offsetShapes` can cut real copper out of a trace's tree shapes when the
+  polyline winds back or turns the other way (11-15 of 20,000 random polylines);
+  `Line.sideOfIntersection` misjudges near-collinear corners at coordinates around 1e6-1e7. A
+  candidate fix for both exists and keeps the SES on four boards so far, but it changes tree
+  shapes and needs the full before/after protocol. `IntOctagon` normalized octagons can have
+  half-integer vertices, and `IntOctagon.cutoutFrom(IntBox)` returns overlapping pieces (no area
+  lost).
+- **Board load.** `Issue208-freerouting.dsn` takes 12-34 s and 3.2-3.8 GB of allocation to load:
+  48 keepout circles of 501 mm are tiled over their whole bounding box into 393,648 tree shapes.
+- **Units.** `BoardStatistics` lengths in "mm" ignore the board resolution (10x off on a um-10
+  board, 1000x on mil-1000); the optimizer compares against the same scaling, so both must change
+  together. `router.trace_pull_tight_accuracy` is in board units (500 means 0.5 um to 50 um
+  depending on the board). Outline strips use 100 board units whatever the resolution.
+- **Optimizer.** The "all vias are mandatory layer transitions" guard is vacuously true when every
+  via is user fixed and skips the optimizer whatever the trace length (Issue093-interf_u); a fix
+  measured 0.88 mm shorter traces for 33 s more CPU on interf_u and is held for a wider campaign.
+  The clearance veto counts violations, duplicate candidates are re-routed serially, and the
+  Manhattan length bound is not a lower bound on 45-degree boards.
+- **Autorouter state.** `RoutingBoard.failureLog` is never cleared and is copied with the board,
+  so continuations, exploration, optimizer candidates and GUI re-runs start with earlier failure
+  counts. The final tail cleanup is skipped whenever the loop stops on its own criterion. The
+  result manifest describes the last fallback attempt, not the chosen one, and `phases.fallback`
+  is never filled. The board-rank stagnation stop can never fire.
+- **Settings.** Floats and doubles are written with two decimals by the shared Gson (settings file,
+  KiCad JSON, DRC JSON, API responses); the `logging.*` section of `freerouting.json` is ignored;
+  a log file location given by environment variable also becomes the user-data directory; the
+  documented fanout `pin_sorting_order` values do not match the code.
+- **REST and MCP.** Failed API-key attempts are not throttled, each connected SSE client holds a
+  thread, and an API key is not bound to a profile (ownership trusts the profile header).
+- **Planes.** A trace that reconnects a pad cut off from the fill closes a cycle through the pour
+  polygon and is deleted again by trace normalization, so a repair needs connectivity through fill
+  islands. The check that a ROUTED connection reaches its target fires on 56-66% of connections
+  when run inside `AutorouteEngine`, which points to the following `optChangedArea` step.
+- **Memory.** The printed "peak heap usage" is heap occupancy including garbage, 3-10x the live
+  set (TeamAdapt: about 69 MB live against 311-342 MB printed). No leak between jobs was found.
+- **Output cost.** Headless runs write the SES plus a full DSN (for its checksum) on the routing
+  thread every 10 s in CLI mode and on every board update with the API server running; not yet
+  measured.
+
+The experiment packages under `docs/research/experiments/` turn the measurable ideas from this
+round into ready-to-run campaigns.
 
 ## Opportunities, ranked by expected value
 

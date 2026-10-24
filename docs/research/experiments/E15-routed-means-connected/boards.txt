@@ -1,0 +1,14 @@
+# Should benefit: off-centre fixed track ends (silent ROUTED loop) and boards with open connections.
+fixtures/Issue269-caniot-tiny-arm.dsn
+fixtures/Issue508-DAC2020_bm04.dsn
+fixtures/Issue508-DAC2020_bm05.dsn
+fixtures/Issue039-bug-design.dsn
+fixtures/Issue157-TeamAdapt-LinePCB.dsn
+fixtures/Issue110-Pajalnaja_stancija.dsn
+# Plane nets (destination set includes the pour):
+fixtures/Issue054-tairakb.dsn
+fixtures/Issue093-interf_u.dsn
+# Must not regress, cheap and complete today:
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue508-DAC2020_bm07.dsn
+fixtures/Issue034-Green14SegLED.dsn

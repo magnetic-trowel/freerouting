@@ -1,0 +1,435 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java b/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
+index 921ac7b1..852d8f86 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
+@@ -153,6 +153,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
+     }
+   }
+ 
++  /**
++   * Experiment E11: {@code -Dfreerouting.exp.optimizer_score_floor=skip} skips the optimizer when
++   * the lower-bound optimizer score is already clamped at 0. Off by default.
++   */
++  private static final boolean EXP_SKIP_AT_SCORE_FLOOR =
++      "skip"
++          .equalsIgnoreCase(
++              System.getProperty("freerouting.exp.optimizer_score_floor", "clamp").trim());
++
+   /**
+    * Evaluates whether optimization can be safely bypassed before starting the batch loop.
+    *
+@@ -175,6 +184,13 @@ public final class BatchOptimizer extends NamedAlgorithm {
+ 
+     float initialScore = stats.getOptimizerScore(this.job.routerSettings);
+ 
++    // Experiment E11, skip arm: a V2/V3 score clamped at 0 cannot be raised by one candidate.
++    if (EXP_SKIP_AT_SCORE_FLOOR
++        && initialScore <= 0.0f
++        && stats.getOptimizerScore(this.job.routerSettings, 0, 0, 0) != null) {
++      return "the optimizer score is at its floor (0.00), so no candidate can raise it";
++    }
++
+     // Guard 2: Zero vias and optimal trace length
+     if (stats.vias.totalCount == 0) {
+       if (initialScore >= 950.0f) {
+@@ -281,6 +297,36 @@ public final class BatchOptimizer extends NamedAlgorithm {
+     return true;
+   }
+ 
++  /**
++   * Experiment E12: which passes route with the preferred directions. {@code alternate} (default:
++   * odd passes), {@code inverted} (even passes), {@code always} or {@code never}.
++   */
++  private static final String EXP_PREFERRED_DIRECTIONS =
++      System.getProperty("freerouting.exp.optimizer_preferred_directions", "alternate")
++          .trim()
++          .toLowerCase(Locale.ROOT);
++
++  /**
++   * Experiment E12: the rip-up cost phases. {@code default} starts with increased rip-up costs and
++   * switches to normal costs, with one more pass, at the first pass at or below the improvement
++   * threshold; {@code increased_only} never switches and {@code normal_only} starts with normal
++   * costs, so both stop at the first pass at or below the threshold.
++   */
++  private static final String EXP_RIPUP_PHASE =
++      System.getProperty("freerouting.exp.optimizer_ripup_phase", "default")
++          .trim()
++          .toLowerCase(Locale.ROOT);
++
++  /** Returns whether pass {@code passNo} (from 1) routes with the preferred directions. */
++  static boolean withPreferredDirections(int passNo, String mode) {
++    return switch (mode) {
++      case "always" -> true;
++      case "never" -> false;
++      case "inverted" -> passNo % 2 == 0;
++      default -> passNo % 2 != 0;
++    };
++  }
++
+   /** Optimize the route on the board. */
+   public void runBatchLoop() {
+     if (this.job != null && this.job.board != null) {
+@@ -296,7 +342,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
+             + ", trace length: "
+             + Math.round(board.cumulativeTraceLength()));
+ 
+-    useIncreasedRipupCosts = true;
++    useIncreasedRipupCosts = !"normal_only".equals(EXP_RIPUP_PHASE);
+ 
+     // Capture initial board state for baseline and session summary
+     BoardStatistics initialStats = board.getStatistics();
+@@ -412,7 +458,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
+       this.fireTaskStateChangedEvent(
+           new TaskStateChangedEvent(this, TaskState.RUNNING, currentPass, currentBoardHash));
+ 
+-      boolean withPreferredDirections = currentPass % 2 != 0; // to create more variations
++      // to create more variations
++      boolean withPreferredDirections =
++          withPreferredDirections(currentPass, EXP_PREFERRED_DIRECTIONS);
+       try {
+         optRoutePass(currentPass, withPreferredDirections);
+       } catch (OutOfMemoryError outOfMemory) {
+@@ -523,6 +571,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
+               passStats.clearanceViolations.totalCount));
+ 
+       if (this.useIncreasedRipupCosts
++          && !"increased_only".equals(EXP_RIPUP_PHASE)
+           && passImprovementPercent <= this.settings.optimizer.optimizationImprovementThreshold) {
+         this.useIncreasedRipupCosts = false;
+         // Increased ripup costs stopped paying off. Keep the optimizer going to try with normal
+@@ -772,6 +821,13 @@ public final class BatchOptimizer extends NamedAlgorithm {
+       return 0.0f;
+     }
+ 
++    String skipReason =
++        EXP_EARLY_EXIT ? passSkipReason(candidateItemIds, boardStatisticsBefore, selection) : null;
++    if (skipReason != null) {
++      job.logInfo(String.format(Locale.US, "Optimizer pass #%d skipped: %s.", passNo, skipReason));
++      return 0.0f;
++    }
++
+     int configuredThreads =
+         (this.settings.optimizer != null && this.settings.optimizer.maxThreads != null)
+             ? this.settings.optimizer.maxThreads
+@@ -994,6 +1050,123 @@ public final class BatchOptimizer extends NamedAlgorithm {
+     return routeImproved;
+   }
+ 
++  /**
++   * Experiment E13: {@code -Dfreerouting.exp.optimizer_early_exit=gain_bound} skips an optimizer
++   * pass whose candidates cannot raise the lower-bound optimizer score. Off by default.
++   */
++  private static final boolean EXP_EARLY_EXIT =
++      "gain_bound"
++          .equalsIgnoreCase(
++              System.getProperty("freerouting.exp.optimizer_early_exit", "off").trim());
++
++  /**
++   * Experiment E13: with a margin above 0, a pass is also skipped when the bound on the score of
++   * all its candidates together is at most this many percent above the current score. The pass
++   * then loses at most that much; 0 (default) skips only passes that cannot improve at all.
++   */
++  private static final double EXP_EARLY_EXIT_MARGIN_PERCENT =
++      Math.max(
++          0.0,
++          Double.parseDouble(
++              System.getProperty("freerouting.exp.optimizer_early_exit_margin", "0").trim()));
++
++  /**
++   * Returns why the pass cannot improve the lower-bound optimizer score, or null if it may. A
++   * candidate rips its connections and routes them again, so it can at best remove their trace
++   * length, vias and bends; the score with all of them removed bounds the candidate's score from
++   * above, because the score never rises with length, vias or bends. With {@code score_ranked} a
++   * pass commits only candidates that raise the score on their own, so the best single bound
++   * decides; the other selections may combine commits, so the bound of the union of all ripped
++   * items decides. The bound assumes that a candidate does not shorten items outside its ripped
++   * connections (the nested router may rip and re-route others; see the experiment README).
++   */
++  private String passSkipReason(
++      List<Integer> candidateItemIds, BoardStatistics stats, CommitSelection selection) {
++    double traceLengthMm = stats.traces.totalLengthMm != null ? stats.traces.totalLengthMm : 0.0;
++    int viaCount = stats.vias.totalCount != null ? stats.vias.totalCount : 0;
++    int bendCount = stats.bends.totalCount != null ? stats.bends.totalCount : 0;
++    Float current = stats.getOptimizerScore(job.routerSettings, traceLengthMm, viaCount, bendCount);
++    if (current == null) {
++      return null;
++    }
++    double boardUnitToMm = this.board.communication.boardUnitSize(Unit.MM);
++    float bestSingle = Float.NEGATIVE_INFINITY;
++    Set<Item> union = new TreeSet<>();
++    for (int itemId : candidateItemIds) {
++      Item item = this.board.getItem(itemId);
++      if (item == null || item.hasIgnoredNets()) {
++        continue;
++      }
++      Set<Item> ripped = rippedConnectionsOf(item);
++      union.addAll(ripped);
++      bestSingle =
++          Math.max(
++              bestSingle,
++              scoreWithout(stats, ripped, traceLengthMm, viaCount, bendCount, boardUnitToMm));
++    }
++    float unionBound = scoreWithout(stats, union, traceLengthMm, viaCount, bendCount, boardUnitToMm);
++    String reason =
++        skipDecision(
++            current,
++            bestSingle,
++            unionBound,
++            selection == CommitSelection.SCORE_RANKED,
++            EXP_EARLY_EXIT_MARGIN_PERCENT);
++    return reason == null
++        ? null
++        : String.format(Locale.US, "%s (%d candidates)", reason, candidateItemIds.size());
++  }
++
++  /**
++   * The decision of {@link #passSkipReason} from the current score and the two bounds: the best
++   * score one candidate can reach and the score all candidates together can reach.
++   */
++  static String skipDecision(
++      float current,
++      float bestSingle,
++      float unionBound,
++      boolean scoreRanked,
++      double marginPercent) {
++    float bound = scoreRanked ? Math.min(bestSingle, unionBound) : unionBound;
++    if (!(bound > current)) {
++      return String.format(
++          Locale.US, "no candidate can raise the optimizer score %.2f (bound %.2f)", current, bound);
++    }
++    if (marginPercent > 0 && current > 0 && unionBound <= current * (1.0 + marginPercent / 100.0)) {
++      return String.format(
++          Locale.US,
++          "all candidates together can raise the optimizer score %.2f to at most %.2f, within the"
++              + " %.2f%% margin",
++          current,
++          unionBound,
++          marginPercent);
++    }
++    return null;
++  }
++
++  /** The lower-bound optimizer score of the board with the given traces and vias removed. */
++  private float scoreWithout(
++      BoardStatistics stats,
++      Set<Item> removed,
++      double traceLengthMm,
++      int viaCount,
++      int bendCount,
++      double boardUnitToMm) {
++    double length = 0;
++    int vias = 0;
++    int bends = 0;
++    for (Item item : removed) {
++      length += ChangeSet.traceLength(item);
++      vias += item instanceof Via ? 1 : 0;
++      bends += ChangeSet.bendCount(item);
++    }
++    return stats.getOptimizerScore(
++        job.routerSettings,
++        Math.max(0.0, traceLengthMm - length * boardUnitToMm),
++        Math.max(0, viaCount - vias),
++        Math.max(0, bendCount - bends));
++  }
++
+   /**
+    * Commits the pass's other improved candidates after its best one, up to {@code
+    * optimizer.max_commits_per_pass} in total (a value below 1 means no limit). All candidates were
+diff --git a/src/main/java/app/freerouting/core/scoring/BoardStatistics.java b/src/main/java/app/freerouting/core/scoring/BoardStatistics.java
+index 7da56c02..1a77b35f 100644
+--- a/src/main/java/app/freerouting/core/scoring/BoardStatistics.java
++++ b/src/main/java/app/freerouting/core/scoring/BoardStatistics.java
+@@ -863,6 +863,39 @@ public class BoardStatistics implements Serializable {
+     return null;
+   }
+ 
++  /**
++   * Experiment E11: {@code -Dfreerouting.exp.optimizer_score_floor=soft} replaces the clamp of the
++   * V3 score at 0 with a tail that keeps ranking boards whose excess length exceeds the minimum
++   * length. The default {@code clamp} keeps the current score.
++   */
++  private static final boolean EXP_SOFT_SCORE_FLOOR =
++      "soft"
++          .equalsIgnoreCase(
++              System.getProperty("freerouting.exp.optimizer_score_floor", "clamp").trim());
++
++  /** Experiment E11: the score below which the soft floor's tail starts. */
++  private static final double EXP_SCORE_FLOOR_KNEE =
++      Math.min(
++          1000.0,
++          Math.max(
++              1.0,
++              Double.parseDouble(
++                  System.getProperty("freerouting.exp.optimizer_score_floor_knee", "50").trim())));
++
++  /**
++   * Returns {@code 1000 - penalty} down to {@code knee} and then a tail {@code knee^2 / (knee + t)},
++   * where {@code t} is the penalty beyond the knee. The tail has the value and the slope of the
++   * line at the knee, decreases strictly and stays positive, so a smaller penalty always scores
++   * higher; in the tail the relative score change equals the relative change of {@code knee + t}.
++   */
++  static double softFloorScore(double penalty, double knee) {
++    double kneePenalty = 1000.0 - knee;
++    if (penalty <= kneePenalty) {
++      return 1000.0 - penalty;
++    }
++    return knee * knee / (knee + (penalty - kneePenalty));
++  }
++
+   /**
+    * Calculates the V3 optimizer score: excess vias and bends are converted to the trace length that
+    * uses the same routing space, and the total excess length is measured against the lower bound.
+@@ -887,13 +920,14 @@ public class BoardStatistics implements Serializable {
+         Math.max(0.0, traceLengthMm - minTraceLength)
+             + viaLength * Math.max(0.0, viaCount - minViaCount)
+             + bendLength * Math.max(0.0, bendCount - minBendCount);
+-    return (float)
+-        Math.max(
+-            0.0,
+-            1000.0
+-                - valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
+-                    * excessLength
+-                    / Math.max(minTraceLength, lengthFloor));
++    double penalty =
++        valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
++            * excessLength
++            / Math.max(minTraceLength, lengthFloor);
++    if (EXP_SOFT_SCORE_FLOOR) {
++      return (float) softFloorScore(penalty, EXP_SCORE_FLOOR_KNEE);
++    }
++    return (float) Math.max(0.0, 1000.0 - penalty);
+   }
+ 
+   private float getV2OptimizerScore(
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerEarlyExitTest.java b/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerEarlyExitTest.java
+new file mode 100644
+index 00000000..487306a8
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerEarlyExitTest.java
+@@ -0,0 +1,39 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertNull;
++
++import org.junit.jupiter.api.Test;
++
++/** Tests the pass-skip decision of experiment E13. */
++class BatchOptimizerEarlyExitTest {
++
++  @Test
++  void skipsAtTheClampedFloorWhenNoCandidateCanLiftIt() {
++    // Score clamped at 0 and no single candidate (nor all of them) can lift it.
++    assertNotNull(BatchOptimizer.skipDecision(0.0f, 0.0f, 0.0f, true, 0.0));
++    assertNotNull(BatchOptimizer.skipDecision(0.0f, 0.0f, 0.0f, false, 0.0));
++  }
++
++  @Test
++  void scoreRankedNeedsOneCandidateThatGainsOnItsOwn() {
++    // All candidates together could lift the floor, but none alone: score_ranked commits nothing.
++    assertNotNull(BatchOptimizer.skipDecision(0.0f, 0.0f, 12.0f, true, 0.0));
++    // The other selections may combine commits, so the pass runs.
++    assertNull(BatchOptimizer.skipDecision(0.0f, 0.0f, 12.0f, false, 0.0));
++  }
++
++  @Test
++  void runsWheneverACandidateMayImprove() {
++    assertNull(BatchOptimizer.skipDecision(700.0f, 700.5f, 900.0f, true, 0.0));
++    assertNull(BatchOptimizer.skipDecision(700.0f, 700.0f, 700.5f, false, 0.0));
++  }
++
++  @Test
++  void marginSkipsPassesWhoseWholeGainIsSmall() {
++    // 700 -> at most 710 is 1.43%: skipped with a 2.5% margin, run without a margin.
++    assertNotNull(BatchOptimizer.skipDecision(700.0f, 705.0f, 710.0f, true, 2.5));
++    assertNull(BatchOptimizer.skipDecision(700.0f, 705.0f, 710.0f, true, 0.0));
++    assertNull(BatchOptimizer.skipDecision(700.0f, 705.0f, 800.0f, true, 2.5));
++  }
++}
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerPassPolicyTest.java b/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerPassPolicyTest.java
+new file mode 100644
+index 00000000..da40c04d
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerPassPolicyTest.java
+@@ -0,0 +1,27 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++
++import org.junit.jupiter.api.Test;
++
++/** Tests the preferred-direction modes of experiment E12. */
++class BatchOptimizerPassPolicyTest {
++
++  @Test
++  void alternateIsTheCurrentBehaviour() {
++    for (int pass = 1; pass <= 6; pass++) {
++      assertEquals(pass % 2 != 0, BatchOptimizer.withPreferredDirections(pass, "alternate"));
++      // Unknown values fall back to the current behaviour.
++      assertEquals(pass % 2 != 0, BatchOptimizer.withPreferredDirections(pass, "bogus"));
++    }
++  }
++
++  @Test
++  void fixedAndInvertedModes() {
++    for (int pass = 1; pass <= 6; pass++) {
++      assertEquals(true, BatchOptimizer.withPreferredDirections(pass, "always"));
++      assertEquals(false, BatchOptimizer.withPreferredDirections(pass, "never"));
++      assertEquals(pass % 2 == 0, BatchOptimizer.withPreferredDirections(pass, "inverted"));
++    }
++  }
++}
+diff --git a/src/test/java/app/freerouting/core/scoring/OptimizerScoreSoftFloorTest.java b/src/test/java/app/freerouting/core/scoring/OptimizerScoreSoftFloorTest.java
+new file mode 100644
+index 00000000..d11fd01c
+--- /dev/null
++++ b/src/test/java/app/freerouting/core/scoring/OptimizerScoreSoftFloorTest.java
+@@ -0,0 +1,48 @@
++package app.freerouting.core.scoring;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import org.junit.jupiter.api.Test;
++
++/** Tests the soft floor of experiment E11 ({@code freerouting.exp.optimizer_score_floor=soft}). */
++class OptimizerScoreSoftFloorTest {
++
++  @Test
++  void keepsTheLinearScoreAboveTheKnee() {
++    assertEquals(1000.0, BoardStatistics.softFloorScore(0.0, 50.0), 0.0);
++    assertEquals(400.0, BoardStatistics.softFloorScore(600.0, 50.0), 0.0);
++    assertEquals(50.0, BoardStatistics.softFloorScore(950.0, 50.0), 0.0);
++  }
++
++  @Test
++  void tailIsContinuousWithTheSameSlopeAtTheKnee() {
++    double knee = 50.0;
++    double epsilon = 1e-6;
++    double atKnee = BoardStatistics.softFloorScore(1000.0 - knee, knee);
++    double justBelow = BoardStatistics.softFloorScore(1000.0 - knee + epsilon, knee);
++    assertEquals(atKnee, justBelow, 1e-5);
++    assertEquals(-1.0, (justBelow - atKnee) / epsilon, 1e-3);
++  }
++
++  @Test
++  void tailStaysPositiveAndStrictlyDecreasing() {
++    double previous = Double.POSITIVE_INFINITY;
++    for (double penalty = 900.0; penalty <= 1.0e6; penalty *= 1.5) {
++      double score = BoardStatistics.softFloorScore(penalty, 50.0);
++      assertTrue(score > 0.0, "score at penalty " + penalty);
++      assertTrue(score < previous, "score must decrease at penalty " + penalty);
++      previous = score;
++    }
++  }
++
++  @Test
++  void tailRanksPenaltiesBeyondTheClampedFloor() {
++    // Both penalties score 0 with the clamp; the soft floor still prefers the smaller one.
++    double better = BoardStatistics.softFloorScore(2900.0, 50.0);
++    double worse = BoardStatistics.softFloorScore(3000.0, 50.0);
++    assertTrue(better > worse);
++    assertEquals(2500.0 / 2000.0, better, 1e-12);
++    assertEquals(2500.0 / 2100.0, worse, 1e-12);
++  }
++}

@@ -1,0 +1,327 @@
+diff --git a/src/main/java/app/freerouting/autoroute/BoardHistory.java b/src/main/java/app/freerouting/autoroute/BoardHistory.java
+index 3b37e96e..e9f1214c 100644
+--- a/src/main/java/app/freerouting/autoroute/BoardHistory.java
++++ b/src/main/java/app/freerouting/autoroute/BoardHistory.java
+@@ -5,7 +5,6 @@ import app.freerouting.board.facade.RoutingBoard;
+ import app.freerouting.core.scoring.BoardStatistics;
+ import app.freerouting.settings.RouterSettings;
+ import app.freerouting.settings.RoutingCostSettings;
+-import java.io.Serializable;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
+@@ -99,7 +98,7 @@ public class BoardHistory {
+       boards.remove(worstIndex);
+     }
+ 
+-    lastAdded = new BoardHistoryEntry(board, newScore);
++    lastAdded = new BoardHistoryEntry(board, hash, newScore);
+     boards.add(lastAdded);
+   }
+ 
+@@ -108,7 +107,7 @@ public class BoardHistory {
+    * not keep it (it was full and the board scored no better than its worst entry).
+    */
+   public synchronized RoutingBoard restoreLastAdded() {
+-    return lastAdded == null ? null : (RoutingBoard) BasicBoard.deserialize(lastAdded.board);
++    return lastAdded == null ? null : lastAdded.restore();
+   }
+ 
+   private static RouterSettings createLegacyRouterSettings(RoutingCostSettings scoringSettings) {
+@@ -184,7 +183,7 @@ public class BoardHistory {
+       for (BoardHistoryEntry entry : boards) {
+         if (entry.restoreCount <= maxAllowedRestoreCount) {
+           entry.restoreCount++;
+-          return (RoutingBoard) BasicBoard.deserialize(entry.board);
++          return entry.restore();
+         }
+       }
+       return null;
+@@ -224,18 +223,24 @@ public class BoardHistory {
+     }
+   }
+ 
+-  private static class BoardHistoryEntry implements Serializable {
++  private static class BoardHistoryEntry {
++
++    /** The serialized board, compressed under experiment E20; null if serialization failed. */
++    private final StoredBoard board;
+ 
+-    public final byte[] board;
+     public final String hash;
+     public final float score;
+     public int restoreCount;
+ 
+-    public BoardHistoryEntry(RoutingBoard board, float score) {
+-      this.board = board.serialize(false);
+-      this.hash = board.getHash();
++    BoardHistoryEntry(RoutingBoard board, String hash, float score) {
++      this.board = StoredBoard.of(board);
++      this.hash = hash;
+       this.score = score;
+       this.restoreCount = 0;
+     }
++
++    RoutingBoard restore() {
++      return (RoutingBoard) (board == null ? BasicBoard.deserialize(null) : board.restore());
++    }
+   }
+ }
+diff --git a/src/main/java/app/freerouting/autoroute/StoredBoard.java b/src/main/java/app/freerouting/autoroute/StoredBoard.java
+new file mode 100644
+index 00000000..48a0d13d
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/StoredBoard.java
+@@ -0,0 +1,113 @@
++package app.freerouting.autoroute;
++
++import app.freerouting.board.facade.BasicBoard;
++import java.io.ByteArrayOutputStream;
++import java.util.zip.DataFormatException;
++import java.util.zip.Deflater;
++import java.util.zip.Inflater;
++
++/**
++ * A board kept in memory as the bytes {@link BasicBoard#serialize(boolean)} produced, optionally
++ * Deflate-compressed. Restoring inflates exactly those bytes before deserializing them, so a
++ * compressed and an uncompressed copy restore identical boards.
++ *
++ * <p>Experiment E20: {@code -Dfreerouting.exp.compress_boards=true} compresses the board history
++ * entries and the routing-fallback input. The default keeps the bytes uncompressed.
++ */
++public final class StoredBoard {
++
++  /** Whether stored boards are compressed; read once at startup. */
++  public static final boolean COMPRESS = Boolean.getBoolean("freerouting.exp.compress_boards");
++
++  private final byte[] data;
++
++  /** The length of the uncompressed bytes, or -1 when {@link #data} is not compressed. */
++  private final int rawLength;
++
++  private StoredBoard(byte[] data, int rawLength) {
++    this.data = data;
++    this.rawLength = rawLength;
++  }
++
++  /**
++   * Stores the complete board, compressed when the experiment switch is on. Returns null when the
++   * board could not be serialized.
++   */
++  public static StoredBoard of(BasicBoard board) {
++    return of(board.serialize(false), COMPRESS);
++  }
++
++  /** Stores already serialized board bytes; returns null for null bytes. */
++  public static StoredBoard of(byte[] serialized, boolean compress) {
++    if (serialized == null) {
++      return null;
++    }
++    if (!compress) {
++      return new StoredBoard(serialized, -1);
++    }
++    return new StoredBoard(deflate(serialized), serialized.length);
++  }
++
++  /** Returns a new board deserialized from the stored bytes. */
++  public BasicBoard restore() {
++    return BasicBoard.deserialize(serialized());
++  }
++
++  /** Returns the uncompressed serialized bytes. */
++  public byte[] serialized() {
++    return rawLength < 0 ? data : inflate(data, rawLength);
++  }
++
++  /** Returns whether the bytes are kept compressed. */
++  public boolean isCompressed() {
++    return rawLength >= 0;
++  }
++
++  /** Returns the number of bytes held in memory. */
++  public int storedLength() {
++    return data.length;
++  }
++
++  private static byte[] deflate(byte[] raw) {
++    Deflater deflater = new Deflater(Deflater.BEST_SPEED);
++    try {
++      deflater.setInput(raw);
++      deflater.finish();
++      ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(64, raw.length / 4));
++      byte[] buffer = new byte[64 * 1024];
++      while (!deflater.finished()) {
++        int n = deflater.deflate(buffer);
++        out.write(buffer, 0, n);
++      }
++      return out.toByteArray();
++    } finally {
++      deflater.end();
++    }
++  }
++
++  private static byte[] inflate(byte[] compressed, int rawLength) {
++    Inflater inflater = new Inflater();
++    try {
++      inflater.setInput(compressed);
++      byte[] raw = new byte[rawLength];
++      int offset = 0;
++      while (offset < rawLength) {
++        int n = inflater.inflate(raw, offset, rawLength - offset);
++        if (n == 0
++            && (inflater.finished() || inflater.needsInput() || inflater.needsDictionary())) {
++          break;
++        }
++        offset += n;
++      }
++      if (offset != rawLength) {
++        throw new IllegalStateException(
++            "Stored board inflated to " + offset + " of " + rawLength + " bytes");
++      }
++      return raw;
++    } catch (DataFormatException e) {
++      throw new IllegalStateException("Stored board is corrupt", e);
++    } finally {
++      inflater.end();
++    }
++  }
++}
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/RoutingFallbackRunner.java b/src/main/java/app/freerouting/autoroute/pipeline/RoutingFallbackRunner.java
+index 6aad7af8..6806dcce 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/RoutingFallbackRunner.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/RoutingFallbackRunner.java
+@@ -1,5 +1,6 @@
+ package app.freerouting.autoroute.pipeline;
+ 
++import app.freerouting.autoroute.StoredBoard;
+ import app.freerouting.board.facade.BasicBoard;
+ import app.freerouting.board.facade.RoutingBoard;
+ import app.freerouting.core.RoutingJob;
+@@ -31,7 +32,7 @@ final class RoutingFallbackRunner {
+       RoutingJob job,
+       BatchAutorouter defaultRouter,
+       List<RoutingFallback.Strategy> strategies,
+-      byte[] input) {
++      StoredBoard input) {
+     ClearanceBaseline inputBaseline = job.board.clearanceBaseline;
+     RoutingFallback.Outcome best =
+         RoutingFallback.Outcome.of("default", job.board, job.routerSettings);
+@@ -266,11 +267,11 @@ final class RoutingFallbackRunner {
+ 
+   private Attempt runAttempt(
+       RoutingJob job,
+-      byte[] input,
++      StoredBoard input,
+       RoutingFallback.Strategy strategy,
+       boolean keepFanoutVias,
+       ClearanceBaseline inputBaseline) {
+-    RoutingBoard board = (RoutingBoard) BasicBoard.deserialize(input);
++    RoutingBoard board = (RoutingBoard) input.restore();
+     if (board.clearanceBaseline == null) {
+       board.clearanceBaseline = inputBaseline;
+     }
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/RoutingPipeline.java b/src/main/java/app/freerouting/autoroute/pipeline/RoutingPipeline.java
+index 31df0f52..48f94270 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/RoutingPipeline.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/RoutingPipeline.java
+@@ -1,5 +1,6 @@
+ package app.freerouting.autoroute.pipeline;
+ 
++import app.freerouting.autoroute.StoredBoard;
+ import app.freerouting.autoroute.events.BoardUpdatedEventListener;
+ import app.freerouting.autoroute.events.TaskStateChangedEventListener;
+ import app.freerouting.core.RoutingJob;
+@@ -113,10 +114,10 @@ public final class RoutingPipeline {
+                           + "' ignored; known strategies: "
+                           + knownStrategyNames()
+                           + "."));
+-      byte[] input = null;
++      StoredBoard input = null;
+       if (!strategies.isEmpty() && this.job.board != null) {
+         try {
+-          input = this.job.board.serialize(false);
++          input = StoredBoard.of(this.job.board);
+         } catch (RuntimeException e) {
+           this.job.logWarning(
+               "Routing fallback disabled; the input board could not be saved: " + e.getMessage());
+diff --git a/src/test/java/app/freerouting/autoroute/StoredBoardTest.java b/src/test/java/app/freerouting/autoroute/StoredBoardTest.java
+new file mode 100644
+index 00000000..a451cd5b
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/StoredBoardTest.java
+@@ -0,0 +1,75 @@
++package app.freerouting.autoroute;
++
++import static org.junit.jupiter.api.Assertions.assertArrayEquals;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertSame;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.board.actions.ItemIdGenerator;
++import app.freerouting.board.facade.BasicBoard;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.state.BoardObserverAdaptor;
++import app.freerouting.core.RoutingJob;
++import app.freerouting.management.HeadlessBoardManager;
++import java.io.FileInputStream;
++import org.junit.jupiter.api.BeforeAll;
++import org.junit.jupiter.api.Test;
++
++class StoredBoardTest {
++
++  private static RoutingBoard board;
++
++  @BeforeAll
++  static void loadBoard() throws Exception {
++    HeadlessBoardManager manager = new HeadlessBoardManager(new RoutingJob());
++    try (FileInputStream input = new FileInputStream("fixtures/Issue159-setonix_2hp-pcb.dsn")) {
++      manager.loadFromSpecctraDsn(input, new BoardObserverAdaptor(), new ItemIdGenerator());
++    }
++    board = manager.getRoutingBoard();
++  }
++
++  @Test
++  void compressedBytesInflateToTheSerializedBytes() {
++    byte[] serialized = board.serialize(false);
++    StoredBoard stored = StoredBoard.of(serialized, true);
++
++    assertTrue(stored.isCompressed());
++    assertTrue(
++        stored.storedLength() < serialized.length / 2,
++        "a serialized board should compress at least 2x, got "
++            + serialized.length
++            + " -> "
++            + stored.storedLength());
++    assertArrayEquals(serialized, stored.serialized());
++  }
++
++  @Test
++  void uncompressedBytesAreKeptAsGiven() {
++    byte[] serialized = board.serialize(false);
++    StoredBoard stored = StoredBoard.of(serialized, false);
++
++    assertFalse(stored.isCompressed());
++    assertEquals(serialized.length, stored.storedLength());
++    assertSame(serialized, stored.serialized());
++  }
++
++  @Test
++  void compressedAndUncompressedRestoreTheSameBoard() {
++    byte[] serialized = board.serialize(false);
++    BasicBoard fromCompressed = StoredBoard.of(serialized, true).restore();
++    BasicBoard fromPlain = StoredBoard.of(serialized, false).restore();
++
++    assertNotNull(fromCompressed);
++    assertEquals(board.getHash(), fromCompressed.getHash());
++    assertArrayEquals(fromPlain.serialize(false), fromCompressed.serialize(false));
++  }
++
++  @Test
++  void nullBytesStoreNothing() {
++    assertNull(StoredBoard.of(null, true));
++    assertNull(StoredBoard.of(null, false));
++  }
++}

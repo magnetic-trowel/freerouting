@@ -1,0 +1,5 @@
+# E04 negotiated rip cost. "head" = jar built from d4383b44 + patch.diff.
+control head
+rip_w0.5 head -Dfreerouting.exp.rip_history=0.5
+rip_w1 head -Dfreerouting.exp.rip_history=1
+rip_w2 head -Dfreerouting.exp.rip_history=2

@@ -1,0 +1,2 @@
+control head -Dfreerouting.exp.maze_tiebreak=legacy -Dfreerouting.exp.maze_tiebreak_stats=true
+insertion head -Dfreerouting.exp.maze_tiebreak=insertion -Dfreerouting.exp.maze_tiebreak_stats=true

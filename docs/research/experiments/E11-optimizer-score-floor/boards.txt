@@ -1,0 +1,19 @@
+# E11 boards. Common flags (paired_campaign --flags): -mt 1 -mp 25 --router.optimizer.enabled=true
+# --router.optimizer.max_threads=1
+#
+# Floor boards: completely routed by head, reload-DRC optimizer score 0.00 in SP/camp3/run1/master
+# (plane boards; the score bounds give plane-net pads no mandatory via, see README "Mechanism").
+fixtures/Issue957-smoke-ldo-led.dsn
+fixtures/Issue676-ch32v-tx118s.dsn
+fixtures/Issue093-interf_u.dsn -mp 6
+# Low-score boards near the knee (score below 200 changes with knee=200 only).
+fixtures/Issue367-Charger.dsn
+# Regression boards: optimizer runs and the score is far above the knee (must stay byte-identical
+# with knee 50; any difference is a bug in the switch).
+fixtures/Issue508-DAC2020_bm01.dsn --router.optimizer.max_passes=1
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue508-DAC2020_bm07.dsn
+fixtures/Issue155-CH376_MCP795_Module.dsn
+fixtures/Issue558-dev-board.dsn
+# Cheap smoke board.
+fixtures/Issue029-hw48na.dsn --router.max_items=150 --router.optimizer.max_passes=1

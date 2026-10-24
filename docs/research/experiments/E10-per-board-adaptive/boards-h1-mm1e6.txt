@@ -1,0 +1,2 @@
+# E10 stage 0 (H1): (resolution mm 1000000): 500 units = 0.5 um (the 100-unit clamp is 0.1 um).
+fixtures/Issue676-ch32v-tx118s.dsn

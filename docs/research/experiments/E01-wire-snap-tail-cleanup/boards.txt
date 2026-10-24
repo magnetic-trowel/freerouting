@@ -1,0 +1,40 @@
+# E01 boards: 27 fixtures whose fixed DSN wiring has wire ends 0.2-1 um off a same-net pin
+# centre (Fix A acts on them; count of such ends / total wires from the import probe in the
+# trailing comment), then 5 boards without such ends (Fix A must be a no-op there; Fix B may act).
+# Paths are relative to the repository root. No per-board flags: all boards use the common flags.
+#
+# --- affected by Fix A (snap ends / wires) ---
+fixtures/Issue015-StackOverflow.dsn                                      # 161 / 657
+fixtures/Issue022-AutoRouter_interrupted.dsn                             # 202 / 721
+fixtures/Issue029-hw48na.dsn                                             # 61 / 594
+fixtures/Issue054-tairakb.dsn                                            # 2 / 4
+fixtures/Issue066-Project_GP8B.dsn                                       # 30 / 107
+fixtures/Issue070-Autorouter_FQ101_PCB_2022-05-13.dsn                    # 298 / 613
+fixtures/Issue110-testPCBSpecctraFile.dsn                                # 2 / 175
+fixtures/Issue113-Protein.dsn                                            # 26 / 167
+fixtures/Issue153-wavefolder.dsn                                         # 2 / 81
+fixtures/Issue157-TeamAdapt-LinePCB.dsn                                  # 22 / 47
+fixtures/Issue190-processor.Z80.dsn                                      # 16 / 5981
+fixtures/Issue214-freerouting.dsn                                        # 43 / 963
+fixtures/Issue269-caniot-tiny-arm.dsn                                    # 18 / 335
+fixtures/Issue269-z10_module.dsn                                         # 63 / 736
+fixtures/Issue367-Charger.dsn                                            # 4 / 123
+fixtures/Issue575-drc_Natural_Tone_Preamp_7_unconnected_items.dsn        # 203 / 1344
+fixtures/Issue575-drc_dev-board_4_hole_clearance_violations.dsn          # 5 / 406
+fixtures/Issue721-Autorouter_CE2632_HarryMu_2026-6-15.dsn                # 2 / 274
+fixtures/Issue753-CPU-85_r104.dsn                                        # 8 / 65
+fixtures/Issue754-avionics_hub.dsn                                       # 51 / 954
+fixtures/Issue756-tomu-fpga.dsn                                          # 12 / 778
+fixtures/Issue756-tomu-fpga11.dsn                                        # 12 / 861
+fixtures/Issue756-tomu-fpga7.dsn                                         # 12 / 861
+fixtures/Issue756-tomu-fpga8.dsn                                         # 12 / 861
+fixtures/Issue756-tomu-fpga9.dsn                                         # 12 / 861
+fixtures/Issue951-corney_island_wireless.dsn                             # 8 / 299
+fixtures/Issue957-smoke-ldo-led.dsn                                      # 6 / 20
+#
+# --- not affected by Fix A ---
+fixtures/Issue508-DAC2020_bm02.dsn                                       # smoke: no DSN wiring, completes in about 8 s; B must be a no-op
+fixtures/Issue676-ch32v-tx118s.dsn                                       # smoke: 48 DSN wires, none off-centre; A must be a no-op
+fixtures/Issue093-interf_u.dsn                                           # regression: GND plane board with 653 DSN wires (plane routing path)
+fixtures/Issue209-split05.dsn                                            # B target: head leaves 1 dangling via and 4 dangling tracks
+fixtures/Issue039-bug-design.dsn                                         # B target: head leaves 12 dangling vias, 9 unrouted (about 5 min)

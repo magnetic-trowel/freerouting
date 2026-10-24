@@ -1,0 +1,17 @@
+# E18 boards. Common flags (paired_campaign --flags): -mt 1 -mp 25 --router.optimizer.enabled=false
+# Every board must give a byte-identical SES for both variants; CPU is the measured quantity.
+#
+# Profiled boards (hot spots in README "Hot spots"); the cheap smoke pair.
+fixtures/Issue508-DAC2020_bm01.dsn -mp 6
+fixtures/Issue066-Project_GP8B.dsn --router.max_items=300
+# Large boards that dominate campaign wall time, bounded by items so a run stays in minutes.
+fixtures/Issue157-TeamAdapt-LinePCB.dsn --router.max_items=200
+fixtures/Issue297-myboard.dsn --router.max_items=100
+fixtures/Issue732-RoyalBlue54L-Feather.dsn --router.max_items=100
+fixtures/Issue732-CM5_MINIMA_3.dsn --router.max_items=100
+fixtures/Issue555-BBD_Mars-64.dsn -mp 10
+# Boards from the earlier result-preserving suite (docs/research/routing-performance-and-
+# correctness-review.md), including a 6-layer and an optimizer case.
+fixtures/Issue508-DAC2020_bm05.dsn -mp 8
+fixtures/Issue093-interf_u.dsn -mp 6
+fixtures/Issue508-DAC2020_bm01.dsn -mp 6 --router.optimizer.enabled=true --router.optimizer.max_passes=1 --router.optimizer.max_threads=1

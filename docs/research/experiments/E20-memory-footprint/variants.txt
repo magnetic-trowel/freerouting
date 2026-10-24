@@ -1,0 +1,2 @@
+control head
+compress head -Dfreerouting.exp.compress_boards=true

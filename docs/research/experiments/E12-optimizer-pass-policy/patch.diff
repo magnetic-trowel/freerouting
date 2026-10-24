@@ -1,0 +1,102 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java b/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
+index 93e1b8aa..fbe9c591 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
+@@ -297,6 +297,36 @@ public final class BatchOptimizer extends NamedAlgorithm {
+     return true;
+   }
+ 
++  /**
++   * Experiment E12: which passes route with the preferred directions. {@code alternate} (default:
++   * odd passes), {@code inverted} (even passes), {@code always} or {@code never}.
++   */
++  private static final String EXP_PREFERRED_DIRECTIONS =
++      System.getProperty("freerouting.exp.optimizer_preferred_directions", "alternate")
++          .trim()
++          .toLowerCase(Locale.ROOT);
++
++  /**
++   * Experiment E12: the rip-up cost phases. {@code default} starts with increased rip-up costs and
++   * switches to normal costs, with one more pass, at the first pass at or below the improvement
++   * threshold; {@code increased_only} never switches and {@code normal_only} starts with normal
++   * costs, so both stop at the first pass at or below the threshold.
++   */
++  private static final String EXP_RIPUP_PHASE =
++      System.getProperty("freerouting.exp.optimizer_ripup_phase", "default")
++          .trim()
++          .toLowerCase(Locale.ROOT);
++
++  /** Returns whether pass {@code passNo} (from 1) routes with the preferred directions. */
++  static boolean withPreferredDirections(int passNo, String mode) {
++    return switch (mode) {
++      case "always" -> true;
++      case "never" -> false;
++      case "inverted" -> passNo % 2 == 0;
++      default -> passNo % 2 != 0;
++    };
++  }
++
+   /** Optimize the route on the board. */
+   public void runBatchLoop() {
+     if (this.job != null && this.job.board != null) {
+@@ -312,7 +342,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
+             + ", trace length: "
+             + Math.round(board.cumulativeTraceLength()));
+ 
+-    useIncreasedRipupCosts = true;
++    useIncreasedRipupCosts = !"normal_only".equals(EXP_RIPUP_PHASE);
+ 
+     // Capture initial board state for baseline and session summary
+     BoardStatistics initialStats = board.getStatistics();
+@@ -428,7 +458,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
+       this.fireTaskStateChangedEvent(
+           new TaskStateChangedEvent(this, TaskState.RUNNING, currentPass, currentBoardHash));
+ 
+-      boolean withPreferredDirections = currentPass % 2 != 0; // to create more variations
++      // to create more variations
++      boolean withPreferredDirections =
++          withPreferredDirections(currentPass, EXP_PREFERRED_DIRECTIONS);
+       try {
+         optRoutePass(currentPass, withPreferredDirections);
+       } catch (OutOfMemoryError outOfMemory) {
+@@ -539,6 +571,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
+               passStats.clearanceViolations.totalCount));
+ 
+       if (this.useIncreasedRipupCosts
++          && !"increased_only".equals(EXP_RIPUP_PHASE)
+           && passImprovementPercent <= this.settings.optimizer.optimizationImprovementThreshold) {
+         this.useIncreasedRipupCosts = false;
+         // Increased ripup costs stopped paying off. Keep the optimizer going to try with normal
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerPassPolicyTest.java b/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerPassPolicyTest.java
+new file mode 100644
+index 00000000..da40c04d
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerPassPolicyTest.java
+@@ -0,0 +1,27 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++
++import org.junit.jupiter.api.Test;
++
++/** Tests the preferred-direction modes of experiment E12. */
++class BatchOptimizerPassPolicyTest {
++
++  @Test
++  void alternateIsTheCurrentBehaviour() {
++    for (int pass = 1; pass <= 6; pass++) {
++      assertEquals(pass % 2 != 0, BatchOptimizer.withPreferredDirections(pass, "alternate"));
++      // Unknown values fall back to the current behaviour.
++      assertEquals(pass % 2 != 0, BatchOptimizer.withPreferredDirections(pass, "bogus"));
++    }
++  }
++
++  @Test
++  void fixedAndInvertedModes() {
++    for (int pass = 1; pass <= 6; pass++) {
++      assertEquals(true, BatchOptimizer.withPreferredDirections(pass, "always"));
++      assertEquals(false, BatchOptimizer.withPreferredDirections(pass, "never"));
++      assertEquals(pass % 2 == 0, BatchOptimizer.withPreferredDirections(pass, "inverted"));
++    }
++  }
++}

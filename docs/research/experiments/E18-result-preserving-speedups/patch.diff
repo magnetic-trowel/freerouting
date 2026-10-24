@@ -1,0 +1,498 @@
+diff --git a/src/main/java/app/freerouting/autoroute/maze/MazeExpansionQueue.java b/src/main/java/app/freerouting/autoroute/maze/MazeExpansionQueue.java
+new file mode 100644
+index 00000000..f8656b87
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/maze/MazeExpansionQueue.java
+@@ -0,0 +1,95 @@
++package app.freerouting.autoroute.maze;
++
++import java.util.Arrays;
++import java.util.HashSet;
++import java.util.Set;
++
++/**
++ * The maze search's expansion list: a binary heap with the behaviour of a {@code
++ * TreeSet<MazeListElement>} ordered by {@link MazeListElement#compareTo}.
++ *
++ * <p>A tree set rejects an element that compares equal to one it holds, and {@code pollFirst}
++ * returns the smallest element. Two elements compare equal exactly when their sorting value,
++ * expansion value, door id and door section are equal, so the queue keeps the key of every held
++ * element and rejects an element whose key is held. The held elements are then pairwise distinct
++ * under {@code compareTo}, so the heap minimum is the unique smallest element and the polling
++ * sequence is the tree set's. Insertion costs O(1) comparisons on average instead of O(log n).
++ */
++class MazeExpansionQueue {
++
++  private MazeListElement[] heap = new MazeListElement[64];
++  private int size;
++  private final Set<Key> heldKeys = new HashSet<>();
++
++  /** The fields that {@link MazeListElement#compareTo} compares; -0.0 is folded into 0.0. */
++  private record Key(double sortingValue, double expansionValue, int doorId, int sectionNo) {
++    static Key of(MazeListElement element) {
++      return new Key(
++          element.sortingValue + 0.0,
++          element.expansionValue + 0.0,
++          element.door.getId(),
++          element.sectionNoOfDoor);
++    }
++  }
++
++  /** Adds element unless an element comparing equal is held; returns whether it was added. */
++  public boolean add(MazeListElement element) {
++    if (!heldKeys.add(Key.of(element))) {
++      return false;
++    }
++    if (size == heap.length) {
++      heap = Arrays.copyOf(heap, 2 * size);
++    }
++    int index = size++;
++    while (index > 0) {
++      int parent = (index - 1) >>> 1;
++      MazeListElement parentElement = heap[parent];
++      if (element.compareTo(parentElement) >= 0) {
++        break;
++      }
++      heap[index] = parentElement;
++      index = parent;
++    }
++    heap[index] = element;
++    return true;
++  }
++
++  public boolean isEmpty() {
++    return size == 0;
++  }
++
++  public int size() {
++    return size;
++  }
++
++  /** Removes and returns the smallest element, or null if the queue is empty. */
++  public MazeListElement pollFirst() {
++    if (size == 0) {
++      return null;
++    }
++    MazeListElement result = heap[0];
++    MazeListElement last = heap[--size];
++    heap[size] = null;
++    if (size > 0) {
++      int index = 0;
++      int half = size >>> 1;
++      while (index < half) {
++        int child = 2 * index + 1;
++        MazeListElement childElement = heap[child];
++        int right = child + 1;
++        if (right < size && heap[right].compareTo(childElement) < 0) {
++          child = right;
++          childElement = heap[right];
++        }
++        if (last.compareTo(childElement) <= 0) {
++          break;
++        }
++        heap[index] = childElement;
++        index = child;
++      }
++      heap[index] = last;
++    }
++    heldKeys.remove(Key.of(result));
++    return result;
++  }
++}
+diff --git a/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java b/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java
+index 6744f768..2361d478 100644
+--- a/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java
++++ b/src/main/java/app/freerouting/autoroute/maze/MazeSearchEngine.java
+@@ -33,10 +33,8 @@ import app.freerouting.logger.FRLogger;
+ import java.util.Collection;
+ import java.util.LinkedList;
+ import java.util.List;
+-import java.util.NavigableSet;
+ import java.util.Random;
+ import java.util.Set;
+-import java.util.TreeSet;
+ 
+ /** Class for auto-routing an incomplete connection via a maze search algorithm. */
+ public class MazeSearchEngine {
+@@ -49,7 +47,7 @@ public class MazeSearchEngine {
+   final AutorouteControl ctrl;
+ 
+   /** The queue of expanded elements used in this search algorithm. */
+-  final NavigableSet<MazeListElement> mazeExpansionList;
++  final MazeExpansionQueue mazeExpansionList;
+ 
+   /**
+    * Used for calculating of a good lower bound for the distance between a new MazeExpansionElement
+@@ -82,7 +80,7 @@ public class MazeSearchEngine {
+     this.expansionEngine = new MazeExpansionEngine(this);
+     this.ripupResolver = new MazeRipupResolver(this);
+     mazeExpansionList =
+-        new TreeSet<>() {
++        new MazeExpansionQueue() {
+           @Override
+           public boolean add(MazeListElement element) {
+             if (ctrl.isFanout && !ctrl.ignoreEscapeWindow && ctrl.fanoutStartPinCenter != null) {
+diff --git a/src/main/java/app/freerouting/board/searchtree/ShapeSearchTree45Degree.java b/src/main/java/app/freerouting/board/searchtree/ShapeSearchTree45Degree.java
+index b27ca40d..6150bb10 100644
+--- a/src/main/java/app/freerouting/board/searchtree/ShapeSearchTree45Degree.java
++++ b/src/main/java/app/freerouting/board/searchtree/ShapeSearchTree45Degree.java
+@@ -168,14 +168,26 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
+     final long roomLayerBits = debugAnchor ? -1L : layerBit(roomLayer);
+     stack.reset();
+     stack.push(this.root);
++    // Children are tested against boundingShape when they are pushed. Only the entries below
++    // uncheckedBelow were pushed before boundingShape last shrank (or, for the root, untested), so
++    // only those need the test again when popped; the others would repeat a test that passed.
++    int uncheckedBelow = stack.size();
+     TreeNode currentNode;
+ 
+     for (; ; ) {
++      int poppedIndex = stack.size() - 1;
+       currentNode = stack.pop();
+       if (currentNode == null) {
+         break;
+       }
+-      if (currentNode.boundingShape.intersects(boundingShape)) {
++      boolean intersects;
++      if (poppedIndex < uncheckedBelow) {
++        uncheckedBelow = poppedIndex;
++        intersects = currentNode.boundingShape.intersects(boundingShape);
++      } else {
++        intersects = true;
++      }
++      if (intersects) {
+         if (currentNode instanceof Leaf currentLeaf) {
+           SearchTreeObject currentObject = (SearchTreeObject) currentLeaf.object;
+           int shapeIndex = currentLeaf.shapeIndexInObject;
+@@ -305,6 +317,7 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
+               break;
+             }
+             boundingShape = newBoundingShape;
++            uncheckedBelow = stack.size();
+           }
+           if (debugAnchor) {
+             debugStep++;
+diff --git a/src/main/java/app/freerouting/datastructures/ArrayStack.java b/src/main/java/app/freerouting/datastructures/ArrayStack.java
+index 744cfed4..602d7d92 100644
+--- a/src/main/java/app/freerouting/datastructures/ArrayStack.java
++++ b/src/main/java/app/freerouting/datastructures/ArrayStack.java
+@@ -39,6 +39,11 @@ public class ArrayStack<T> {
+     nodeArr[level] = element;
+   }
+ 
++  /** Returns the number of elements on the stack. */
++  public int size() {
++    return level + 1;
++  }
++
+   /** Pops the next element from the top of the stack. Returns null, if the stack is exhausted. */
+   public T pop() {
+     if (level < 0) {
+diff --git a/src/main/java/app/freerouting/datastructures/MinAreaTree.java b/src/main/java/app/freerouting/datastructures/MinAreaTree.java
+index fd122518..c0829850 100644
+--- a/src/main/java/app/freerouting/datastructures/MinAreaTree.java
++++ b/src/main/java/app/freerouting/datastructures/MinAreaTree.java
+@@ -186,8 +186,14 @@ public class MinAreaTree extends ShapeTree {
+ 
+     while (!(node instanceof Leaf)) {
+       InnerNode currentInnerNode = (InnerNode) node;
+-      currentInnerNode.boundingShape =
+-          leafToInsert.boundingShape.union(currentInnerNode.boundingShape);
++      if (!(leafToInsert.boundingShape instanceof IntOctagon leafOctagon
++          && currentInnerNode.boundingShape instanceof IntOctagon nodeOctagon
++          && leafOctagon.isContainedIn(nodeOctagon))) {
++        // The union of an octagon with a coordinate-wise containing octagon has the container's
++        // coordinates, so the container is kept instead of allocating an equal copy.
++        currentInnerNode.boundingShape =
++            leafToInsert.boundingShape.union(currentInnerNode.boundingShape);
++      }
+       currentInnerNode.layerMask |= leafToInsert.layerMask;
+ 
+       // Choose the child, so that the area increase of that child after taking the union
+diff --git a/src/main/java/app/freerouting/geometry/planar/IntOctagon.java b/src/main/java/app/freerouting/geometry/planar/IntOctagon.java
+index 9dbcc5e0..fd880fdc 100644
+--- a/src/main/java/app/freerouting/geometry/planar/IntOctagon.java
++++ b/src/main/java/app/freerouting/geometry/planar/IntOctagon.java
+@@ -183,6 +183,48 @@ public final class IntOctagon extends RegularTileShape implements Serializable {
+     return 31 * result + lowerRightDiagonalX;
+   }
+ 
++  /**
++   * Same result as {@link TileShape#isOutside(Point)}, which tests the point against each {@link
++   * #borderLine(int)}: an integer point is outside if the determinant of one border line is
++   * positive. The tests below are those determinants, with the same integer differences, so no line
++   * objects are allocated.
++   */
++  @Override
++  public boolean isOutside(Point point) {
++    if (point instanceof IntPoint intPoint) {
++      return isOutside(intPoint.x, intPoint.y);
++    }
++    return super.isOutside(point);
++  }
++
++  private boolean isOutside(int x, int y) {
++    return y - bottomY < 0
++        || x - lowerRightDiagonalX > y
++        || x - rightX > 0
++        || (long) (x - upperRightDiagonalX) + y > 0
++        || y - topY > 0
++        || y > x - upperLeftDiagonalX
++        || x - leftX < 0
++        || (long) (x - lowerLeftDiagonalX) + y < 0;
++  }
++
++  /**
++   * Same result as {@link TileShape#contains(TileShape)}, which tests every corner of other; for an
++   * octagon the corners are tested without allocating them.
++   */
++  @Override
++  public boolean contains(TileShape other) {
++    if (other instanceof IntOctagon octagon) {
++      for (int i = 0; i < 8; i++) {
++        if (isOutside(octagon.cornerX(i), octagon.cornerY(i))) {
++          return false;
++        }
++      }
++      return true;
++    }
++    return super.contains(other);
++  }
++
+   /**
+    * Additional to the function corner() for performance reasons to avoid allocation of an IntPoint.
+    */
+diff --git a/src/test/java/app/freerouting/autoroute/maze/MazeExpansionQueueTest.java b/src/test/java/app/freerouting/autoroute/maze/MazeExpansionQueueTest.java
+new file mode 100644
+index 00000000..bf780652
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/maze/MazeExpansionQueueTest.java
+@@ -0,0 +1,105 @@
++package app.freerouting.autoroute.maze;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertSame;
++
++import app.freerouting.autoroute.expansion.CompleteExpansionRoom;
++import app.freerouting.autoroute.expansion.ExpandableObject;
++import java.util.Random;
++import java.util.TreeSet;
++import org.junit.jupiter.api.Test;
++
++class MazeExpansionQueueTest {
++
++  @Test
++  void behavesLikeATreeSetOrderedByCompareTo() {
++    Random random = new Random(97L);
++    TestDoor[] doors = new TestDoor[12];
++    for (int i = 0; i < doors.length; i++) {
++      // Two door objects share each id, as colliding door ids do in the router.
++      doors[i] = new TestDoor(i / 2);
++    }
++    for (int round = 0; round < 200; round++) {
++      TreeSet<MazeListElement> reference = new TreeSet<>();
++      MazeExpansionQueue queue = new MazeExpansionQueue();
++      for (int step = 0; step < 2_000; step++) {
++        if (random.nextInt(3) > 0 || reference.isEmpty()) {
++          MazeListElement element = randomElement(random, doors);
++          assertEquals(reference.add(element), queue.add(element));
++        } else {
++          assertSame(reference.pollFirst(), queue.pollFirst());
++        }
++        assertEquals(reference.size(), queue.size());
++      }
++      while (!reference.isEmpty()) {
++        assertSame(reference.pollFirst(), queue.pollFirst());
++      }
++      assertNull(queue.pollFirst());
++    }
++  }
++
++  private static MazeListElement randomElement(Random random, TestDoor[] doors) {
++    // Few distinct values, so equal sorting values, equal expansion values and equal keys occur.
++    double sorting = random.nextInt(20) * 0.5;
++    if (sorting == 0.0 && random.nextBoolean()) {
++      sorting = -0.0;
++    }
++    double expansion = random.nextInt(4);
++    return new MazeListElement(
++        doors[random.nextInt(doors.length)],
++        random.nextInt(3),
++        null,
++        0,
++        expansion,
++        sorting,
++        null,
++        null,
++        random.nextBoolean(),
++        null,
++        false);
++  }
++
++  private static final class TestDoor implements ExpandableObject {
++    private final int id;
++
++    private TestDoor(int id) {
++      this.id = id;
++    }
++
++    @Override
++    public app.freerouting.geometry.planar.TileShape getShape() {
++      throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public int getDimension() {
++      return 1;
++    }
++
++    @Override
++    public CompleteExpansionRoom otherRoom(CompleteExpansionRoom room) {
++      return null;
++    }
++
++    @Override
++    public int mazeSearchElementCount() {
++      return 1;
++    }
++
++    @Override
++    public MazeSearchElement getMazeSearchElement(int no) {
++      throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public void reset() {
++      // no-op for tests
++    }
++
++    @Override
++    public int getId() {
++      return id;
++    }
++  }
++}
+diff --git a/src/test/java/app/freerouting/datastructures/ArrayStackTest.java b/src/test/java/app/freerouting/datastructures/ArrayStackTest.java
+index c9f819cd..d728b15f 100644
+--- a/src/test/java/app/freerouting/datastructures/ArrayStackTest.java
++++ b/src/test/java/app/freerouting/datastructures/ArrayStackTest.java
+@@ -61,4 +61,17 @@ class ArrayStackTest {
+     field.setAccessible(true);
+     return (Object[]) field.get(stack);
+   }
++
++  @Test
++  void sizeCountsTheLiveElements() {
++    ArrayStack<String> stack = new ArrayStack<>(1);
++    assertEquals(0, stack.size());
++    stack.push("first");
++    stack.push("second");
++    assertEquals(2, stack.size());
++    stack.pop();
++    assertEquals(1, stack.size());
++    stack.reset();
++    assertEquals(0, stack.size());
++  }
+ }
+diff --git a/src/test/java/app/freerouting/geometry/planar/IntOctagonTest.java b/src/test/java/app/freerouting/geometry/planar/IntOctagonTest.java
+index 2e773d84..da888005 100644
+--- a/src/test/java/app/freerouting/geometry/planar/IntOctagonTest.java
++++ b/src/test/java/app/freerouting/geometry/planar/IntOctagonTest.java
+@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
+ import static org.junit.jupiter.api.Assertions.assertNotSame;
+ import static org.junit.jupiter.api.Assertions.assertSame;
+ 
++import java.util.Random;
+ import org.junit.jupiter.api.Test;
+ 
+ class IntOctagonTest {
+@@ -24,4 +25,88 @@ class IntOctagonTest {
+     assertNotSame(octagon, normalized);
+     assertEquals(15, normalized.topY);
+   }
++
++  @Test
++  void isOutsideMatchesTheBorderLineSides() {
++    Random random = new Random(20261024L);
++    for (int i = 0; i < 2_000; i++) {
++      IntOctagon octagon = randomOctagon(random);
++      for (int j = 0; j < 50; j++) {
++        IntPoint point = randomPoint(random, octagon);
++        assertEquals(
++            borderLineIsOutside(octagon, point),
++            octagon.isOutside(point),
++            () -> octagon + " " + point);
++      }
++    }
++  }
++
++  @Test
++  void containsOctagonMatchesTheCornerTest() {
++    Random random = new Random(424242L);
++    for (int i = 0; i < 20_000; i++) {
++      IntOctagon octagon = randomOctagon(random);
++      IntOctagon other = random.nextBoolean() ? randomOctagon(random) : shrunk(random, octagon);
++      boolean expected = true;
++      for (int corner = 0; corner < other.borderLineCount(); corner++) {
++        if (borderLineIsOutside(octagon, other.corner(corner))) {
++          expected = false;
++          break;
++        }
++      }
++      assertEquals(expected, octagon.contains((TileShape) other), () -> octagon + " " + other);
++    }
++  }
++
++  /** The generic {@link TileShape#isOutside(Point)} rule, evaluated with line objects. */
++  private static boolean borderLineIsOutside(IntOctagon octagon, Point point) {
++    for (int i = 0; i < octagon.borderLineCount(); i++) {
++      if (octagon.borderLine(i).sideOf(point) == Side.ON_THE_LEFT) {
++        return true;
++      }
++    }
++    return false;
++  }
++
++  /** Random octagons, tight or not, including empty and degenerate ones. */
++  private static IntOctagon randomOctagon(Random random) {
++    int cx = random.nextInt(2_000_001) - 1_000_000;
++    int cy = random.nextInt(2_000_001) - 1_000_000;
++    int[] r = new int[8];
++    for (int k = 0; k < 8; k++) {
++      int spread = random.nextInt(3) * 500 + 2;
++      r[k] = random.nextInt(8) == 0 ? -random.nextInt(20) : random.nextInt(spread);
++    }
++    return new IntOctagon(
++        cx - r[0],
++        cy - r[1],
++        cx + r[2],
++        cy + r[3],
++        cx - cy - r[4],
++        cx - cy + r[5],
++        cx + cy - r[6],
++        cx + cy + r[7]);
++  }
++
++  private static IntOctagon shrunk(Random random, IntOctagon o) {
++    return new IntOctagon(
++        o.leftX + random.nextInt(5) - 1,
++        o.bottomY + random.nextInt(5) - 1,
++        o.rightX - random.nextInt(5) + 1,
++        o.topY - random.nextInt(5) + 1,
++        o.upperLeftDiagonalX + random.nextInt(5) - 1,
++        o.lowerRightDiagonalX - random.nextInt(5) + 1,
++        o.lowerLeftDiagonalX + random.nextInt(5) - 1,
++        o.upperRightDiagonalX - random.nextInt(5) + 1);
++  }
++
++  private static IntPoint randomPoint(Random random, IntOctagon octagon) {
++    if (random.nextInt(4) == 0) {
++      IntPoint corner = octagon.corner(random.nextInt(8));
++      return new IntPoint(corner.x + random.nextInt(3) - 1, corner.y + random.nextInt(3) - 1);
++    }
++    int x = octagon.leftX + random.nextInt(Math.max(1, octagon.rightX - octagon.leftX + 3)) - 1;
++    int y = octagon.bottomY + random.nextInt(Math.max(1, octagon.topY - octagon.bottomY + 3)) - 1;
++    return new IntPoint(x, y);
++  }
+ }
