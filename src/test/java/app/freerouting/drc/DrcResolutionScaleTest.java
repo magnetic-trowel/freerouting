@@ -105,4 +105,26 @@ class DrcResolutionScaleTest {
     assertEquals(1000.0 / boardUnitsPerMm, board.communication.boardUnitSize(Unit.UM), 1e-12);
     assertEquals(1.0, board.communication.boardUnitSize(Unit.MM) * boardUnitsPerMm, 1e-12);
   }
+
+  @Test
+  void summaryReportsClearancesInMillimetresAtEveryResolution() {
+    BasicBoard[] boards = {
+      load(board("um 10", "um", 1000)),
+      load(board("mm 1000000", "mm", 1)),
+      load(board("mil 1000", "mil", 1000 / 25.4))
+    };
+    for (BasicBoard board : boards) {
+      DrcSummaryResponse summary =
+          new DesignRulesChecker(board, new DesignRulesCheckerSettings()).generateSummary();
+      DrcSummaryResponse.DiagnosticViolation clearance =
+          summary.violations.stream()
+              .filter(v -> "clearance".equals(v.type))
+              .findFirst()
+              .orElseThrow();
+      String at = "at resolution " + board.communication.resolution;
+      assertEquals(0.2, clearance.expectedClearanceMm, 0.002, "required " + at);
+      assertEquals(0.15, clearance.actualClearanceMm, 0.002, "found " + at);
+      assertEquals(0.05, clearance.shortfallMm, 0.002, "shortfall " + at);
+    }
+  }
 }

@@ -1299,6 +1299,7 @@ public class DesignRulesChecker {
     }
 
     // 1. Process clearance violations
+    double mmPerBoardUnit = board.communication.boardUnitSize(Unit.MM);
     for (ClearanceViolation v : violations) {
       String layerName =
           (v.layer >= 0 && v.layer < board.layerStructure.layers.length)
@@ -1308,9 +1309,10 @@ public class DesignRulesChecker {
       String item1Desc = formatItemWithContext(v.firstItem);
       String item2Desc = formatItemWithContext(v.secondItem);
 
-      double expectedMm = v.expectedClearance / 10000.0;
-      double actualMm = v.actualClearance / 10000.0;
-      double shortfallMm = Math.max(0.0, (v.expectedClearance - v.actualClearance) / 10000.0);
+      double expectedMm = v.expectedClearance * mmPerBoardUnit;
+      double actualMm = v.actualClearance * mmPerBoardUnit;
+      double shortfallMm =
+          Math.max(0.0, (v.expectedClearance - v.actualClearance) * mmPerBoardUnit);
 
       String explanation =
           String.format(
@@ -1497,6 +1499,7 @@ public class DesignRulesChecker {
       }
     }
 
+    double mmPerBoardUnit = board.communication.boardUnitSize(Unit.MM);
     boolean[] visited = new boolean[points.size()];
     for (int i = 0; i < points.size(); i++) {
       if (visited[i]) {
@@ -1504,8 +1507,8 @@ public class DesignRulesChecker {
       }
       visited[i] = true;
       Point p1 = points.get(i);
-      double p1Xmm = p1.toFloat().x / 10000.0;
-      double p1Ymm = p1.toFloat().y / 10000.0;
+      double p1Xmm = p1.toFloat().x * mmPerBoardUnit;
+      double p1Ymm = p1.toFloat().y * mmPerBoardUnit;
 
       int clusterCount = 1;
       double sumX = p1Xmm;
@@ -1516,8 +1519,8 @@ public class DesignRulesChecker {
           continue;
         }
         Point p2 = points.get(j);
-        double p2Xmm = p2.toFloat().x / 10000.0;
-        double p2Ymm = p2.toFloat().y / 10000.0;
+        double p2Xmm = p2.toFloat().x * mmPerBoardUnit;
+        double p2Ymm = p2.toFloat().y * mmPerBoardUnit;
         double dx = p1Xmm - p2Xmm;
         double dy = p1Ymm - p2Ymm;
         if (StrictMath.hypot(dx, dy) <= clusterRadiusMm) {
@@ -1557,8 +1560,9 @@ public class DesignRulesChecker {
 
     if (!violations.isEmpty()) {
       double maxShortfall = 0.0;
+      double mmPerBoardUnit = board.communication.boardUnitSize(Unit.MM);
       for (ClearanceViolation v : violations) {
-        double shortfall = (v.expectedClearance - v.actualClearance) / 10000.0;
+        double shortfall = (v.expectedClearance - v.actualClearance) * mmPerBoardUnit;
         if (shortfall > maxShortfall) {
           maxShortfall = shortfall;
         }

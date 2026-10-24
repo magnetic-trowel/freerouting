@@ -191,6 +191,11 @@ public class BasicBoard implements Serializable {
   public void noteNetAssignmentChanged() {
     netAssignmentChangeCount++;
     itemList.noteContentChange();
+    // The ledger files items under the nets they had when they were inserted. A net change in
+    // place (pin swap, net reduction of tie traces) leaves them under the old net.
+    if (routingLedger != null) {
+      routingLedger.invalidate();
+    }
   }
 
   /** Serialize. */

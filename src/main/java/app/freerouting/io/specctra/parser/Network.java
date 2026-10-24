@@ -774,9 +774,12 @@ public class Network extends ScopeKeyword {
       clearanceMatrix.appendClass(className);
       classNo = clearanceMatrix.getNo(className);
       // set the clearance values of the new class to the maximum of currentClearance and
-      // the existing values.
+      // the existing values. A layer rule raises them on its own layer only.
       for (int i = 1; i < clearanceMatrix.getClassCount(); i++) {
         for (int j = 0; j < clearanceMatrix.getLayerCount(); j++) {
+          if (layerIndex >= 0 && j != layerIndex) {
+            continue;
+          }
           int currentValue =
               Math.max(clearanceMatrix.getValue(classNo, i, j, false), currentClearance);
           clearanceMatrix.setValue(classNo, i, j, currentValue);

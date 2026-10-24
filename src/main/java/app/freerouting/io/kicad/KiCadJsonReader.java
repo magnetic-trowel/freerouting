@@ -147,21 +147,31 @@ public final class KiCadJsonReader {
 
       KiCadBoardJson.NetClassJson kiCadDefaultNetClass =
           findKiCadDefaultNetClass(boardJson.netClasses);
+      int defaultClVal = defaultClearance;
       if (kiCadDefaultNetClass != null && kiCadDefaultNetClass.clearance > 0) {
-        int defaultClVal = (int) Math.round(kiCadDefaultNetClass.clearance * scaleFactor);
+        defaultClVal = (int) Math.round(kiCadDefaultNetClass.clearance * scaleFactor);
         clearanceMatrix.setValue(1, 1, defaultClVal);
       }
 
       // Populate clearance matrix from non-default NetClasses and Custom Clearance Rules
+      int[] classClearances = new int[additionalNetClasses.size()];
       for (int i = 0; i < additionalNetClasses.size(); i++) {
         KiCadBoardJson.NetClassJson nc = additionalNetClasses.get(i);
         int clNo = i + 2;
         int clVal = (int) Math.round(nc.clearance * scaleFactor);
+        classClearances[i] = clVal;
         clearanceMatrix.setValue(clNo, clNo, clVal);
-        // Spacing between default and class. setValue writes one direction only; the matrix must
-        // stay symmetric, as the DSN reader keeps it, or queries depend on argument order.
-        clearanceMatrix.setValue(1, clNo, clVal);
-        clearanceMatrix.setValue(clNo, 1, clVal);
+        // Spacing between two net classes is the larger of their clearances, as in KiCad.
+        // setValue writes one direction only; the matrix must stay symmetric, as the DSN reader
+        // keeps it, or queries depend on argument order.
+        int toDefault = Math.max(clVal, defaultClVal);
+        clearanceMatrix.setValue(1, clNo, toDefault);
+        clearanceMatrix.setValue(clNo, 1, toDefault);
+        for (int j = 0; j < i; j++) {
+          int between = Math.max(clVal, classClearances[j]);
+          clearanceMatrix.setValue(j + 2, clNo, between);
+          clearanceMatrix.setValue(clNo, j + 2, between);
+        }
       }
 
       if (hasEdgeClearance) {
