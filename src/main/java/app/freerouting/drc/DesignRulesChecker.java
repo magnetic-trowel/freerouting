@@ -2,6 +2,7 @@ package app.freerouting.drc;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.items.ConductionArea;
+import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
@@ -10,6 +11,7 @@ import app.freerouting.board.model.structure.Component;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.constants.Constants;
 import app.freerouting.core.library.Package;
+import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.io.kicad.KiCadDrcPosition;
 import app.freerouting.io.kicad.KiCadDrcReport;
@@ -22,8 +24,12 @@ import app.freerouting.util.gson.GsonProvider;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -187,6 +193,9 @@ public class DesignRulesChecker {
   /**
    * Checks for copper pour (conduction area) fragmentation, detecting isolated copper islands where
    * pins or vias are severed from the net's primary connected set, or dead floating copper islands.
+   * An island counts as connected to the primary island of its pour when copper or the fill islands
+   * of the net's pours on any layer join them, so a through-hole pin or via carries the connection
+   * between layers.
    *
    * @return Collection of detected zone island violations
    */
@@ -202,13 +211,18 @@ public class DesignRulesChecker {
             * board.communication.getResolution(Unit.MM)
             * board.communication.getResolution(Unit.MM);
 
+    Map<ConductionArea, List<java.awt.geom.Area>> islandsOf = new LinkedHashMap<>();
     for (ConductionArea ca : conductionAreas) {
       java.awt.geom.Area detailedFill = ca.getDetailedFillArea();
-      if (detailedFill == null || detailedFill.isEmpty()) {
-        continue;
+      if (detailedFill != null && !detailedFill.isEmpty()) {
+        islandsOf.put(ca, decomposeAreaIntoIslands(detailedFill));
       }
+    }
+    Map<Integer, Map<Item, Integer>> fillGroupsOfNet = new HashMap<>();
 
-      List<java.awt.geom.Area> islands = decomposeAreaIntoIslands(detailedFill);
+    for (Map.Entry<ConductionArea, List<java.awt.geom.Area>> entry : islandsOf.entrySet()) {
+      ConductionArea ca = entry.getKey();
+      List<java.awt.geom.Area> islands = entry.getValue();
       if (islands.size() <= 1) {
         continue; // Single continuous pour, no fragmentation
       }
@@ -232,17 +246,8 @@ public class DesignRulesChecker {
       for (java.awt.geom.Area island : islands) {
         List<Item> contained = new ArrayList<>();
         for (Item item : sameNetItemsOnLayer) {
-          Point center = null;
-          if (item instanceof app.freerouting.board.model.items.DrillItem drillItem) {
-            center = drillItem.getCenter();
-          } else if (item instanceof Trace trace) {
-            center = trace.firstCorner();
-          }
-          if (center != null) {
-            app.freerouting.geometry.planar.FloatPoint fp = center.toFloat();
-            if (island.contains(fp.x, fp.y)) {
-              contained.add(item);
-            }
+          if (liesIn(item, island)) {
+            contained.add(item);
           }
         }
         islandItems.add(contained);
@@ -267,14 +272,16 @@ public class DesignRulesChecker {
 
         if (!items.isEmpty()) {
           if (i != primaryIndex) {
-            // Check if any item in this island can reach the items in the primary island through
-            // traces/vias elsewhere on the board
+            // Check if any item in this island reaches the items in the primary island through
+            // copper or the fill of the net's pours elsewhere on the board
             boolean connectedToPrimary = false;
             if (primaryIndex >= 0 && !islandItems.get(primaryIndex).isEmpty()) {
-              Item repItemInPrimary = islandItems.get(primaryIndex).get(0);
-              Collection<Item> connectedSet = repItemInPrimary.getConnectedSet(netNumber, true);
+              Map<Item, Integer> fillGroups =
+                  fillGroupsOfNet.computeIfAbsent(
+                      netNumber, net -> fillConnectedGroups(net, islandsOf));
+              Integer primaryGroup = fillGroups.get(islandItems.get(primaryIndex).get(0));
               for (Item item : items) {
-                if (connectedSet.contains(item)) {
+                if (primaryGroup != null && primaryGroup.equals(fillGroups.get(item))) {
                   connectedToPrimary = true;
                   break;
                 }
@@ -306,6 +313,92 @@ public class DesignRulesChecker {
     }
 
     return violations;
+  }
+
+  /** Returns true if the drill center or the first corner of a trace lies in the island. */
+  private static boolean liesIn(Item item, java.awt.geom.Area island) {
+    Point point = null;
+    if (item instanceof DrillItem drillItem) {
+      point = drillItem.getCenter();
+    } else if (item instanceof Trace trace) {
+      point = trace.firstCorner();
+    }
+    if (point == null) {
+      return false;
+    }
+    FloatPoint fp = point.toFloat();
+    return island.contains(fp.x, fp.y);
+  }
+
+  /**
+   * Groups the items of a net that are connected by copper without running through a pour polygon
+   * ({@link Item#getConnectedSet(int, boolean)}) or that lie in the same fill island of one of the
+   * net's pours, on any layer. Returns the group number of each item; pours have none.
+   */
+  private Map<Item, Integer> fillConnectedGroups(
+      int netNumber, Map<ConductionArea, List<java.awt.geom.Area>> islandsOf) {
+    List<Item> items = new ArrayList<>();
+    for (Item item : board.getConnectableItems(netNumber)) {
+      if (!isPour(item)) {
+        items.add(item);
+      }
+    }
+    items.sort(Comparator.comparingInt(Item::getId));
+    Map<Item, Integer> groupOf = new HashMap<>();
+    int groupCount = 0;
+    for (Item item : items) {
+      if (!groupOf.containsKey(item)) {
+        for (Item member : item.getConnectedSet(netNumber, true)) {
+          if (!isPour(member)) {
+            groupOf.put(member, groupCount);
+          }
+        }
+        groupCount++;
+      }
+    }
+    int[] parent = new int[groupCount];
+    for (int i = 0; i < groupCount; i++) {
+      parent[i] = i;
+    }
+    for (Map.Entry<ConductionArea, List<java.awt.geom.Area>> entry : islandsOf.entrySet()) {
+      ConductionArea pour = entry.getKey();
+      if (!isPour(pour) || !pour.containsNet(netNumber)) {
+        continue;
+      }
+      for (java.awt.geom.Area island : entry.getValue()) {
+        int firstGroup = -1;
+        for (Item item : items) {
+          if (item.sharesLayer(pour) && liesIn(item, island)) {
+            int group = find(parent, groupOf.get(item));
+            if (firstGroup < 0) {
+              firstGroup = group;
+            } else if (group != firstGroup) {
+              // the lower root wins, so the groups do not depend on the union order
+              parent[Math.max(group, firstGroup)] = Math.min(group, firstGroup);
+              firstGroup = Math.min(group, firstGroup);
+            }
+          }
+        }
+      }
+    }
+    Map<Item, Integer> result = new HashMap<>();
+    for (Map.Entry<Item, Integer> entry : groupOf.entrySet()) {
+      result.put(entry.getKey(), find(parent, entry.getValue()));
+    }
+    return result;
+  }
+
+  /** Returns true for a pour: a conduction area that does not belong to a component. */
+  private static boolean isPour(Item item) {
+    return item instanceof ConductionArea && item.getComponentId() <= 0;
+  }
+
+  private static int find(int[] parent, int i) {
+    while (parent[i] != i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
   }
 
   /**

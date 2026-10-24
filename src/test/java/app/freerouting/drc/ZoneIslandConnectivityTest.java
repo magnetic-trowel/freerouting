@@ -137,6 +137,48 @@ class ZoneIslandConnectivityTest {
   }
 
   @Test
+  void testIslandJoinedThroughThePourOfAnotherLayerIsConnected() {
+    // GND pours on both layers; the vias go through both layers.
+    for (int layer = 0; layer < 2; layer++) {
+      board.insertConductionArea(
+          TileShape.getInstance(0, 0, 4000000, 4000000),
+          layer,
+          new int[] {gndNet.netNumber},
+          0,
+          false,
+          FixedState.UNFIXED);
+    }
+    for (int x : new int[] {500000, 3500000}) {
+      board.insertVia(
+          defaultPadstack,
+          new IntPoint(x, 2000000),
+          new int[] {gndNet.netNumber},
+          0,
+          FixedState.UNFIXED,
+          true);
+    }
+    // The foreign trace cuts the layer-0 pour only; the layer-1 pour still joins the vias.
+    Point[] traceCorners = new Point[] {new IntPoint(2000000, 0), new IntPoint(2000000, 4000000)};
+    board.insertTrace(traceCorners, 0, 100000, new int[] {sigNet.netNumber}, 0, FixedState.UNFIXED);
+
+    DesignRulesChecker drc = new DesignRulesChecker(board, new DesignRulesCheckerSettings());
+    for (ZoneIslandViolation v : drc.getZoneIslandViolations()) {
+      assertFalse(
+          "isolated_island_unconnected".equals(v.type),
+          "the island is connected through the pour on the other layer: " + v.itemsInIsland);
+    }
+
+    // Cutting the layer-1 pour as well disconnects the right via.
+    board.insertTrace(traceCorners, 1, 100000, new int[] {sigNet.netNumber}, 0, FixedState.UNFIXED);
+    long unconnected =
+        new DesignRulesChecker(board, new DesignRulesCheckerSettings())
+            .getZoneIslandViolations().stream()
+                .filter(v -> "isolated_island_unconnected".equals(v.type))
+                .count();
+    assertEquals(2, unconnected, "one cut-off island on each layer");
+  }
+
+  @Test
   void testDeadCopperIslandDetection() {
     // Large pour on layer 0 covering (0,0) to (4000000, 4000000)
     Area pourArea = TileShape.getInstance(0, 0, 4000000, 4000000);
