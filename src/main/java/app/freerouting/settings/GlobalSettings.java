@@ -2,8 +2,6 @@ package app.freerouting.settings;
 
 import static app.freerouting.constants.Constants.FREEROUTING_VERSION;
 
-import app.freerouting.autoroute.BoardUpdateStrategy;
-import app.freerouting.autoroute.ItemSelectionStrategy;
 import app.freerouting.core.BoardFileDetails;
 import app.freerouting.io.FileFormat;
 import app.freerouting.logger.FRLogger;
@@ -27,8 +25,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
-import java.util.function.Function;
+import java.util.Set;
 
 /** Aggregates persisted, runtime, and source-specific Freerouting settings. */
 public class GlobalSettings implements Serializable {
@@ -37,6 +34,22 @@ public class GlobalSettings implements Serializable {
   private static Path configurationFilePath = userDataPath.resolve("freerouting.json");
   private static Boolean isUserDataPathLocked = false;
   private static volatile GlobalSettings currentInstance;
+
+  /**
+   * Properties read before the settings load ({@code UserDataPathResolver}), which are not settings
+   * fields: the command line and the environment skip them here.
+   */
+  private static final Set<String> STARTUP_PROPERTIES = Set.of("user_data_path");
+
+  /**
+   * Router flags of the command line, read by {@link CliSettings}; those in {@link
+   * #ROUTER_FLAGS_WITH_VALUE} take a value.
+   */
+  private static final Set<String> ROUTER_FLAGS =
+      Set.of("-mp", "-mt", "-oit", "-us", "-hr", "-is", "-inc", "-im");
+
+  private static final Set<String> ROUTER_FLAGS_WITH_VALUE =
+      Set.of("-mp", "-mt", "-oit", "-us", "-hr", "-is", "-inc");
 
   /**
    * Returns the currently active GlobalSettings instance.
@@ -95,21 +108,13 @@ public class GlobalSettings implements Serializable {
    *     field is retained as a serialisation bridge for the {@code router} section of {@code
    *     freerouting.json} (read back on load, written on save) and as the target of {@code
    *     setValue("router.*", ...)}. It holds only values that are meant to be persisted: router
-   *     options from the command line go to {@link #commandLineRouterSettings} instead, so that a
-   *     save does not turn them into defaults for later runs. Do not use this field to drive
-   *     routing decisions — obtain a merged {@link RouterSettings} via {@link
-   *     #settingsMergerProtype} instead.
+   *     options from the command line are read by {@link CliSettings} only, so that a save does not
+   *     turn them into defaults for later runs. Do not use this field to drive routing decisions —
+   *     obtain a merged {@link RouterSettings} via {@link #settingsMergerProtype} instead.
    */
   @Deprecated
   @SerializedName("router")
   public final RouterSettings routerSettings = new RouterSettings();
-
-  /**
-   * Router options given on the command line, for this process only. They reach routing through
-   * {@link CliSettings}; this transient copy only backs the legacy getters such as {@link
-   * #getMaxPasses()} and is never written to {@code freerouting.json}.
-   */
-  private final transient RouterSettings commandLineRouterSettings = new RouterSettings();
 
   /** The persisted values that the command line or environment changed for this process. */
   private final transient ProcessOverrides processOverrides = new ProcessOverrides();
@@ -585,9 +590,9 @@ public class GlobalSettings implements Serializable {
                 .toLowerCase(Locale.ROOT)
                 .replace("__", ".");
 
-        // Skip router settings - they're handled by EnvironmentVariablesSource
-        // to prevent conflicts with the SettingsMerger
-        if (propertyName.startsWith("router.")) {
+        // Router settings are read by EnvironmentVariablesSource, for the SettingsMerger.
+        if (RouterPropertyNames.isRouterProperty(propertyName)
+            || STARTUP_PROPERTIES.contains(propertyName)) {
           continue;
         }
 
@@ -629,31 +634,14 @@ public class GlobalSettings implements Serializable {
    * "section.property" (eg. "router.max_passes", "gui:input_directory" or "profile-email").
    */
   public Boolean setValue(String propertyName, String newValue) {
-    return setValue(propertyName, newValue, routerSettings);
-  }
-
-  /**
-   * Sets a property value; {@code router.*} properties are written into {@code routerTarget}.
-   *
-   * @param propertyName property path, e.g. {@code router.autorouter.max_passes}
-   * @param newValue the value to assign
-   * @param routerTarget the router settings that receive {@code router.*} properties
-   */
-  private Boolean setValue(String propertyName, String newValue, RouterSettings routerTarget) {
     try {
-      propertyName = CliSettings.normalizeRouterSeparators(propertyName);
-      if (propertyName.startsWith("router.")) {
-        String relative = propertyName.substring("router.".length());
-        String canonical = LegacyRouterSettingsBridge.canonicalCliPath(relative);
-        if (LegacyRouterSettingsBridge.isDeprecatedFlatAutorouterPath(relative)) {
-          LegacyRouterSettingsBridge.warnDeprecatedPath(
-              "router." + relative, "router." + canonical);
-        }
-        propertyName = "router." + canonical;
-        ReflectionUtil.setFieldValue(
-            routerTarget, canonical, CliSettings.normalizeRouterValue(canonical, newValue));
-      } else {
+      List<String> routerFieldPaths = RouterPropertyNames.fieldPaths(propertyName);
+      if (routerFieldPaths.isEmpty()) {
         ReflectionUtil.setFieldValue(this, propertyName, newValue);
+      }
+      for (String fieldPath : routerFieldPaths) {
+        ReflectionUtil.setFieldValue(
+            routerSettings, fieldPath, RouterPropertyNames.normalizeValue(fieldPath, newValue));
       }
       return true;
     } catch (NoSuchFieldException e) {
@@ -734,7 +722,11 @@ public class GlobalSettings implements Serializable {
           // Use split limit=2 so that values containing '=' (e.g. URLs with query strings)
           // are captured correctly as a single token.
           String[] parts = args[i].substring(2).split("=", 2);
-          if ((parts.length == 2) && (!Objects.equals(parts[0], "user_data_path"))) {
+          if (parts.length == 2 && RouterPropertyNames.isRouterProperty(parts[0])) {
+            // Router options are read by CliSettings, the command line's router settings source.
+            continue;
+          }
+          if ((parts.length == 2) && !STARTUP_PROPERTIES.contains(parts[0])) {
             if (parts[0].startsWith("debug.")) {
               // handle debug settings
               if ("debug.enable_detailed_logging".equals(parts[0])) {
@@ -750,9 +742,9 @@ public class GlobalSettings implements Serializable {
                 }
               }
             } else {
-              setValue(parts[0], parts[1], commandLineRouterSettings);
+              setValue(parts[0], parts[1]);
             }
-          } else if (!Objects.equals(parts[0], "user_data_path")) {
+          } else if (!STARTUP_PROPERTIES.contains(parts[0])) {
             FRLogger.warn("Unknown command line argument: " + args[i]);
           }
         } else if (args[i].startsWith("-de")) {
@@ -878,7 +870,6 @@ public class GlobalSettings implements Serializable {
           }
         } else if (args[i].startsWith("-drc")) {
           // DRC-only mode (must be checked before -dr)
-          commandLineRouterSettings.autorouter.enabled = false;
           drcSettings.enabled = true;
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
             drcReportFile = new BoardFileDetails();
@@ -891,56 +882,11 @@ public class GlobalSettings implements Serializable {
             initialRulesFile = args[i + 1];
             i++;
           }
-        } else if (args[i].startsWith("-mp")) {
-          if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            LegacyRouterSettingsBridge.warnDeprecatedPath(
-                "-mp / --router.max_passes", "--router.autorouter.max_passes");
-            commandLineRouterSettings.autorouter.maxPasses = Integer.decode(args[i + 1]);
-
-            if (commandLineRouterSettings.autorouter.maxPasses < 0) {
-              commandLineRouterSettings.autorouter.maxPasses = 0;
-            }
-            if (commandLineRouterSettings.autorouter.maxPasses > 9999) {
-              commandLineRouterSettings.autorouter.maxPasses = 9999;
-            }
-            // Note: 0 is allowed and means no limit
-            i++;
-          }
-        } else if (args[i].startsWith("-mt")) {
-          if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            commandLineRouterSettings.optimizer.maxThreads = Integer.decode(args[i + 1]);
-
-            if (commandLineRouterSettings.optimizer.maxThreads < 0) {
-              commandLineRouterSettings.optimizer.maxThreads = 0;
-            }
-            if (commandLineRouterSettings.optimizer.maxThreads > 1024) {
-              commandLineRouterSettings.optimizer.maxThreads = 1024;
-            }
-            i++;
-          }
-        } else if (args[i].startsWith("-oit")) {
-          if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            try {
-              commandLineRouterSettings.optimizer.optimizationImprovementThreshold =
-                  Float.parseFloat(args[i + 1]);
-            } catch (NumberFormatException ignored) {
-              // Fall back to existing settings if parsing fails
-            }
-            i++;
-          }
-        } else if (args[i].startsWith("-us")) {
-          if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            commandLineRouterSettings.optimizer.boardUpdateStrategy =
-                BoardUpdateStrategy.GLOBAL_OPTIMAL;
-            i++;
-          }
-        } else if (args[i].startsWith("-is")) {
-          if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            String op = args[i + 1].toLowerCase(Locale.ROOT).trim();
-            commandLineRouterSettings.optimizer.itemSelectionStrategy =
-                op.startsWith("prio")
-                    ? ItemSelectionStrategy.PRIORITIZED
-                    : ItemSelectionStrategy.SEQUENTIAL;
+        } else if (ROUTER_FLAGS.contains(args[i])) {
+          // Router options are read by CliSettings, the command line's router settings source.
+          if (ROUTER_FLAGS_WITH_VALUE.contains(args[i])
+              && args.length > i + 1
+              && !args[i + 1].startsWith("-")) {
             i++;
           }
         } else if ("-l".equals(args[i])) {
@@ -1036,14 +982,6 @@ public class GlobalSettings implements Serializable {
           }
         } else if (args[i].startsWith("-help")) {
           showHelpOption = true;
-        } else if (args[i].startsWith("-inc")) {
-          // ignore net class(es)
-          if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
-            LegacyRouterSettingsBridge.warnDeprecatedPath(
-                "-inc / --router.ignore_net_classes", "--router.autorouter.ignore_net_classes");
-            commandLineRouterSettings.autorouter.ignoreNetClasses = args[i + 1].split(",");
-            i++;
-          }
         } else if (args[i].startsWith("-dct")) {
           if (args.length > i + 1 && !args[i + 1].startsWith("-")) {
             guiSettings.dialogConfirmationTimeout = Integer.parseInt(args[i + 1]);
@@ -1072,44 +1010,6 @@ public class GlobalSettings implements Serializable {
   /** Returns the configured design input directory. */
   public String getDesignDir() {
     return guiSettings.inputDirectory;
-  }
-
-  /** Returns the configured maximum router passes. */
-  public int getMaxPasses() {
-    Integer maxPasses =
-        commandLineOrFileValue(s -> s.autorouter != null ? s.autorouter.maxPasses : null);
-    return maxPasses != null ? maxPasses : 0;
-  }
-
-  /** Returns the configured optimizer thread count. */
-  public int getNumThreads() {
-    return commandLineOrFileValue(s -> s.optimizer != null ? s.optimizer.maxThreads : null);
-  }
-
-  /** Returns the configured optimizer board-update strategy. */
-  public BoardUpdateStrategy getBoardUpdateStrategy() {
-    return commandLineOrFileValue(
-        s -> s.optimizer != null ? s.optimizer.boardUpdateStrategy : null);
-  }
-
-  /** Returns the configured optimizer item-selection strategy. */
-  public ItemSelectionStrategy getItemSelectionStrategy() {
-    return commandLineOrFileValue(
-        s -> s.optimizer != null ? s.optimizer.itemSelectionStrategy : null);
-  }
-
-  /** Returns the router options given on the command line, which are never persisted. */
-  RouterSettings getCommandLineRouterSettings() {
-    return commandLineRouterSettings;
-  }
-
-  /**
-   * Returns a router value from the command line when one was given, otherwise the value from
-   * {@code freerouting.json}.
-   */
-  private <T> T commandLineOrFileValue(Function<RouterSettings, T> getter) {
-    T commandLineValue = getter.apply(commandLineRouterSettings);
-    return commandLineValue != null ? commandLineValue : getter.apply(routerSettings);
   }
 
   public static final java.util.Set<String> DE_VALID_EXTENSIONS =

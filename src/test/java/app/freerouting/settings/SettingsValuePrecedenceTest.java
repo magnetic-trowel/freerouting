@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,24 +91,29 @@ class SettingsValuePrecedenceTest {
 
   @Test
   @SuppressWarnings("deprecation")
-  void dashedRouterPropertyIsCommandLineValueNotFileValue() {
+  void dashedRouterPropertyIsNotSavedAsFileValue() {
     GlobalSettings globalSettings = new GlobalSettings();
 
     globalSettings.applyCommandLineArguments(new String[] {"--router-autorouter-max_passes=5"});
 
-    assertEquals(5, globalSettings.getCommandLineRouterSettings().autorouter.maxPasses);
     assertEquals(null, globalSettings.routerSettings.autorouter.maxPasses);
   }
 
   @Test
-  void scoringVersionAliasesKeepTheirDashes() {
+  void scoringVersionAliasesNameTheScoringVersionFields() {
     assertEquals(
-        "router-scoring-version", CliSettings.normalizeRouterSeparators("router-scoring-version"));
+        List.of("router_scoring.version"),
+        RouterPropertyNames.fieldPaths("router-scoring-version"));
     assertEquals(
-        "optimizer-scoring-version",
-        CliSettings.normalizeRouterSeparators("optimizer-scoring-version"));
+        List.of("router_scoring.version"),
+        RouterPropertyNames.fieldPaths("router.scoring.version"));
     assertEquals(
-        "api_server-endpoints", CliSettings.normalizeRouterSeparators("api_server-endpoints"));
+        List.of("optimizer_scoring.version"),
+        RouterPropertyNames.fieldPaths("optimizer-scoring-version"));
+    assertEquals(
+        List.of("router_scoring.version", "optimizer_scoring.version"),
+        RouterPropertyNames.fieldPaths("scoring-version"));
+    assertEquals(List.of(), RouterPropertyNames.fieldPaths("api_server-endpoints"));
   }
 
   /**

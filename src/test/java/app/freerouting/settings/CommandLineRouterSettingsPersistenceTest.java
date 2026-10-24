@@ -71,7 +71,6 @@ class CommandLineRouterSettingsPersistenceTest {
     GlobalSettings globalSettings = startGuiSession(args);
 
     // The options are effective for this run.
-    assertEquals(3, globalSettings.getMaxPasses());
     assertEquals(3, mergeForThisRun(args).autorouter.maxPasses);
     assertEquals(1, mergeForThisRun(args).optimizer.maxPasses);
 
@@ -96,7 +95,7 @@ class CommandLineRouterSettingsPersistenceTest {
     writeConfigurationFile(
         "{ \"version\": \"%s\" }".formatted(GlobalSettings.getReleaseSafeVersion()));
     GlobalSettings globalSettings = startGuiSession(new String[] {"-mp", "5"});
-    assertEquals(5, globalSettings.getMaxPasses());
+    assertEquals(5, mergeForThisRun(new String[] {"-mp", "5"}).autorouter.maxPasses);
 
     GlobalSettings.saveAsJson(globalSettings);
 
@@ -153,7 +152,6 @@ class CommandLineRouterSettingsPersistenceTest {
     globalSettings.applyCommandLineArguments(
         new String[] {"--router.autorouter.max_passes=3", "-mp", "7", "-drc"});
 
-    assertEquals(7, globalSettings.getMaxPasses());
     @SuppressWarnings("deprecation") // checks the serialization bridge itself
     RouterSettings fileLayer = globalSettings.routerSettings;
     assertEquals(100, fileLayer.autorouter.maxPasses);

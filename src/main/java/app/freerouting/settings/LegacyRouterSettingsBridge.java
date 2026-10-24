@@ -24,24 +24,6 @@ public final class LegacyRouterSettingsBridge {
 
   private LegacyRouterSettingsBridge() {}
 
-  /**
-   * CLI or env path relative to {@code router.} (for example {@code max_passes} or {@code
-   * autorouter.max_passes}).
-   */
-  public static String canonicalCliPath(String routerRelativePath) {
-    String path = normalizeRelativePath(routerRelativePath);
-    return switch (path) {
-      case "enabled",
-          "max_passes",
-          "algorithm",
-          "max_items",
-          "save_intermediate_stages",
-          "ignore_net_classes" ->
-          "autorouter." + path;
-      default -> path;
-    };
-  }
-
   /** Returns true when {@code routerRelativePath} is a deprecated flat autorouter key. */
   public static boolean isDeprecatedFlatAutorouterPath(String routerRelativePath) {
     return FLAT_JSON_TO_NESTED.containsKey(normalizeRelativePath(routerRelativePath));

@@ -2,8 +2,11 @@ package app.freerouting.settings;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.sources.CliSettings;
 import app.freerouting.settings.sources.DefaultSettings;
+import app.freerouting.settings.sources.EnvironmentVariablesSource;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ScoringVersionSettingsTest {
@@ -25,6 +28,28 @@ class ScoringVersionSettingsTest {
 
     assertEquals(RouterScoringVersion.V2_CONTINUOUS, settings.routerScoring.version);
     assertEquals(OptimizerScoringVersion.V1_LEGACY, settings.optimizerScoring.version);
+  }
+
+  /** Every documented spelling selects the version, without an unknown-property warning. */
+  @Test
+  void documentedAliasesWorkOnTheCommandLineAndInTheEnvironment() {
+    FRLogger.getLogEntries().clear();
+    RouterSettings dotted =
+        new CliSettings(
+                new String[] {"--router.scoring.version=v1", "--optimizer.scoring.version=v1"})
+            .getSettings();
+    RouterSettings environment =
+        new EnvironmentVariablesSource(
+                Map.of(
+                    "FREEROUTING__ROUTER__SCORING__VERSION", "v1",
+                    "FREEROUTING__ROUTER__OPTIMIZER__SCORING__VERSION", "v1"))
+            .getSettings();
+
+    assertEquals(RouterScoringVersion.V1_LEGACY, dotted.routerScoring.version);
+    assertEquals(OptimizerScoringVersion.V1_LEGACY, dotted.optimizerScoring.version);
+    assertEquals(RouterScoringVersion.V1_LEGACY, environment.routerScoring.version);
+    assertEquals(OptimizerScoringVersion.V1_LEGACY, environment.optimizerScoring.version);
+    assertEquals(0, FRLogger.getLogEntries().getWarningCount());
   }
 
   @Test

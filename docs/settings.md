@@ -142,7 +142,7 @@ The primary way to configure Freerouting is through a JSON settings file. This f
   `FREEROUTING__ROUTER__MAX_PASSES`) still apply and warn until they are removed.
     - **`enabled`**: Whether the autorouter stage runs after fanout.
     - **`algorithm`**: Algorithm identifier (`freerouting-router` by default; legacy identifiers such as `freerouting-router-v19` safely normalize to `freerouting-router`).
-    - **`max_passes`**: Maximum autorouter passes. `0` means no limit.
+    - **`max_passes`**: Maximum autorouter passes. `0` means no limit; values above `9999` are capped at `9999`.
     - **`max_items`**: Maximum items attempted in the autorouter stage.
     - **`save_intermediate_stages`**: Save board snapshots between passes.
     - **`ignore_net_classes`**: Net class names the autorouter should skip.
@@ -202,8 +202,10 @@ The primary way to configure Freerouting is through a JSON settings file. This f
   Equations and a glossary for every symbol are in [docs/scoring.md](scoring.md).
 
 The router and optimizer versions are independent. CLI aliases are
-`--router-scoring-version=v1|v2`, `--optimizer-scoring-version=v1|v2`, and
-`--scoring-version=v1|v2` to select both.
+`--router.scoring.version=v1|v2` (or `--router-scoring-version`),
+`--optimizer.scoring.version=v1|v2` (or `--optimizer-scoring-version`), and
+`--scoring-version=v1|v2` to select both. The environment accepts the same names, for example
+`FREEROUTING__ROUTER__SCORING__VERSION=v1`.
 
 ##### **`optimizer` Sub-section**
 

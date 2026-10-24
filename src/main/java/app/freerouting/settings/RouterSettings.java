@@ -1213,17 +1213,19 @@ public class RouterSettings implements Serializable, Cloneable {
   public void validateAgainstBoard(RoutingBoard board) {
     this.validationWarnings = new ArrayList<>();
 
-    // Validate maxPasses (0 means no limit)
+    // Validate maxPasses (0 means no limit, at most 9999 passes otherwise)
     if (this.autorouter != null && this.autorouter.maxPasses != null) {
-      if (this.autorouter.maxPasses < 0
-          || (this.autorouter.maxPasses > 9999 && this.autorouter.maxPasses != Integer.MAX_VALUE)) {
+      int maxPasses = this.autorouter.maxPasses;
+      if (maxPasses < 0 || (maxPasses > 9999 && maxPasses != Integer.MAX_VALUE)) {
+        int corrected = maxPasses < 0 ? 0 : 9999;
         String warning =
             "Invalid maxPasses value: "
-                + this.autorouter.maxPasses
-                + ", using default 0 (no limit)";
+                + maxPasses
+                + ", using "
+                + (corrected == 0 ? "0 (no limit)" : "the maximum " + corrected);
         FRLogger.warn(warning);
         this.validationWarnings.add(warning);
-        this.autorouter.maxPasses = 0;
+        this.autorouter.maxPasses = corrected;
       }
     }
 

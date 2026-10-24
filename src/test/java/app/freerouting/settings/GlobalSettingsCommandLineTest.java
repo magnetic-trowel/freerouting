@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import app.freerouting.settings.sources.CliSettings;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -167,7 +168,6 @@ class GlobalSettingsCommandLineTest {
     assertEquals("myboard.dsn", settings.initialInputFile);
     assertEquals("myboard.ses", settings.designSessionFilename);
     assertEquals("output.ses", settings.initialOutputFile);
-    assertEquals(10, settings.getMaxPasses());
   }
 
   @Test
@@ -377,13 +377,19 @@ class GlobalSettingsCommandLineTest {
 
   @Test
   void optimizerImprovementThresholdIsAlwaysPercent() {
-    OptimizerSettings commandLineOptimizer = settings.getCommandLineRouterSettings().optimizer;
-
-    settings.applyCommandLineArguments(
-        new String[] {"--router.optimizer.improvement_threshold=0.5"});
-    assertEquals(0.5f, commandLineOptimizer.optimizationImprovementThreshold, 0.0001f);
-
-    settings.applyCommandLineArguments(new String[] {"-oit", "0.035"});
-    assertEquals(0.035f, commandLineOptimizer.optimizationImprovementThreshold, 0.0001f);
+    assertEquals(
+        0.5f,
+        new CliSettings(new String[] {"--router.optimizer.improvement_threshold=0.5"})
+            .getSettings()
+            .optimizer
+            .optimizationImprovementThreshold,
+        0.0001f);
+    assertEquals(
+        0.035f,
+        new CliSettings(new String[] {"-oit", "0.035"})
+            .getSettings()
+            .optimizer
+            .optimizationImprovementThreshold,
+        0.0001f);
   }
 }
