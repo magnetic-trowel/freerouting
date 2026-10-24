@@ -173,7 +173,7 @@ If `Freerouting-Environment-Host` is absent or does not match the `<ToolName>/<V
   **Parameters:**
     - `sessionId` *(required)*: The unique identifier of the session.
 
-  **Description:** Retrieves a JSON array of all log entries recorded for a specific session.
+  **Description:** Retrieves a JSON array of the log entries of the session's jobs (those the scheduler still keeps), oldest first.
 
 ---
 

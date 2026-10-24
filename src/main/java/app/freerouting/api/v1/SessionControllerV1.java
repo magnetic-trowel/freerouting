@@ -28,6 +28,8 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -228,7 +230,7 @@ public class SessionControllerV1 extends BaseController {
    */
   @Operation(
       summary = "Get session logs",
-      description = "Retrieves all log entries associated with a specific routing session.")
+      description = "Retrieves the log entries of the routing jobs of a session, oldest first.")
   @ApiResponses(
       value = {
         @ApiResponse(
@@ -261,8 +263,12 @@ public class SessionControllerV1 extends BaseController {
       return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
     }
 
-    var logEntries = FRLogger.getLogEntries();
-    var logs = logEntries.getEntries(null, session.id);
+    // Jobs log under their own id: the session's log is the log of the jobs the scheduler keeps.
+    List<UUID> jobIds =
+        Arrays.stream(RoutingJobScheduler.getInstance().listJobs(session.id.toString()))
+            .map(job -> job.id)
+            .toList();
+    var logs = FRLogger.getLogEntries().getEntriesOfTopics(null, jobIds);
 
     var response = GSON.toJson(logs);
     FRAnalytics.apiEndpointCalled("GET v1/sessions/" + sessionId + "/logs", "", response, userId);

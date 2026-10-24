@@ -2,11 +2,13 @@ package app.freerouting.logger;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
@@ -147,6 +149,23 @@ public class LogEntries {
       return ofTopic == null
           ? new LogEntry[0]
           : ofTopic.stream().filter(since).toArray(LogEntry[]::new);
+    }
+  }
+
+  /**
+   * Returns the entries of any of {@code topics}, for example of all jobs of one session, oldest
+   * first.
+   *
+   * @param entriesSince only entries after this instant, or {@code null} for all
+   * @param topics the topics whose entries are returned
+   */
+  public LogEntry[] getEntriesOfTopics(Instant entriesSince, Collection<UUID> topics) {
+    Set<UUID> wanted = Set.copyOf(topics);
+    synchronized (entries) {
+      return entries.stream()
+          .filter(e -> e.topic != null && wanted.contains(e.topic))
+          .filter(e -> entriesSince == null || e.timestamp.isAfter(entriesSince))
+          .toArray(LogEntry[]::new);
     }
   }
 
