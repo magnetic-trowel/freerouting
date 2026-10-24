@@ -96,6 +96,15 @@ What changed, in order of measured effect:
   changes used different locks).
 - `ReflectionUtil.copyFields` copies primitive and String arrays instead of sharing them between
   the source and the merged settings.
+- Command-line options and `FREEROUTING__*` environment variables apply to their run only: a GUI
+  save no longer stores them in `freerouting.json` (a one-off
+  `--api_server.authentication.enabled=false` became the default of later headless servers), nor
+  runtime state such as a failed server start or a derived MCP target address. The analytics
+  opt-out is the one value that is kept.
+- The API server keeps at most 200 finished jobs and the routed boards of the newest ones only
+  (twice `max_parallel_jobs`); session eviction never picks the GUI session or one with an active
+  job; the in-memory log keeps at most 20,000 entries (2,000 per job) with bounded exceptions, and
+  drops a job's entries with the job. Before, all of these grew until 5,000 jobs or sessions.
 - `Item.setFixedState` and `unfix` were invisible to the shove-check cache (the content version
   does not count the fixed state), so a cached answer could reflect fixed states that
   `DirectPinRouting` had already restored.
@@ -200,10 +209,14 @@ Pipeline and jobs:
   but changes which strategy wins elsewhere.
 - `router.fanout.timeout` hands the partially fanned-out board to the autorouter, so the routing
   depends on machine speed when that timeout is set.
-- Finished jobs keep their board, input and output until 5000 jobs exist; session eviction at 5000
-  picks an arbitrary session, possibly one with a running job.
-- CLI router arguments given at a GUI launch are written into `freerouting.json` and apply to every
-  later CLI and API run.
+- `GET /v1/sessions/{id}/logs` is always empty: nothing logs with a session id as topic.
+- A log listener that throws propagates into the thread that logged, possibly a routing thread.
+- `GlobalSettings.setDefaultValue` edits a fresh copy of the file, so the long-lived session copy
+  overwrites it at its next save for paths the command line did not set; floats are rounded to two
+  decimals when the settings are saved.
+- The router reports a connection ROUTED without checking that the inserted path reaches its
+  target (`AutorouteEngine.autorouteConnection`); off-centre fixed track ends made this loop
+  silently on caniot.
 
 ## Opportunities, ranked by expected value
 
