@@ -192,7 +192,10 @@ public class GuiManager {
         routingJob.tryToSetOutputFile(new File(globalSettings.initialOutputFile));
 
         // we need to set up a listener to save the design file when the autorouter is
-        // running
+        // running. The listener is called on the routing thread right after the worker queued
+        // its completion (which restores the board's read-only state) on the EDT, so the export
+        // must also run on the EDT: otherwise the read-only board makes the DSN and SCR exports
+        // fail and the application exits without writing the (already deleted) output file.
         newFrame.boardPanel.boardHandling.autorouterListener =
             new ThreadActionListener() {
               @Override
@@ -200,18 +203,22 @@ public class GuiManager {
 
               @Override
               public void autorouterAborted() {
-                exportBoardToFile(
-                    newFrame,
-                    globalSettings.initialOutputFile,
-                    globalSettings.guiSettings.exitWhenFinished);
+                SwingUtilities.invokeLater(
+                    () ->
+                        exportBoardToFile(
+                            newFrame,
+                            globalSettings.initialOutputFile,
+                            globalSettings.guiSettings.exitWhenFinished));
               }
 
               @Override
               public void autorouterFinished() {
-                exportBoardToFile(
-                    newFrame,
-                    globalSettings.initialOutputFile,
-                    globalSettings.guiSettings.exitWhenFinished);
+                SwingUtilities.invokeLater(
+                    () ->
+                        exportBoardToFile(
+                            newFrame,
+                            globalSettings.initialOutputFile,
+                            globalSettings.guiSettings.exitWhenFinished));
               }
             };
 

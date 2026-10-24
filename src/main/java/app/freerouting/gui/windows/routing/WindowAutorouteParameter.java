@@ -71,6 +71,10 @@ public class WindowAutorouteParameter extends BoardSavableSubWindow {
   private boolean maxThreadsInputCompleted = true;
   // Flag to prevent circular updates between GUI and settings
   private boolean isUpdatingFromSettings;
+  // The job's settings outlive this window (the job is reused when another board is loaded), so
+  // the listener must be removed again on dispose.
+  private RouterSettings observedSettings;
+  private java.beans.PropertyChangeListener settingsListener;
 
   /** Creates a new instance of WindowAutorouteParameter. */
   public WindowAutorouteParameter(BoardFrame boardFrame) {
@@ -504,10 +508,9 @@ public class WindowAutorouteParameter extends BoardSavableSubWindow {
     clampWindowHeight(this, boardFrame);
 
     // Register as listener for settings changes (bidirectional binding)
-    this.boardHandling
-        .getCurrentRoutingJob()
-        .routerSettings
-        .addPropertyChangeListener(this::onSettingsChanged);
+    this.observedSettings = this.boardHandling.getCurrentRoutingJob().routerSettings;
+    this.settingsListener = this::onSettingsChanged;
+    this.observedSettings.addPropertyChangeListener(this.settingsListener);
   }
 
   public static int normalizeIntInput(Object input, int oldValue, int minValue, int maxValue) {
@@ -660,6 +663,10 @@ public class WindowAutorouteParameter extends BoardSavableSubWindow {
 
   @Override
   public void dispose() {
+    if (observedSettings != null) {
+      observedSettings.removePropertyChangeListener(settingsListener);
+      observedSettings = null;
+    }
     super.dispose();
   }
 

@@ -32,6 +32,11 @@ public class BoardFrameFileActions {
     if (selectedFile == null) {
       return;
     }
+    // Opening a file replaces the current board, so offer to save unsaved changes first (the
+    // drag-and-drop path already asks; the menu path silently discarded them).
+    if (!boardFrame.confirmSaveBeforeLoad(boardFrame)) {
+      return;
+    }
 
     try {
       boardFrame.routingJob.setInput(selectedFile);

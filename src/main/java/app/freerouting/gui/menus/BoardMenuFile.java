@@ -122,8 +122,9 @@ public class BoardMenuFile extends JMenu {
     // Set a file filter as the default one
     fileChooser.setFileFilter(dsnFilter);
 
-    fileChooser.showOpenDialog(parent);
-    return fileChooser.getSelectedFile();
+    // getSelectedFile() keeps the last clicked file after Cancel, so ignore it unless approved.
+    int result = fileChooser.showOpenDialog(parent);
+    return result == JFileChooser.APPROVE_OPTION ? fileChooser.getSelectedFile() : null;
   }
 
   /**

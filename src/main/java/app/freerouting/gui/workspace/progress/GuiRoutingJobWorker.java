@@ -575,7 +575,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
       }
       FRLogger.traceEntry("BatchAutorouterThread.thread_action()-autorouting");
 
-      globalSettings.statistics.incrementJobsCompleted();
+      globalSettings.statistics.incrementJobsStarted();
       FRAnalytics.autorouterStarted();
 
       String inputFormat =
