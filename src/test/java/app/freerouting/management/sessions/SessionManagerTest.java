@@ -12,6 +12,7 @@ import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
+import app.freerouting.logger.FRLogger;
 import app.freerouting.management.jobs.RoutingJobScheduler;
 import app.freerouting.settings.GlobalSettings;
 import java.util.List;
@@ -148,6 +149,7 @@ public class SessionManagerTest {
     Session idleWithResult = manager.createSession(UUID.randomUUID(), "Test/1.0");
     RoutingJob queued = job(busy, RoutingJobState.QUEUED);
     RoutingJob finished = job(idleWithResult, RoutingJobState.COMPLETED);
+    finished.logInfo("result of an idle session");
     addJobs(scheduler, queued, finished);
     try {
       final Session first = manager.createSession(UUID.randomUUID(), "Test/1.0");
@@ -164,6 +166,10 @@ public class SessionManagerTest {
       assertNull(manager.getSession(idleWithResult.id.toString()), "the next oldest idle goes");
       assertNull(
           scheduler.getJob(finished.id.toString()), "its finished jobs are no longer reachable");
+      assertEquals(
+          0,
+          FRLogger.getLogEntries().getEntries(null, finished.id).length,
+          "and their log entries are dropped");
       assertSame(queued, scheduler.getJob(queued.id.toString()), "active jobs are never removed");
       assertNotNull(manager.getSession(primary.id.toString()));
       assertNotNull(manager.getSession(busy.id.toString()));

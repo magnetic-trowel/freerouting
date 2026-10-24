@@ -20,6 +20,7 @@ import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.io.specctra.DsnTestFixtures;
+import app.freerouting.logger.FRLogger;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.ApiServerSettings;
 import app.freerouting.settings.GlobalSettings;
@@ -242,6 +243,35 @@ class RoutingJobRetentionTest {
       if (createdPrimary) {
         sessions.removeSession(primary.id.toString());
       }
+    }
+  }
+
+  @Test
+  void removedJobsTakeTheirLogEntriesWhileTheEndpointServesRunningJobs() {
+    apiServer().maxFinishedJobs = 1;
+    UUID userId = UUID.randomUUID();
+    Session session = SessionManager.getInstance().createSession(userId, "Test/1.0");
+    RoutingJob evicted = finished(session.id, RoutingJobState.COMPLETED, 1);
+    RoutingJob kept = finished(session.id, RoutingJobState.COMPLETED, 2);
+    RoutingJob running = active(session.id, RoutingJobState.RUNNING);
+    evicted.logInfo("message of the evicted job");
+    kept.logInfo("message of the kept job");
+    running.logInfo("message of the running job");
+    add(evicted, kept, running);
+
+    scheduler.enforceRetention();
+
+    assertNull(scheduler.getJob(evicted.id.toString()));
+    assertEquals(0, FRLogger.getLogEntries().getEntries(null, evicted.id).length);
+    assertEquals(1, FRLogger.getLogEntries().getEntries(null, kept.id).length);
+    JobProgressResource progress = new JobProgressResource();
+    progress.setUserIdOverride(userId);
+    try (Response response = progress.logs(running.id.toString())) {
+      assertEquals(200, response.getStatus());
+      assertTrue(((String) response.getEntity()).contains("message of the running job"));
+    }
+    try (Response response = progress.logs(evicted.id.toString())) {
+      assertEquals(404, response.getStatus());
     }
   }
 

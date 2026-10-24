@@ -83,6 +83,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.JToolBar;
+import javax.swing.SwingUtilities;
 
 /** Graphical frame containing the Menu, Toolbar, Canvas and Status bar. */
 public class BoardFrame extends WindowBase {
@@ -229,14 +230,14 @@ public class BoardFrame extends WindowBase {
           scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
           scrollPane.setPreferredSize(new Dimension(1000, 600));
 
-          // Append the new log entries to the text area
+          // Append the new log entries to the text area; routing threads log, Swing paints.
           logEntryAddedListener =
               (LogEntry logEntry) -> {
                 var type = logEntry.getType();
                 if (type == LogEntryType.Error
                     || type == LogEntryType.Warning
                     || type == LogEntryType.Info) {
-                  textArea.append(logEntry + "\n");
+                  SwingUtilities.invokeLater(() -> textArea.append(logEntry + "\n"));
                 }
               };
           logEntries.addLogEntryAddedListener(logEntryAddedListener);
@@ -246,8 +247,14 @@ public class BoardFrame extends WindowBase {
                   ? JOptionPane.ERROR_MESSAGE
                   : JOptionPane.WARNING_MESSAGE;
 
-          JOptionPane.showMessageDialog(
-              null, scrollPane, tm.getText("logs_window_title"), messageType);
+          try {
+            JOptionPane.showMessageDialog(
+                null, scrollPane, tm.getText("logs_window_title"), messageType);
+          } finally {
+            // The dialog is modal: once it is closed, its text area must stop growing.
+            logEntries.removeLogEntryAddedListener(logEntryAddedListener);
+            logEntryAddedListener = null;
+          }
         });
 
     // Toolbar for inspected items (e.g. when a component is selected)

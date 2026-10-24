@@ -101,6 +101,11 @@ touched. A caller that reads the final board itself (CLI, `POST /v1/autoroute`) 
 thread. `management.sessions.SessionManager` evicts the oldest session that is neither primary nor
 has an active job, together with its finished jobs.
 
+The in-memory log behind the GUI log window and the job log endpoints, `logger.LogEntries`, is
+bounded too: 20,000 entries in total and 2,000 per topic (job), oldest first, messages cut at 2,000
+characters, and bounded exception snapshots for the newest 200 errors only. The scheduler drops a
+job's entries when it removes the job. Log4j's console and file output are not limited.
+
 ## Repository Layout
 
 | Path | Purpose |

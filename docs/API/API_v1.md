@@ -263,7 +263,7 @@ If `Freerouting-Environment-Host` is absent or does not match the `<ToolName>/<V
   **Parameters:**
     - `jobId` *(required)*: The unique identifier of the job.
 
-  **Description:** Retrieves a JSON array of all log entries recorded for a specific job.
+  **Description:** Retrieves a JSON array of the log entries recorded for a specific job, oldest first. The server keeps the newest 2,000 entries of each job, at most 20,000 entries in total, and messages of up to 2,000 characters; the entries of a job are dropped when the job is removed (see `api_server.max_finished_jobs`). The console and file logs keep everything.
 
 - **Get log entries in real-time as a stream**
 

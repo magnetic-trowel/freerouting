@@ -33,6 +33,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
@@ -467,8 +468,19 @@ public final class RoutingJobScheduler {
     Set<RoutingJob> evicted = Collections.newSetFromMap(new IdentityHashMap<>());
     evicted.addAll(finished.subList(keep, finished.size()));
     this.jobs.removeIf(evicted::contains);
+    forgetLogs(evicted);
     FRLogger.debug("Removed the " + evicted.size() + " oldest finished routing jobs.");
     return keep;
+  }
+
+  /**
+   * Drops the in-memory log entries of removed jobs: the job log endpoints answer 404 for them, and
+   * the console and file logs keep the messages.
+   */
+  private static void forgetLogs(Iterable<RoutingJob> removedJobs) {
+    for (RoutingJob job : removedJobs) {
+      FRLogger.getLogEntries().removeTopic(job.id);
+    }
   }
 
   /**
@@ -525,14 +537,24 @@ public final class RoutingJobScheduler {
   }
 
   /**
-   * Removes the finished jobs of a session; jobs that are still active stay.
+   * Removes the finished jobs of a session and their in-memory log entries; jobs that are still
+   * active stay.
    *
    * @param sessionId the session identifier
    */
   public void removeFinishedJobs(UUID sessionId) {
+    List<RoutingJob> removed = new ArrayList<>();
     synchronized (jobs) {
-      this.jobs.removeIf(j -> j != null && sessionId.equals(j.sessionId) && isFinished(j));
+      Iterator<RoutingJob> queue = this.jobs.iterator();
+      while (queue.hasNext()) {
+        RoutingJob job = queue.next();
+        if (job != null && sessionId.equals(job.sessionId) && isFinished(job)) {
+          queue.remove();
+          removed.add(job);
+        }
+      }
     }
+    forgetLogs(removed);
   }
 
   private String uuidToShortCode(UUID uuid) {
