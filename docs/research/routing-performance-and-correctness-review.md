@@ -168,11 +168,11 @@ Geometry and DRC:
   lose area, and a keepout with a `(window ...)` lost 57% of its coverage in one repro, so traces
   route through solid keepout and DRC does not see it. The first-division-line merge is the main
   cause; limiting it to corners that start a ray cut the failure rate from 954 to 79 in 50,000 pairs,
-  so a complete fix needs a rework with property tests. A fix is held on a local branch: the
-  division's result is checked (no overlap with the cut shape or between pieces, areas add up) and
-  an exact half-plane sweep replaces it when the check fails; the fuzz harness then finds no
-  failure at any coordinate scale. Only Issue756 tomu-fpga8/9 have areas with holes in the
-  fixtures.
+  so a complete fix needs a rework with property tests. Fixed on this branch: the division's
+  result is checked (no overlap with the cut shape or between pieces, areas add up) and an exact
+  half-plane sweep replaces it when the check fails; the fuzz harness then finds no failure at any
+  coordinate scale. Only Issue756 tomu-fpga8/9 have areas with holes in the fixtures, and both
+  route to identical session files.
 - Plane nets: an item counts as connected (CONNECTED_TO_PLANE) as soon as its connected set touches
   the pour polygon, but foreign-net tracks routed through the pour can cut it off from the actual
   fill. On tairakb pad U3-23 ends up connected to neither GND pour and nothing reports it.
