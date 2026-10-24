@@ -31,20 +31,6 @@ public class Via extends DrillItem implements Serializable {
   /** True, if coppersharing of this via with smd pins of the same net is allowed. */
   public final boolean attachAllowed;
 
-  /**
-   * True if this is an escape via inserted by the escalation fanout phase to provide a layer
-   * transition point from an SMD pin that could not be escaped on its primary layer. Escape vias
-   * use SMD-to-SMD clearance rules on their SMD layer rather than normal conductor-to-conductor
-   * clearance, because they sit inside the SMD pad copper footprint.
-   */
-  public boolean isEscapeVia;
-
-  /**
-   * The SMD layer (primary layer) on which this escape via connects to an SMD pin. Only relevant
-   * when isEscapeVia is true. -1 if not an escape via.
-   */
-  public int escapeViaSmdLayer = -1;
-
   private Padstack padstack;
   private transient Shape[] precalculatedShapes;
 
@@ -69,46 +55,16 @@ public class Via extends DrillItem implements Serializable {
 
   @Override
   public Item copy(int id) {
-    Via copy =
-        new Via(
-            padstack,
-            getCenter(),
-            netNumbers,
-            clearanceClassIndex(),
-            id,
-            getComponentId(),
-            getFixedState(),
-            attachAllowed,
-            board);
-    copy.isEscapeVia = this.isEscapeVia;
-    copy.escapeViaSmdLayer = this.escapeViaSmdLayer;
-    return copy;
-  }
-
-  @Override
-  public java.util.Collection<app.freerouting.drc.ClearanceViolation> clearanceViolations() {
-    java.util.Collection<app.freerouting.drc.ClearanceViolation> rawViolations =
-        super.clearanceViolations();
-    if (!this.isEscapeVia || this.escapeViaSmdLayer < 0) {
-      return rawViolations;
-    }
-    java.util.Collection<app.freerouting.drc.ClearanceViolation> filteredViolations =
-        new java.util.LinkedList<>();
-    for (app.freerouting.drc.ClearanceViolation violation : rawViolations) {
-      if (violation.layer == this.escapeViaSmdLayer) {
-        Item other = null;
-        if (violation.firstItem == this) {
-          other = violation.secondItem;
-        } else if (violation.secondItem == this) {
-          other = violation.firstItem;
-        }
-        if (other != null && other.sharesNet(this)) {
-          continue;
-        }
-      }
-      filteredViolations.add(violation);
-    }
-    return filteredViolations;
+    return new Via(
+        padstack,
+        getCenter(),
+        netNumbers,
+        clearanceClassIndex(),
+        id,
+        getComponentId(),
+        getFixedState(),
+        attachAllowed,
+        board);
   }
 
   @Override

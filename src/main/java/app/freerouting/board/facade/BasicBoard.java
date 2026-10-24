@@ -344,41 +344,6 @@ public class BasicBoard implements Serializable {
   }
 
   /**
-   * Inserts a special escape via into the board for the fanout escalation phase. An escape via sits
-   * directly on top of an SMD pin to provide a layer transition to an inner routing layer. On the
-   * SMD layer it uses SMD-to-SMD clearance rules (because its copper is inside the SMD pad
-   * footprint); on inner layers it uses normal via clearance.
-   *
-   * @param padstack The padstack describing the via geometry
-   * @param center The center point (at the SMD pin center)
-   * @param netNumbers The net numbers
-   * @param clearanceClassIndex The clearance class index to use
-   * @param fixedState The fixed state
-   * @param smdLayer The SMD layer where the pin lives (clearance exception layer)
-   */
-  public Via insertEscapeVia(
-      Padstack padstack,
-      Point center,
-      int[] netNumbers,
-      int clearanceClassIndex,
-      FixedState fixedState,
-      int smdLayer) {
-    Via newVia =
-        new Via(padstack, center, netNumbers, clearanceClassIndex, 0, 0, fixedState, true, this);
-    newVia.isEscapeVia = true;
-    newVia.escapeViaSmdLayer = smdLayer;
-    insertItem(newVia);
-    int fromLayer = padstack.fromLayer();
-    int toLayer = padstack.toLayer();
-    for (int i = fromLayer; i <= toLayer; i++) {
-      for (int currentNetNumber : netNumbers) {
-        splitTraces(center, i, currentNetNumber);
-      }
-    }
-    return newVia;
-  }
-
-  /**
    * Inserts a pin into the board. pinIndex is the index of this pin in the library package of its
    * component (starting with 0).
    */
