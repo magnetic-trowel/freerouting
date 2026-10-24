@@ -44,10 +44,9 @@ public final class BatchFanout {
     this.thread = thread;
     this.routingBoard = board;
     this.settings = settings;
-    String sortingOrder =
-        settings.fanout != null && settings.fanout.pinSortingOrder != null
-            ? settings.fanout.pinSortingOrder
-            : "outer_first";
+    PinSortingOrder sortingOrder =
+        PinSortingOrder.fromSetting(
+            settings.fanout != null ? settings.fanout.pinSortingOrder : null);
     Collection<app.freerouting.board.model.items.Pin> boardSmdPinList = routingBoard.getSmdPins();
     // Filter out SMD pins that belong to no net or an ignored net class — they don't need
     // fanout and would inflate total pin counts and escape statistics.
@@ -716,12 +715,12 @@ public final class BatchFanout {
     /** The center of gravity of all SMD pins of this component. */
     final FloatPoint gravityCenterOfSmdPins;
 
-    final String pinSortingOrder;
+    final PinSortingOrder pinSortingOrder;
 
     Component(
         app.freerouting.board.model.structure.Component boardComponent,
         Collection<app.freerouting.board.model.items.Pin> boardSmdPinList,
-        String pinSortingOrder,
+        PinSortingOrder pinSortingOrder,
         RoutingBoard routingBoard) {
       this.boardComponent = boardComponent;
       this.pinSortingOrder = pinSortingOrder;
@@ -819,36 +818,18 @@ public final class BatchFanout {
 
       @Override
       public int compareTo(Pin other) {
-        int result = 0;
-        if ("inner_first".equals(pinSortingOrder)) {
-          double deltaDist = this.distanceToComponentCenter - other.distanceToComponentCenter;
-          if (deltaDist > 0) {
-            result = 1;
-          } else if (deltaDist < 0) {
-            result = -1;
-          }
-        } else if ("outer_first".equals(pinSortingOrder)) {
-          double deltaDist = this.distanceToComponentCenter - other.distanceToComponentCenter;
-          if (deltaDist > 0) {
-            result = -1;
-          } else if (deltaDist < 0) {
-            result = 1;
-          }
-        } else if ("distanceToClosestOnNet".equals(pinSortingOrder)) {
-          double delta = this.distanceToClosestOnNet - other.distanceToClosestOnNet;
-          if (delta > 0) {
-            result = 1;
-          } else if (delta < 0) {
-            result = -1;
-          }
-        } else if ("surroundingsDensity".equals(pinSortingOrder)) {
-          int delta = other.surroundingsDensity - this.surroundingsDensity; // densest first
-          if (delta > 0) {
-            result = 1;
-          } else if (delta < 0) {
-            result = -1;
-          }
-        }
+        int result =
+            switch (pinSortingOrder) {
+              case INNER_FIRST ->
+                  Double.compare(this.distanceToComponentCenter, other.distanceToComponentCenter);
+              case OUTER_FIRST ->
+                  Double.compare(other.distanceToComponentCenter, this.distanceToComponentCenter);
+              case DISTANCE_TO_CLOSEST_ON_NET ->
+                  Double.compare(this.distanceToClosestOnNet, other.distanceToClosestOnNet);
+              case SURROUNDINGS_DENSITY -> // densest first
+                  Integer.compare(other.surroundingsDensity, this.surroundingsDensity);
+              case UNSORTED -> 0;
+            };
         if (result == 0) {
           result = this.boardPin.pinIndex - other.boardPin.pinIndex;
         }

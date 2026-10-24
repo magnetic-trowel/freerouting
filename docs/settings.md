@@ -270,6 +270,8 @@ Configures the SMD-pin fanout pre-pass stage.
     - `"surroundings_density"`: Measured by the count of SMD pins within a 20 mm proximity radius. Denser areas are processed first, allowing congested pins to escape before space is occupied.
     - `"unsorted"`: Pins are processed by pin number sequence.
 
+  Case, `_` and `-` are ignored, so the older `distanceToClosestOnNet` and `surroundingsDensity` spellings still work. An unknown value logs a warning and uses pin number sequence.
+
 #### **`usage_and_diagnostic_data` Section**
 
 - **`disable_analytics`**: Disables sending anonymous usage and diagnostic data.

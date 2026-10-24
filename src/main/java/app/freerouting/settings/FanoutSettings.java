@@ -87,9 +87,10 @@ public class FanoutSettings implements Serializable, Cloneable {
   public Double endViaDiameterMm;
 
   /**
-   * The sorting order for SMD pins within a component. "inner_first" (v1.9 default) - pins closer
-   * to the component center first. "outer_first" - pins further from the component center first.
-   * "unsorted" - sorted by pin number only.
+   * The sorting order for SMD pins within a component: "outer_first" (default), "inner_first" (v1.9
+   * default), "distance_to_closest_on_net", "surroundings_density" or "unsorted" (pin number only).
+   * Case, "_" and "-" are ignored, so the older camelCase spellings still work; see
+   * docs/settings.md.
    */
   @SerializedName("pin_sorting_order")
   public String pinSortingOrder;
