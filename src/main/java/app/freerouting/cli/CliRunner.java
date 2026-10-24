@@ -257,13 +257,12 @@ public final class CliRunner {
       for (String addPathStr : globalSettings.additionalOutputFiles) {
         try {
           Path addPath = Path.of(addPathStr);
-          FileFormat fmt = RoutingJob.getFileFormat(addPath);
-          if (fmt == FileFormat.UNKNOWN) {
-            String lower = addPathStr.toLowerCase(Locale.ROOT);
-            if (lower.endsWith(".drc.json") || lower.endsWith(".drc")) {
-              fmt = FileFormat.DRC_JSON;
-            }
-          }
+          // Check the DRC suffixes first: "report.drc.json" has the extension of a KiCad JSON file.
+          String lower = addPathStr.toLowerCase(Locale.ROOT);
+          FileFormat fmt =
+              lower.endsWith(".drc.json") || lower.endsWith(".drc")
+                  ? FileFormat.DRC_JSON
+                  : RoutingJob.getFileFormat(addPath);
           if (fmt != FileFormat.UNKNOWN) {
             var outResult =
                 app.freerouting.io.MultiOutputGenerator.generateOutputs(

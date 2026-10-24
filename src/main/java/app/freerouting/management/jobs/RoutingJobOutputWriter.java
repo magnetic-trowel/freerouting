@@ -3,6 +3,7 @@ package app.freerouting.management.jobs;
 import app.freerouting.core.BoardFileDetails;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.io.FileFormat;
+import app.freerouting.io.specctra.DsnWriter;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.management.HeadlessBoardManager;
 import java.io.ByteArrayOutputStream;
@@ -42,6 +43,10 @@ final class RoutingJobOutputWriter {
             saved = manager.saveAsSpecctraSessionSes(buffer, job.name);
           } else if (job.output.format == FileFormat.SCR) {
             saved = manager.saveAsFusionScriptScr(buffer, job.name);
+          } else if (job.output.format == FileFormat.DSN) {
+            // The documented "-do board.dsn": the design with its routing in the wiring scope.
+            DsnWriter.write(job.board, buffer, job.name, false);
+            saved = true;
           } else {
             throw new java.io.IOException("Unsupported routing output format");
           }

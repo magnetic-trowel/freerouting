@@ -63,6 +63,27 @@ class CliOutputLifecycleTest {
   }
 
   @Test
+  void drcJsonAdditionalOutputIsDrcReport(@TempDir Path directory) throws Exception {
+    app.freerouting.Freerouting.globalSettings = new GlobalSettings();
+    Path report = directory.resolve("report.drc.json");
+    GlobalSettings settings = new GlobalSettings();
+    settings.initialOutputFile = directory.resolve("result.ses").toString();
+    settings.additionalOutputFiles.add(report.toString());
+    RoutingJob job = new RoutingJob();
+    job.state = RoutingJobState.COMPLETED;
+    job.board =
+        app.freerouting.io.specctra.DsnTestFixtures.loadBoard("scoring-perfect-two-pin.dsn");
+    job.output = new BoardFileDetails();
+    job.output.setData("(session published)".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+    assertTrue(CliRunner.writeCliOutputIfAvailable(settings, job));
+
+    String written = Files.readString(report);
+    assertTrue(written.contains("\"unconnectedItems\""), written);
+    assertTrue(written.contains("schemas.kicad.org/drc"), written);
+  }
+
+  @Test
   void completedOutputIsNotPartial() {
     RoutingJob job = new RoutingJob();
     job.state = RoutingJobState.COMPLETED;
