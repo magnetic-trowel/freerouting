@@ -513,6 +513,8 @@ POST /v1/autoroute
 }
 ```
 
+Instead of the `*_content` fields, a client on the same machine can name local files with `file_path`, `rules_path` and `session_path`. The server reads them only while every `api_server.endpoints` entry is a loopback address, or, when `api_server.local_file_root` is set, only files under that directory (resolved with symbolic links, so `..` and links cannot leave it). Files larger than 100 MB are refused. A server reachable from the network without `local_file_root` answers **400** with an explanation; send the file content instead.
+
 **Response body:**
 
 ```json

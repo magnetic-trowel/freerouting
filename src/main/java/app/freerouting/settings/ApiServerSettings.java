@@ -37,6 +37,14 @@ public class ApiServerSettings implements Serializable {
   public RateLimitSettings rateLimit = new RateLimitSettings();
 
   /**
+   * Directory whose files clients may name by path (local-file inputs and outputs). Unset: local
+   * paths are allowed only while every endpoint is a loopback address. See {@code
+   * app.freerouting.api.LocalFileAccess}.
+   */
+  @SerializedName("local_file_root")
+  public String localFileRoot;
+
+  /**
    * Maximum number of routing jobs the scheduler runs concurrently. Defaults to null (resolved at
    * runtime dynamically as {@code max(1, CPU cores - 1)}).
    */

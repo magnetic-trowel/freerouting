@@ -305,6 +305,9 @@ Configures the SMD-pin fanout pre-pass stage.
   - `enabled`: Enable/disable API-side rate limiting.
   - `requests_per_window`: Maximum accepted requests per identity in each window. An authenticated request counts against its API key, any other request against its address. Failed API-key attempts (missing or invalid key) count separately against their address under the same limit: once they fill the window, further requests from that address get `429` without their key being checked, until the window ends.
   - `window_seconds`: Window duration in seconds.
+- **`local_file_root`**: Directory whose files clients may name by path in `POST /v1/autoroute` (`file_path`, `rules_path`, `session_path`). Unset (default): local paths are accepted only while every `endpoints` entry is a loopback address (`127.0.0.1`, `::1`, `localhost`), and refused when the server is reachable from the network. Set: only files under this directory are accepted, after resolving `..` and symbolic links. Files larger than 100 MB are always refused.
+  - CLI: `--api_server.local_file_root=/srv/boards`
+  - Env var: `FREEROUTING__API_SERVER__LOCAL_FILE_ROOT=/srv/boards`
 - **`max_parallel_jobs`**: Maximum number of routing jobs the scheduler runs concurrently (default: `CPU cores - 1`, minimum `1`). Setting to `0` or omitting triggers auto-detection. Useful for self-hosted instances that size job concurrency to their hardware and JVM heap.
   - Env var: `FREEROUTING__API_SERVER__MAX_PARALLEL_JOBS=10`
 - **`max_finished_jobs`**: Maximum number of finished routing jobs (completed, cancelled, timed out, terminated or invalid) the server keeps (default: `200`; `0`, negative values or omitting use the default). When more jobs have finished, the oldest are removed and their status, output and logs are no longer available through the API (`404`). Queued and running jobs are never removed and do not count, and neither do the jobs of the GUI session. A finished job holds its input and output files, so size this to the JVM heap and to how long clients may wait before they download a result.
@@ -323,6 +326,8 @@ Configures the SMD-pin fanout pre-pass stage.
 - **`cors_origins`**: Optional CORS allowlist for browser-hosted MCP clients.
 - **`target_api_base_url`**: Base URL of the REST API server used by MCP tools to execute operations.
   Must point to the REST API base URL (for example `http://127.0.0.1:37864`) and not to MCP paths such as `/v1/mcp` or `/.well-known/*`.
+- **`local_file_root`**: The same as `api_server.local_file_root`, for the MCP tools `upload_job_input_from_local_file` and `download_job_output_to_local_file` (stdio mode counts as loopback). See [MCP local file paths](API/MCP.md#local-file-paths).
+  - CLI: `--mcp_server.local_file_root=/srv/boards`
 - **`rate_limit`**: Fixed-window throttling for MCP HTTP requests (for example `/v1/mcp`).
   - `enabled`: Enable/disable MCP-side rate limiting.
   - `requests_per_window`: Maximum accepted requests per identity in each window. Failed API-key attempts are counted by address as for `api_server.rate_limit`.

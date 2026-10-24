@@ -6,6 +6,7 @@ import app.freerouting.analytics.model.ActorType;
 import app.freerouting.analytics.model.PipelineType;
 import app.freerouting.api.BaseController;
 import app.freerouting.api.CorrelationIdFilter;
+import app.freerouting.api.LocalFileAccess;
 import app.freerouting.constants.Constants;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.util.gson.GsonProvider;
@@ -570,23 +571,6 @@ public class McpControllerV1 extends BaseController {
     return result;
   }
 
-  private static java.nio.file.Path validateSandboxPath(String filePath) {
-    if (filePath == null || filePath.isBlank()) {
-      throw new IllegalArgumentException("File path must not be null or empty.");
-    }
-    java.nio.file.Path path = java.nio.file.Path.of(filePath).toAbsolutePath().normalize();
-    String pathStr = path.toString().toLowerCase(Locale.ROOT);
-    if (pathStr.startsWith("/etc")
-        || pathStr.startsWith("/proc")
-        || pathStr.startsWith("/sys")
-        || pathStr.startsWith("/root")
-        || pathStr.startsWith("c:\\windows")
-        || pathStr.startsWith("c:\\winnt")) {
-      throw new IllegalArgumentException("Access to system directory is forbidden: " + filePath);
-    }
-    return path;
-  }
-
   private JsonObject handleCustomToolCall(
       JsonElement id, String toolName, JsonObject arguments, String correlationId) {
     JsonObject textObj = new JsonObject();
@@ -633,8 +617,7 @@ public class McpControllerV1 extends BaseController {
       String filePath = arguments.get("filePath").getAsString();
 
       try {
-        java.nio.file.Path inputPath = validateSandboxPath(filePath);
-        byte[] fileBytes = java.nio.file.Files.readAllBytes(inputPath);
+        byte[] fileBytes = LocalFileAccess.forMcpServer().read(filePath);
         String base64Data = java.util.Base64.getEncoder().encodeToString(fileBytes);
 
         URI uri =
@@ -674,7 +657,8 @@ public class McpControllerV1 extends BaseController {
       String filePath = arguments.get("filePath").getAsString();
 
       try {
-        final java.nio.file.Path outputPath = validateSandboxPath(filePath);
+        final java.nio.file.Path outputPath =
+            LocalFileAccess.forMcpServer().resolveForWrite(filePath);
         URI uri =
             buildUriWithQuery("/v1/jobs/" + encodePathSegment(jobId) + "/output", new JsonObject());
         HttpRequest.Builder builder =
@@ -697,9 +681,6 @@ public class McpControllerV1 extends BaseController {
           String base64Data = respObj.get("data").getAsString();
           byte[] sesBytes = java.util.Base64.getDecoder().decode(base64Data);
 
-          if (outputPath.getParent() != null) {
-            java.nio.file.Files.createDirectories(outputPath.getParent());
-          }
           app.freerouting.util.AtomicFiles.write(outputPath, sesBytes);
 
           body.addProperty("message", "Successfully downloaded output and saved to: " + filePath);

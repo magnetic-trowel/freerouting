@@ -60,26 +60,10 @@ public class CompositeBoardInput {
     return this;
   }
 
-  /** Sets the primary design file from a local file. */
-  public CompositeBoardInput setDesign(File file) throws Exception {
-    if (file != null && file.exists()) {
-      setDesign(Files.readAllBytes(file.toPath()), file.getName());
-    }
-    return this;
-  }
-
   /** Sets the rules file content and filename. */
   public CompositeBoardInput setRules(byte[] data, String filename) {
     this.rulesData = data;
     this.rulesFilename = filename;
-    return this;
-  }
-
-  /** Sets the rules file from a local file. */
-  public CompositeBoardInput setRules(File file) throws Exception {
-    if (file != null && file.exists()) {
-      setRules(Files.readAllBytes(file.toPath()), file.getName());
-    }
     return this;
   }
 
@@ -92,14 +76,6 @@ public class CompositeBoardInput {
       if (this.sessionFormat == FileFormat.UNKNOWN && filename != null) {
         this.sessionFormat = RoutingJob.getFileFormat(Path.of(filename));
       }
-    }
-    return this;
-  }
-
-  /** Sets the session file from a local file. */
-  public CompositeBoardInput setSession(File file) throws Exception {
-    if (file != null && file.exists()) {
-      setSession(Files.readAllBytes(file.toPath()), file.getName());
     }
     return this;
   }

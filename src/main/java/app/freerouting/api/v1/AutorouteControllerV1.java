@@ -5,6 +5,7 @@ import static app.freerouting.util.gson.GsonProvider.GSON;
 import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.api.ApiUsageFilter;
 import app.freerouting.api.BaseController;
+import app.freerouting.api.LocalFileAccess;
 import app.freerouting.api.dto.AutorouteRequest;
 import app.freerouting.api.dto.AutorouteResponse;
 import app.freerouting.board.facade.RoutingBoard;
@@ -35,7 +36,6 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -141,15 +141,15 @@ public class AutorouteControllerV1 extends BaseController {
           .build();
     }
 
-    // 2. Prepare composite input
+    // 2. Prepare composite input; local paths follow api_server.local_file_root (LocalFileAccess)
     CompositeBoardInput inputAssembler = new CompositeBoardInput();
+    LocalFileAccess files = LocalFileAccess.forApiServer();
     try {
       if (request.fileContent != null && !request.fileContent.isBlank()) {
         inputAssembler.setDesign(
             request.fileContent.getBytes(StandardCharsets.UTF_8), "design.dsn");
       } else if (request.filePath != null && !request.filePath.isBlank()) {
-        File f = validateAndResolveFile(request.filePath);
-        inputAssembler.setDesign(f);
+        inputAssembler.setDesign(files.read(request.filePath), fileName(request.filePath));
       } else {
         return Response.status(Response.Status.BAD_REQUEST)
             .entity(
@@ -161,21 +161,20 @@ public class AutorouteControllerV1 extends BaseController {
         inputAssembler.setRules(
             request.rulesContent.getBytes(StandardCharsets.UTF_8), "design.rules");
       } else if (request.rulesPath != null && !request.rulesPath.isBlank()) {
-        File rf = validateAndResolveFile(request.rulesPath);
-        inputAssembler.setRules(rf);
+        inputAssembler.setRules(files.read(request.rulesPath), fileName(request.rulesPath));
       }
 
       if (request.sessionContent != null && !request.sessionContent.isBlank()) {
         inputAssembler.setSession(
             request.sessionContent.getBytes(StandardCharsets.UTF_8), "design.ses");
       } else if (request.sessionPath != null && !request.sessionPath.isBlank()) {
-        File sf = validateAndResolveFile(request.sessionPath);
-        inputAssembler.setSession(sf);
+        inputAssembler.setSession(files.read(request.sessionPath), fileName(request.sessionPath));
       }
     } catch (Exception ex) {
-      FRLogger.error("Failed to process autoroute input files", ex);
+      FRLogger.warn("Failed to read the autoroute input files: " + ex.getMessage());
       return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"Failed to read input files: " + ex.getMessage() + "\"}")
+          // The message names a client path, which may hold quotes or backslashes.
+          .entity(GSON.toJson(Map.of("error", "Failed to read input files: " + ex.getMessage())))
           .build();
     }
 
@@ -361,24 +360,8 @@ public class AutorouteControllerV1 extends BaseController {
         || state == RoutingJobState.INVALID;
   }
 
-  private static File validateAndResolveFile(String filePath) {
-    if (filePath == null || filePath.isBlank()) {
-      throw new IllegalArgumentException("File path must not be null or empty.");
-    }
-    java.nio.file.Path path = java.nio.file.Path.of(filePath).toAbsolutePath().normalize();
-    String pathStr = path.toString().toLowerCase(Locale.ROOT);
-    if (pathStr.startsWith("/etc")
-        || pathStr.startsWith("/proc")
-        || pathStr.startsWith("/sys")
-        || pathStr.startsWith("/root")
-        || pathStr.startsWith("c:\\windows")
-        || pathStr.startsWith("c:\\winnt")) {
-      throw new IllegalArgumentException("Access to system directory is forbidden: " + filePath);
-    }
-    File f = path.toFile();
-    if (!f.exists()) {
-      throw new IllegalArgumentException("File not found: " + filePath);
-    }
-    return f;
+  private static String fileName(String clientPath) {
+    java.nio.file.Path name = java.nio.file.Path.of(clientPath).getFileName();
+    return name != null ? name.toString() : clientPath;
   }
 }

@@ -40,6 +40,14 @@ public class McpServerSettings implements Serializable {
   @SerializedName("rate_limit")
   public RateLimitSettings rateLimit = new RateLimitSettings();
 
+  /**
+   * Directory whose files clients may name by path (local-file inputs and outputs). Unset: local
+   * paths are allowed only while every endpoint is a loopback address. See {@code
+   * app.freerouting.api.LocalFileAccess}.
+   */
+  @SerializedName("local_file_root")
+  public String localFileRoot;
+
   /** Base URL of the REST API used by MCP tool calls. */
   @SerializedName("target_api_base_url")
   public String targetApiBaseUrl = "http://127.0.0.1:37864";

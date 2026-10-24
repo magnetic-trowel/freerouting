@@ -118,6 +118,18 @@ graph TD
   - `timeoutSeconds`: Routing budget limit.
 - **Benefit:** Reduces conversational turn latency from 6-7 round-trips to **1 single turn**, while automatically retrieving diagnostic DRC summaries without polluting context with raw trace coordinate blobs.
 
+#### Local file paths
+
+The tools that take a local path (`autoroute_board` with `filePath`/`rulesPath`/`sessionPath`, `upload_job_input_from_local_file`, `download_job_output_to_local_file`) read and write files on the machine that runs the Java server, not on the client's machine. They work out of the box with the local Java server (Option B), whose endpoints are loopback addresses. A server listening on a network address refuses local paths unless a directory is configured, and then accepts only files under it (after resolving `..` and symbolic links):
+
+```
+java -jar freerouting-executable.jar --gui.enabled=false --api_server.enabled=true --mcp_server.enabled=true --mcp_server.local_file_root=/srv/boards --api_server.local_file_root=/srv/boards
+```
+
+`mcp_server.local_file_root` governs the upload and download tools; `autoroute_board` passes its paths to `POST /v1/autoroute`, which follows `api_server.local_file_root`. Files larger than 100 MB are refused, and `download_job_output_to_local_file` needs an existing directory.
+
+**Troubleshooting:** "Local file paths are disabled because the server is reachable from the network" means the server listens on a non-loopback address: send the file content (`fileContent`, or the Base64 tools) or set `local_file_root`. "outside the allowed directory" means the path resolves outside `local_file_root`.
+
 ---
 
 ### Step-by-Step Multi-Turn Workflow (Alternative)
