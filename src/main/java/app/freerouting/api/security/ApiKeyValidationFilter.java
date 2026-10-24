@@ -1,10 +1,13 @@
 package app.freerouting.api.security;
 
+import app.freerouting.api.RequestThrottle;
 import app.freerouting.logger.FRLogger;
 import jakarta.annotation.Priority;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 import java.io.IOException;
@@ -37,6 +40,8 @@ import java.io.IOException;
  *
  * <ul>
  *   <li><b>401 Unauthorized</b> - Missing or invalid API key
+ *   <li><b>429 Too Many Requests</b> - The failed attempts from this address fill the {@code
+ *       api_server.rate_limit} window; no further key is checked until the window ends
  * </ul>
  *
  * <h2>Configuration</h2>
@@ -65,6 +70,8 @@ public class ApiKeyValidationFilter implements ContainerRequestFilter {
 
   private static final String AUTHORIZATION_HEADER = "Authorization";
   private static final String BEARER_PREFIX = "Bearer ";
+
+  @Context private HttpServletRequest servletRequest;
 
   /** Gets the current API key service (for testing purposes). */
   static ApiKeyValidationService getApiKeyService() {
@@ -120,6 +127,12 @@ public class ApiKeyValidationFilter implements ContainerRequestFilter {
       return;
     }
 
+    // Keys cannot be guessed faster than the rate limit: an address whose failed attempts fill the
+    // window gets no further key checked until the window ends.
+    if (RequestThrottle.API.rejectAfterFailedAuthentications(requestContext, servletRequest)) {
+      return;
+    }
+
     // Get API key from Authorization header
     String authHeader = requestContext.getHeaderString(AUTHORIZATION_HEADER);
     String apiKey = null;
@@ -132,6 +145,7 @@ public class ApiKeyValidationFilter implements ContainerRequestFilter {
     if (apiKey == null || apiKey.isEmpty()) {
       FRLogger.warn(
           "API key validation failed: missing or invalid Authorization header for path " + path);
+      RequestThrottle.API.countFailedAuthentication(servletRequest);
       abortWithUnauthorized(
           requestContext,
           "Missing API key. Please provide a valid API key in the Authorization header using Bearer scheme (Authorization: Bearer <API_KEY>). You can apply for a free API key at https://www.freerouting.app.");
@@ -141,6 +155,7 @@ public class ApiKeyValidationFilter implements ContainerRequestFilter {
     // Validate the API key using the service
     if (!validationService.validateApiKey(apiKey)) {
       FRLogger.warn("API key validation failed: invalid or unauthorized API key for path " + path);
+      RequestThrottle.API.countFailedAuthentication(servletRequest);
       abortWithUnauthorized(requestContext, "Invalid or unauthorized API key.");
       return;
     }

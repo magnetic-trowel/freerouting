@@ -30,6 +30,7 @@ class ApiRateLimitFilterTest {
   @BeforeEach
   void setUp() throws Exception {
     ApiKeyValidationService.resetForTesting();
+    RequestThrottle.resetForTesting();
     Freerouting.globalSettings = new GlobalSettings();
 
     ApiServerSettings settings = new ApiServerSettings();
@@ -72,6 +73,33 @@ class ApiRateLimitFilterTest {
     assertEquals(200, r1.statusCode());
     assertEquals(200, r2.statusCode());
     assertEquals(429, r3.statusCode());
+  }
+
+  /**
+   * The limit ran after authentication, so failed API keys were never counted: keys could be
+   * guessed at any rate. Failed attempts now count by address, and once they fill the window the
+   * next attempt is refused without its key being checked.
+   */
+  @Test
+  void failedApiKeysAreThrottled() throws Exception {
+    Freerouting.globalSettings.apiServerSettings.authentication.isEnabled = true;
+    ApiKeyValidationService.resetForTesting();
+    int[] statuses = new int[3];
+    for (int i = 0; i < statuses.length; i++) {
+      HttpRequest req =
+          HttpRequest.newBuilder(baseUri.resolve("/v1/sessions/list"))
+              .header("Authorization", "Bearer " + java.util.UUID.randomUUID())
+              .header("Freerouting-Profile-ID", java.util.UUID.randomUUID().toString())
+              .header("Freerouting-Environment-Host", "Test/1.0")
+              .GET()
+              .timeout(HTTP_TIMEOUT)
+              .build();
+      statuses[i] = httpClient.send(req, HttpResponse.BodyHandlers.ofString()).statusCode();
+    }
+
+    assertEquals(401, statuses[0]);
+    assertEquals(401, statuses[1]);
+    assertEquals(429, statuses[2]);
   }
 
   /**

@@ -1,21 +1,29 @@
 package app.freerouting.api.mcp;
 
+import app.freerouting.api.RequestThrottle;
 import app.freerouting.logger.FRLogger;
 import jakarta.annotation.Priority;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 import java.io.IOException;
 
-/** API key filter for MCP endpoints. */
+/**
+ * API key filter for MCP endpoints. Failed attempts count against {@code mcp_server.rate_limit} by
+ * address (see {@link RequestThrottle}).
+ */
 @Provider
 @Priority(Priorities.AUTHENTICATION)
 public class McpApiKeyValidationFilter implements ContainerRequestFilter {
 
   private static final String AUTHORIZATION_HEADER = "Authorization";
   private static final String BEARER_PREFIX = "Bearer ";
+
+  @Context private HttpServletRequest servletRequest;
 
   private boolean isMcpPath(String path) {
     if (path == null) {
@@ -55,6 +63,10 @@ public class McpApiKeyValidationFilter implements ContainerRequestFilter {
       return;
     }
 
+    if (RequestThrottle.MCP.rejectAfterFailedAuthentications(requestContext, servletRequest)) {
+      return;
+    }
+
     String authHeader = requestContext.getHeaderString(AUTHORIZATION_HEADER);
     String apiKey = null;
     if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
@@ -64,6 +76,7 @@ public class McpApiKeyValidationFilter implements ContainerRequestFilter {
     if (apiKey == null || apiKey.isEmpty() || !validationService.validateApiKey(apiKey)) {
       FRLogger.debug(
           "MCP API key validation failed for path " + requestContext.getUriInfo().getPath());
+      RequestThrottle.MCP.countFailedAuthentication(servletRequest);
       String jsonBody = "{\"error\":\"Invalid or missing API key.\"}";
       requestContext.abortWith(
           Response.status(Response.Status.UNAUTHORIZED)
