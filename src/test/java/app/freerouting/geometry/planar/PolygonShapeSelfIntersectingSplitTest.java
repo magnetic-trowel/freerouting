@@ -28,10 +28,78 @@ class PolygonShapeSelfIntersectingSplitTest {
         });
   }
 
+  private static PolygonShape polygon(int... coordinates) {
+    Point[] corners = new Point[coordinates.length / 2];
+    for (int i = 0; i < corners.length; i++) {
+      corners[i] = new IntPoint(coordinates[2 * i], coordinates[2 * i + 1]);
+    }
+    return new PolygonShape(corners);
+  }
+
   @Test
   void crossingBorderIsSplitAsTheRegionItEncloses() {
-    PolygonShape shape = crossingBorder();
+    assertCoversItsRegion(crossingBorder());
+  }
 
+  /**
+   * The division-line split does not fail on these borders, but its pieces do not cover their
+   * region: the two pieces of a bowtie overlap and cover twice its area, the pieces of the second
+   * border cover a third of it.
+   */
+  @Test
+  void bordersTheDivisionSplitAcceptsAreSplitAsTheirRegion() {
+    assertCoversItsRegion(polygon(0, 0, 100000, 100000, 100000, 0, 0, 100000));
+    assertCoversItsRegion(
+        polygon(
+            3500000, 500000, 8000000, 3500000, 7500000, 8000000, 7000000, 9000000, 5500000, 8000000,
+            7000000, 8000000, 4000000, 6000000, 7500000, 2000000, 6500000, 8000000));
+  }
+
+  /**
+   * The region of these borders has loops that touch themselves: in a corner that lies on another
+   * border line, or in a crossing point that rounding moves across a border line. Such a loop is
+   * split where it touches; split as one loop, the region was left out or covered wrongly.
+   */
+  @Test
+  void regionsWithTouchingLoopsAreCovered() {
+    assertCoversItsRegion(
+        polygon(
+            10000, 5000, 50000, 20000, 90000, 80000, 45000, 75000, 65000, 65000, 40000, 75000,
+            80000, 5000, 40000, 85000, 15000, 75000, 40000, 40000));
+    assertCoversItsRegion(
+        polygon(
+            100000, 50000, 650000, 450000, 750000, 600000, 250000, 700000, 800000, 500000, 650000,
+            500000, 400000, 150000, 600000, 400000, 300000, 350000, 900000, 700000, 900000, 800000,
+            550000, 800000, 250000, 450000));
+  }
+
+  @Test
+  void simpleBorderIsRecognised() {
+    assertTrue(polygon(0, 0, 100, 0, 100, 100, 0, 100).borderIsSimple());
+    assertTrue(polygon(0, 0, 100, 0, 50, 10, 100, 100, 0, 100).borderIsSimple());
+    // crossing
+    assertFalse(polygon(0, 0, 100, 100, 100, 0, 0, 100).borderIsSimple());
+    // two squares touching in a corner
+    assertFalse(
+        polygon(0, 0, 10, 0, 10, 10, 20, 10, 20, 20, 10, 20, 10, 10, 0, 10).borderIsSimple());
+    // a corner on another border line
+    assertFalse(polygon(0, 0, 20, 0, 20, 10, 10, 0, 0, 10).borderIsSimple());
+    // collinear border lines that overlap
+    assertFalse(polygon(0, 0, 30, 0, 30, 10, 20, 0, 10, 0, 0, 10).borderIsSimple());
+  }
+
+  @Test
+  void pointsOnTheBorderAreFound() {
+    PolygonShape square = polygon(0, 0, 100, 0, 100, 100, 0, 100);
+    assertTrue(square.containsOnBorder(new IntPoint(50, 0)));
+    assertTrue(square.containsOnBorder(new IntPoint(100, 100)));
+    assertFalse(square.containsOnBorder(new IntPoint(50, 50)));
+    assertFalse(square.containsOnBorder(new IntPoint(150, 0)));
+    assertFalse(square.containsInside(new IntPoint(0, 50)));
+    assertTrue(square.containsInside(new IntPoint(1, 50)));
+  }
+
+  private static void assertCoversItsRegion(PolygonShape shape) {
     TileShape[] pieces = shape.splitToConvex();
 
     assertNotNull(pieces);
@@ -50,6 +118,11 @@ class PolygonShapeSelfIntersectingSplitTest {
     assertTrue(
         area(difference) <= 1e-3 * area(expected),
         "pieces cover " + area(covered) + " of the enclosed area " + area(expected));
+    double pieceAreaSum = 0;
+    for (TileShape piece : pieces) {
+      pieceAreaSum += piece.area();
+    }
+    assertEquals(area(expected), pieceAreaSum, 1e-3 * area(expected), "pieces overlap");
   }
 
   @Test
