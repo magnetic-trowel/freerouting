@@ -14,7 +14,7 @@ public class BoardStatisticsTraces implements Serializable {
   @SerializedName("total_segment_count")
   public Integer totalSegmentCount;
 
-  // The total length of all traces.
+  // The total length of all traces, in the statistics unit.
   @SerializedName("total_length")
   public Float totalLength;
 
@@ -28,6 +28,8 @@ public class BoardStatisticsTraces implements Serializable {
   @SerializedName("total_length_mm")
   public Float totalLengthMm;
 
+  // The sum of length times (half width + clearance) over the unfixed traces, in the square of the
+  // statistics unit.
   @SerializedName("total_weighted_length")
   public Float totalWeightedLength;
 

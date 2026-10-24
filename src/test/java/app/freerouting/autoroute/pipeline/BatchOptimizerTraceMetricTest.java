@@ -88,7 +88,7 @@ class BatchOptimizerTraceMetricTest {
   }
 
   private static double weightedTraceLength(RoutingBoard board) {
-    return new BoardStatistics(board, null, false).traces.totalWeightedLength;
+    return BoardStatistics.OptimizerMetrics.of(board).totalWeightedLength();
   }
 
   private static RoutingJob routedFixtureJob() throws Exception {

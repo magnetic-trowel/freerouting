@@ -272,32 +272,7 @@ public class BoardStatistics implements Serializable {
       }
     }
 
-    this.traces.totalWeightedLength = 0.0f;
-    int defaultClearanceClass = BoardRules.defaultClearanceClass();
-    Iterator<UndoableObjects.UndoableObjectNode> it2 = board.itemList.startReadObject();
-    for (; ; ) {
-      UndoableObjects.Storable currentItem = board.itemList.readObject(it2);
-      if (currentItem == null) {
-        break;
-      }
-      if (currentItem instanceof Trace currentTrace) {
-        FixedState fixedState = currentTrace.getFixedState();
-        if (fixedState == FixedState.UNFIXED || fixedState == FixedState.SHOVE_FIXED) {
-          double weightedTraceLength =
-              currentTrace.getLength()
-                  * (currentTrace.getHalfWidth()
-                      + board.clearanceValue(
-                          currentTrace.clearanceClassIndex(),
-                          defaultClearanceClass,
-                          currentTrace.getLayer()));
-          if (fixedState == FixedState.SHOVE_FIXED) {
-            // to produce less violations with pin exit directions.
-            weightedTraceLength /= 2;
-          }
-          this.traces.totalWeightedLength += (float) weightedTraceLength;
-        }
-      }
-    }
+    this.traces.totalWeightedLength = OptimizerMetrics.of(board).totalWeightedLength();
 
     // Connections
     if (includeConnections) {
@@ -424,43 +399,25 @@ public class BoardStatistics implements Serializable {
       this.clearanceViolations.avgViolationUm = 0.0;
     }
 
-    // Convert all length values from board.communication.unit to the preferred unit
+    // Convert all length values from board units to the preferred unit
     if (unit == null) {
       unit = Unit.MM;
     }
-
-    if (unit != board.communication.unit) {
-      // convert all length values to the preferred unit
-      Unit fromUnit = board.communication.unit;
-      Unit toUnit = unit;
-      this.unit = unit.toString();
-
-      // Board
-      this.board.boundingBox =
-          new Rectangle2D.Float(
-              (float) Unit.scale(this.board.boundingBox.x, fromUnit, toUnit),
-              (float) Unit.scale(this.board.boundingBox.y, fromUnit, toUnit),
-              (float) Unit.scale(this.board.boundingBox.width, fromUnit, toUnit),
-              (float) Unit.scale(this.board.boundingBox.height, fromUnit, toUnit));
-      this.board.size =
-          new Rectangle2D.Float(
-              0,
-              0,
-              (float) Unit.scale(this.board.size.width, fromUnit, toUnit),
-              (float) Unit.scale(this.board.size.height, fromUnit, toUnit));
-
-      // Traces
-      this.traces.totalLength = (float) Unit.scale(this.traces.totalLength, fromUnit, toUnit);
-      this.traces.totalWeightedLength =
-          (float) Unit.scale(this.traces.totalWeightedLength, fromUnit, toUnit);
-      this.traces.averageLength = (float) Unit.scale(this.traces.averageLength, fromUnit, toUnit);
-      this.traces.totalHorizontalLength =
-          (float) Unit.scale(this.traces.totalHorizontalLength, fromUnit, toUnit);
-      this.traces.totalVerticalLength =
-          (float) Unit.scale(this.traces.totalVerticalLength, fromUnit, toUnit);
-      this.traces.totalAngledLength =
-          (float) Unit.scale(this.traces.totalAngledLength, fromUnit, toUnit);
-    }
+    this.unit = unit.toString();
+    float toUnit = (float) board.communication.boardUnitSize(unit);
+    this.board.boundingBox.setRect(
+        this.board.boundingBox.x * toUnit,
+        this.board.boundingBox.y * toUnit,
+        this.board.boundingBox.width * toUnit,
+        this.board.boundingBox.height * toUnit);
+    this.board.size.setRect(0, 0, this.board.size.width * toUnit, this.board.size.height * toUnit);
+    this.traces.totalLength *= toUnit;
+    // length times (half width + clearance): an area
+    this.traces.totalWeightedLength *= toUnit * toUnit;
+    this.traces.averageLength *= toUnit;
+    this.traces.totalHorizontalLength *= toUnit;
+    this.traces.totalVerticalLength *= toUnit;
+    this.traces.totalAngledLength *= toUnit;
 
     // Calculate fanout statistics
     java.util.Collection<Pin> smdPins = board.getSmdPins();
@@ -945,11 +902,14 @@ public class BoardStatistics implements Serializable {
     public int escapedCount;
   }
 
-  /** Lightweight metrics for optimizer evaluation without building full {@link BoardStatistics}. */
-  public record OptimizerMetrics(int viaCount, float totalLength, float totalWeightedLength) {
+  /**
+   * Lightweight metrics for optimizer evaluation without building full {@link BoardStatistics}. The
+   * weighted trace length (length times half width plus clearance) is in square board units: the
+   * optimizer only compares it with itself.
+   */
+  public record OptimizerMetrics(int viaCount, float totalWeightedLength) {
     public static OptimizerMetrics of(BasicBoard board) {
       int viaCount = 0;
-      float totalLength = 0.0f;
       float totalWeightedLength = 0.0f;
       int defaultClearanceClass = BoardRules.defaultClearanceClass();
 
@@ -962,7 +922,6 @@ public class BoardStatistics implements Serializable {
         if (currentItem instanceof Via) {
           viaCount++;
         } else if (currentItem instanceof Trace currentTrace) {
-          totalLength += (float) currentTrace.getLength();
           FixedState fixedState = currentTrace.getFixedState();
           if (fixedState == FixedState.UNFIXED || fixedState == FixedState.SHOVE_FIXED) {
             double weightedTraceLength =
@@ -979,12 +938,7 @@ public class BoardStatistics implements Serializable {
           }
         }
       }
-      Unit unit = board.communication.unit;
-      if (unit != null && unit != Unit.MM) {
-        totalLength = (float) Unit.scale(totalLength, unit, Unit.MM);
-        totalWeightedLength = (float) Unit.scale(totalWeightedLength, unit, Unit.MM);
-      }
-      return new OptimizerMetrics(viaCount, totalLength, totalWeightedLength);
+      return new OptimizerMetrics(viaCount, totalWeightedLength);
     }
   }
 }

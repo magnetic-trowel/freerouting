@@ -735,7 +735,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
     progressThrottler.reset();
     this.fireBoardUpdatedEvent(boardStatisticsBefore, routerCounters, this.board);
 
-    this.minCumulativeTraceLength = boardStatisticsBefore.traces.totalWeightedLength;
+    this.minCumulativeTraceLength =
+        BoardStatistics.OptimizerMetrics.of(this.board).totalWeightedLength();
     CommitSelection selection =
         CommitSelection.of(
             this.settings.optimizer != null ? this.settings.optimizer.commitSelection : null);
@@ -985,7 +986,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
                       ", optimizer score %.2f -> %.2f",
                       scoreTracker.score(),
                       liveScore.score())));
-      this.minCumulativeTraceLength = this.board.getStatistics().traces.totalWeightedLength;
+      this.minCumulativeTraceLength =
+          BoardStatistics.OptimizerMetrics.of(this.board).totalWeightedLength();
 
       BoardStatistics boardStatisticsAfter = this.board.getStatistics();
       this.fireBoardUpdatedEvent(boardStatisticsAfter, routerCounters, this.board);
@@ -1259,7 +1261,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     double baseline =
         this.minCumulativeTraceLength > 0
             ? this.minCumulativeTraceLength
-            : routingBoard.getStatistics().traces.totalWeightedLength;
+            : BoardStatistics.OptimizerMetrics.of(routingBoard).totalWeightedLength();
 
     return optRouteItemOnBoard(
         job,

@@ -287,7 +287,8 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
                       boardStatistics.connections.incompleteCount,
                       boardStatistics.clearanceViolations.totalCount,
                       boardStatistics.items.viaCount,
-                      (double) boardStatistics.traces.totalLength,
+                      Unit.scale(
+                          boardStatistics.traces.totalLengthMm, Unit.MM, sessionPort.displayUnit()),
                       sessionPort.displayUnit(),
                       false,
                       true));
