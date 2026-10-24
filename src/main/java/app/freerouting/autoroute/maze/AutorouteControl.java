@@ -77,6 +77,13 @@ public class AutorouteControl {
   /** If true, the autoroute algorithm completes after the first drill. */
   public boolean isFanout;
 
+  /**
+   * If false, the pours of the net (conduction areas without a component) are no target of the
+   * search: the connection has to reach the copper of the destination set, because the fill of the
+   * pour does not join the start set to it. Every other item of the net is a target.
+   */
+  public boolean poursAreTargets = true;
+
   /** Source pin name for targeted fanout diagnostics. */
   public String fanoutStartPinName;
 

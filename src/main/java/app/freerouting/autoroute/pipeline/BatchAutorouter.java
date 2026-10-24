@@ -16,6 +16,7 @@ import app.freerouting.core.StoppableThread;
 import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.UndoableObjects;
+import app.freerouting.drc.PlaneFillConnectivity;
 import app.freerouting.geometry.planar.FloatLine;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.logger.FRLogger;
@@ -670,6 +671,69 @@ public final class BatchAutorouter extends NamedAlgorithm {
       Map<Item, Integer> ripupCosts,
       int ripupPassNo) {
     return connectionRouter.route(item, routeNetNo, rippedItemList, ripupCosts, ripupPassNo);
+  }
+
+  /**
+   * Routes the copper that foreign tracks cut off from the fill of its pour to the rest of its net
+   * ({@link PlaneFillConnectivity}). The pour polygon connects that copper for the board's
+   * connectivity, so the passes route nothing to it. Each connection runs from a cut-off group to
+   * the net's main group without ripping other connections, and is kept only if its new copper
+   * violates no clearance and the board has fewer cut-off groups afterwards; a connection that cut
+   * off copper of another net elsewhere is undone. Returns the number of connections kept.
+   */
+  int connectPourCutOffs() {
+    int kept = 0;
+    Set<Integer> pourNets = PlaneFillConnectivity.pourNets(this.board);
+    int cutOffCount = cutOffGroupCount(pourNets);
+    Set<Integer> failedGroups = new TreeSet<>(); // by the lowest item id of the group
+    boolean progress = cutOffCount > 0;
+    while (progress && !this.thread.isStopRequested()) {
+      progress = false;
+      sweep:
+      for (int netNumber : pourNets) {
+        PlaneFillConnectivity.Result connectivity =
+            PlaneFillConnectivity.analyze(this.board, netNumber);
+        for (Set<Item> group : connectivity.cutOffGroups) {
+          if (this.thread.isStopRequested()) {
+            break sweep;
+          }
+          int groupId = group.iterator().next().getId();
+          if (failedGroups.contains(groupId)) {
+            continue;
+          }
+          long contentVersion = this.board.itemList.getContentVersion();
+          this.board.generateSnapshot();
+          AutorouteAttemptResult result =
+              connectionRouter.routeWithoutRipup(netNumber, group, connectivity.mainGroup);
+          int newCutOffCount =
+              result.state == AutorouteAttemptState.ROUTED
+                  ? cutOffGroupCount(pourNets)
+                  : cutOffCount;
+          boolean keep = newCutOffCount < cutOffCount;
+          if (keep || this.board.itemList.getContentVersion() == contentVersion) {
+            this.board.popSnapshot();
+          } else {
+            this.board.undo(null);
+          }
+          if (keep) {
+            cutOffCount = newCutOffCount;
+            kept++;
+            progress = true;
+            break sweep; // the groups of the analysis are out of date
+          }
+          failedGroups.add(groupId);
+        }
+      }
+    }
+    return kept;
+  }
+
+  private int cutOffGroupCount(Set<Integer> pourNets) {
+    int result = 0;
+    for (int netNumber : pourNets) {
+      result += PlaneFillConnectivity.analyze(this.board, netNumber).cutOffGroups.size();
+    }
+    return result;
   }
 
   /**

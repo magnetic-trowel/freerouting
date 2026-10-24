@@ -89,8 +89,30 @@ public final class RoutingPipeline {
     }
     runRoutingStage();
     runOptimizationStage();
+    connectPlaneFillCutOffs();
     reportPlaneFillCutOffs();
     this.job.stage = RoutingStage.IDLE;
+  }
+
+  /**
+   * Routes the copper that foreign tracks cut off from the fill of its pour to the rest of its net,
+   * after the router and the optimizer, whose connectivity follows pour polygons and so sees none
+   * of it ({@link BatchAutorouter#connectPourCutOffs}).
+   */
+  private void connectPlaneFillCutOffs() {
+    if (this.job.board == null
+        || this.job.thread.isStopRequested()
+        || !this.job.routerSettings.getRunRouter()) {
+      return;
+    }
+    this.autorouter.board = this.job.board;
+    int connected = this.autorouter.connectPourCutOffs();
+    if (connected > 0) {
+      this.job.logInfo(
+          "Connected "
+              + connected
+              + " group(s) of copper that foreign tracks had cut off from the fill of their pour.");
+    }
   }
 
   /**

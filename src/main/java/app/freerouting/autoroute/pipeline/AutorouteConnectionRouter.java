@@ -10,9 +10,11 @@ import app.freerouting.board.model.items.Item;
 import app.freerouting.datastructures.TimeLimit;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.rules.Net;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
+import java.util.TreeSet;
 
 /** Executes one autoroute connection, including necked retry and strict-DRC recovery. */
 final class AutorouteConnectionRouter {
@@ -48,6 +50,43 @@ final class AutorouteConnectionRouter {
     } finally {
       attempt.finish(result != null && result.state == AutorouteAttemptState.ROUTED);
     }
+  }
+
+  /**
+   * Routes a connection of the net from {@code startSet} to the copper of {@code destSet}, not to
+   * its pours, without ripping other connections. Returns the result of the maze search, or a
+   * rejection if the new copper violates clearance; the caller undoes a connection it does not
+   * keep. The connection is not pulled tight: the via optimizer keeps a via inside the pour
+   * polygon, not inside the fill island it connects, and could move it off the copper it joins.
+   */
+  AutorouteAttemptResult routeWithoutRipup(int routeNetNo, Set<Item> startSet, Set<Item> destSet) {
+    RoutingBoard board = router.board;
+    AutorouteControl control =
+        new AutorouteControl(
+            board,
+            routeNetNo,
+            router.settings,
+            router.settings.getViaCosts(),
+            router.getTraceCosts());
+    control.ripupAllowed = false;
+    control.poursAreTargets = false;
+    control.removeUnconnectedVias = router.isRemoveUnconnectedVias();
+    int maxItemIdBefore = board.communication.idGenerator.maxGeneratedId();
+    AutorouteEngine engine =
+        board.initAutoroute(
+            routeNetNo,
+            control.traceClearanceClassIndex,
+            router.thread,
+            new TimeLimit(100000),
+            router.isRetainAutorouteDatabase());
+    AutorouteAttemptResult result =
+        engine.autorouteConnection(startSet, destSet, control, new TreeSet<>(), new HashMap<>());
+    if (result.state != AutorouteAttemptState.ROUTED) {
+      return result;
+    }
+    AutorouteAttemptResult rejection =
+        BatchAutorouter.strictDrcRejection(board, routeNetNo, maxItemIdBefore);
+    return rejection != null ? rejection : result;
   }
 
   /** The undo snapshot around a strict-DRC connection attempt; see {@link #route}. */
