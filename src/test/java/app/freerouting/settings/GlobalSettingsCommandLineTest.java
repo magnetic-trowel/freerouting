@@ -353,6 +353,17 @@ class GlobalSettingsCommandLineTest {
   }
 
   @Test
+  void apiServerFinishedJobLimitsViaCli() {
+    String[] args = {
+      "--api_server.max_finished_jobs=500", "--api_server.max_finished_job_boards=0"
+    };
+    settings.applyCommandLineArguments(args);
+
+    assertEquals(500, settings.apiServerSettings.maxFinishedJobs);
+    assertEquals(0, settings.apiServerSettings.maxFinishedJobBoards);
+  }
+
+  @Test
   @SuppressWarnings("deprecation") // CLI flags write into the JSON/CLI routerSettings bridge.
   void optimizerScoringVersionAcceptsShortNames() {
     assertTrue(settings.setValue("router.optimizer_scoring.version", "v1"));

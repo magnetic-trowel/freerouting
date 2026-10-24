@@ -7,6 +7,7 @@ import app.freerouting.api.ApiUsageFilter;
 import app.freerouting.api.BaseController;
 import app.freerouting.api.dto.AutorouteRequest;
 import app.freerouting.api.dto.AutorouteResponse;
+import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
@@ -211,6 +212,19 @@ public class AutorouteControllerV1 extends BaseController {
       job.routerSettings.jobTimeoutString = Integer.toString(timeoutSec);
     }
 
+    // The outputs and statistics of the response are read from the final board.
+    job.keepBoardWhenFinished = true;
+    try {
+      return runAndRespond(request, userId, session, job, timeoutSec);
+    } finally {
+      // From now on the scheduler's retention limits decide when the board is released.
+      job.keepBoardWhenFinished = false;
+    }
+  }
+
+  /** Enqueues the job, waits for it within the time budget and builds the response. */
+  private Response runAndRespond(
+      AutorouteRequest request, UUID userId, Session session, RoutingJob job, int timeoutSec) {
     session.addJob(job);
     job.state = RoutingJobState.READY_TO_START;
 
@@ -282,9 +296,10 @@ public class AutorouteControllerV1 extends BaseController {
       requestedFormats.add(FileFormat.SES);
     }
 
+    RoutingBoard finalBoard = job.board;
     MultiOutputGenerator.MultiOutputResult multiOut =
         MultiOutputGenerator.generateOutputs(
-            job.board, job.name, requestedFormats, job.drcSettings, includeDrcSummary);
+            finalBoard, job.name, requestedFormats, job.drcSettings, includeDrcSummary);
 
     // 6. Build response
     AutorouteResponse responsePayload = new AutorouteResponse();
@@ -293,8 +308,8 @@ public class AutorouteControllerV1 extends BaseController {
     responsePayload.status = job.state;
     responsePayload.durationSeconds = elapsedSeconds;
 
-    if (job.board != null) {
-      var stats = job.board.getStatistics();
+    if (finalBoard != null) {
+      var stats = finalBoard.getStatistics();
       if (stats != null) {
         responsePayload.unroutedConnections =
             stats.connections != null ? stats.connections.incompleteCount : 0;

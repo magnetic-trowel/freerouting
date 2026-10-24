@@ -95,6 +95,8 @@ class RoutingJobSchedulerActionThreadTest {
 
     actionThread.threadAction();
     assertEquals(RoutingJobState.COMPLETED, job.state);
+    assertNotNull(
+        job.finalStatistics, "The final statistics outlive the board, which may be released");
     assertTrue(
         trackedEvents.contains("Auto-router Started"), "Should have tracked 'Auto-router Started'");
     assertTrue(

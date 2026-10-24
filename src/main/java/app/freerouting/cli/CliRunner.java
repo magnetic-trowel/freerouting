@@ -58,6 +58,8 @@ public final class CliRunner {
       return false;
     }
 
+    // The additional outputs, the result manifest and the summary below read the final board.
+    routingJob.keepBoardWhenFinished = true;
     cliSession.addJob(routingJob);
 
     var desiredOutputFile = new File(globalSettings.initialOutputFile);
@@ -194,6 +196,7 @@ public final class CliRunner {
     } catch (Throwable ex) {
       FRLogger.warn("Failed to record batch job summary: " + ex.getMessage());
     }
+    routingJob.keepBoardWhenFinished = false;
 
     globalSettings.cliExitCode = cliExitCode;
     return cliExitCode == 0;

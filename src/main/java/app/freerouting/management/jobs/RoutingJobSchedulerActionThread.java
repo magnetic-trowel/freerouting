@@ -243,7 +243,10 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
             default -> JobLifecycleStatus.FAILED;
           };
 
-      var finalBoardStats = job.board != null ? job.board.getStatistics() : null;
+      var finalBoard = job.board;
+      var finalBoardStats = finalBoard != null ? finalBoard.getStatistics() : null;
+      // Reported by the job status after the scheduler released the board.
+      job.finalStatistics = finalBoardStats;
       Integer netsTotal =
           finalBoardStats != null && finalBoardStats.nets != null
               ? finalBoardStats.nets.totalCount

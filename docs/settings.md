@@ -82,7 +82,9 @@ The primary way to configure Freerouting is through a JSON settings file. This f
       "requests_per_window": 120,
       "window_seconds": 60
     },
-    "max_parallel_jobs": 5
+    "max_parallel_jobs": 5,
+    "max_finished_jobs": 200,
+    "max_finished_job_boards": 4
   },
   "mcp_server": {
     "enabled": false,
@@ -298,6 +300,12 @@ Configures the SMD-pin fanout pre-pass stage.
   - `window_seconds`: Window duration in seconds.
 - **`max_parallel_jobs`**: Maximum number of routing jobs the scheduler runs concurrently (default: `CPU cores - 1`, minimum `1`). Setting to `0` or omitting triggers auto-detection. Useful for self-hosted instances that size job concurrency to their hardware and JVM heap.
   - Env var: `FREEROUTING__API_SERVER__MAX_PARALLEL_JOBS=10`
+- **`max_finished_jobs`**: Maximum number of finished routing jobs (completed, cancelled, timed out, terminated or invalid) the server keeps (default: `200`; `0`, negative values or omitting use the default). When more jobs have finished, the oldest are removed and their status, output and logs are no longer available through the API (`404`). Queued and running jobs are never removed and do not count, and neither do the jobs of the GUI session. A finished job holds its input and output files, so size this to the JVM heap and to how long clients may wait before they download a result.
+  - CLI: `--api_server.max_finished_jobs=500`
+  - Env var: `FREEROUTING__API_SERVER__MAX_FINISHED_JOBS=500`
+- **`max_finished_job_boards`**: Number of the most recently finished jobs that keep their routed board in memory (default: twice `max_parallel_jobs`, at least `4`; `0` keeps none, negative values or omitting use the default). The DRC endpoints (`/v1/jobs/{jobId}/drc`, `/v1/jobs/{jobId}/drc/summary`) and the KiCad JSON output generated for a job with SES output need that board; for an older finished job they answer `410 Gone`, while its output, status and statistics stay available. A routed board can take tens of MB for a large design. The CLI and `POST /v1/autoroute` keep the board of their own job until they have written their outputs.
+  - CLI: `--api_server.max_finished_job_boards=8`
+  - Env var: `FREEROUTING__API_SERVER__MAX_FINISHED_JOB_BOARDS=8`
 
 #### **`mcp_server` Section**
 

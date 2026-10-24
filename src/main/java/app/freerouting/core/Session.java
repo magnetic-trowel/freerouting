@@ -4,9 +4,12 @@ import app.freerouting.management.jobs.RoutingJobScheduler;
 import com.google.gson.annotations.SerializedName;
 import java.io.Serializable;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Represents a user session that contains the jobs that will be processed by the router. */
 public class Session implements Serializable {
+
+  private static final AtomicLong CREATION_COUNTER = new AtomicLong();
 
   @SerializedName("id")
   public final UUID id = UUID.randomUUID();
@@ -23,7 +26,10 @@ public class Session implements Serializable {
    */
   public final transient String apiKeyHash;
 
-  public transient boolean isPrimary;
+  public transient volatile boolean isPrimary;
+
+  /** Position in creation order, used to evict the oldest sessions first. */
+  public final transient long creationSequence = CREATION_COUNTER.incrementAndGet();
 
   /**
    * Creates a new session.

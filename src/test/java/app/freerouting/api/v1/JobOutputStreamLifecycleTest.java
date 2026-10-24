@@ -19,6 +19,8 @@ import app.freerouting.core.BoardFileDetails;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
+import app.freerouting.io.FileFormat;
+import app.freerouting.io.kicad.KiCadJsonWriter;
 import app.freerouting.io.specctra.DsnTestFixtures;
 import app.freerouting.management.jobs.RoutingJobScheduler;
 import app.freerouting.management.sessions.SessionManager;
@@ -305,6 +307,31 @@ class JobOutputStreamLifecycleTest {
       verify(sink, never()).close();
       delivery.complete(null);
       verify(sink, timeout(2000)).close();
+      assertTrue(awaitWorkerExit(existing));
+    } finally {
+      closed.set(true);
+      job.state = RoutingJobState.CANCELLED;
+      awaitWorkerExit(existing);
+    }
+  }
+
+  @Test
+  void jsonStreamSendsTheJsonOutputOnceTheBoardIsReleased() throws Exception {
+    final Set<Thread> existing = workers();
+    String finalJson =
+        KiCadJsonWriter.write(DsnTestFixtures.loadBoard("Issue026-J2_reference.dsn"), job.name);
+    job.output = new BoardFileDetails();
+    job.output.format = FileFormat.KICAD_SESSION_JSON;
+    job.output.setData(finalJson.getBytes(StandardCharsets.UTF_8));
+    job.board = null;
+    job.state = RoutingJobState.COMPLETED;
+    try {
+      withJob(() -> startStream(true));
+      verify(sink, timeout(2000)).send(any(OutboundSseEvent.class));
+      verify(sink, timeout(2000)).close();
+      ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+      verify(eventBuilder).data(json.capture());
+      assertEquals(finalJson, json.getValue(), "the final board is the published JSON output");
       assertTrue(awaitWorkerExit(existing));
     } finally {
       closed.set(true);

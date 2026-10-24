@@ -1015,6 +1015,12 @@
           "name": "isRunning"
         },
         {
+          "name": "maxFinishedJobBoards"
+        },
+        {
+          "name": "maxFinishedJobs"
+        },
+        {
           "name": "maxParallelJobs"
         },
         {

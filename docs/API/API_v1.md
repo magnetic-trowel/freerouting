@@ -451,6 +451,8 @@ If `Freerouting-Environment-Host` is absent or does not match the `<ToolName>/<V
 
   **Description:** Generates and returns a KiCad-compatible DRC report for a routing job. The board is loaded from the stored DSN input on demand if not already in memory. Returns **HTTP 500** if the board cannot be loaded.
 
+  Only the most recently finished jobs keep their routed board in memory (`api_server.max_finished_job_boards`, default twice `max_parallel_jobs`, at least 4). For an older finished job this endpoint, `/drc/summary` and the KiCad JSON output generated for an SES job return **HTTP 410 Gone**; the job's status, statistics and output stay available. The server keeps at most `api_server.max_finished_jobs` finished jobs (default 200) and removes the oldest beyond that; queued and running jobs are never removed. See [settings](../settings.md).
+
   **Response body:** Contains the DRC report in KiCad DRC v1 JSON format.
 
   ```json

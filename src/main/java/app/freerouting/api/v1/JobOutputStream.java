@@ -3,8 +3,11 @@ package app.freerouting.api.v1;
 import static app.freerouting.util.gson.GsonProvider.GSON;
 
 import app.freerouting.api.dto.BoardFilePayload;
+import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.core.BoardFileDetails;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
+import app.freerouting.io.FileFormat;
 import app.freerouting.io.kicad.KiCadJsonWriter;
 import app.freerouting.logger.FRLogger;
 import jakarta.ws.rs.core.MediaType;
@@ -89,10 +92,10 @@ final class JobOutputStream {
             job,
             sink,
             () -> {
-              if (job.board == null) {
+              String json = currentJson(job);
+              if (json == null) {
                 return null;
               }
-              String json = KiCadJsonWriter.write(job.board, job.name);
               CRC32 checksum = new CRC32();
               checksum.update(json.getBytes(StandardCharsets.UTF_8));
               if (checksum.getValue() == previousChecksum.get()) {
@@ -108,6 +111,23 @@ final class JobOutputStream {
             },
             "job-output-board-stream-worker");
     stream.executor.scheduleAtFixedRate(stream::poll, 0, 500, TimeUnit.MILLISECONDS);
+  }
+
+  /**
+   * Returns the KiCad JSON of the job's board. Once the scheduler released the board of a finished
+   * job, a KiCad JSON output is the same document, written from the final board.
+   */
+  private static String currentJson(RoutingJob job) {
+    RoutingBoard board = job.board;
+    if (board != null) {
+      return KiCadJsonWriter.write(board, job.name);
+    }
+    BoardFileDetails output = job.output;
+    if (output == null || output.format != FileFormat.KICAD_SESSION_JSON) {
+      return null;
+    }
+    byte[] bytes = output.getData().readAllBytes();
+    return bytes.length > 0 ? new String(bytes, StandardCharsets.UTF_8) : null;
   }
 
   private void poll() {

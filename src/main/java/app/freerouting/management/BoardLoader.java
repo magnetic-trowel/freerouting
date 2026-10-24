@@ -14,12 +14,17 @@ public final class BoardLoader {
    * Loads a board from a routing job's input if not already loaded.
    *
    * @param job The routing job to load the board from
-   * @return true if board is loaded successfully, false otherwise
+   * @return true if board is loaded successfully, false otherwise, also for a finished job whose
+   *     routed board the scheduler released (its input would only give the unrouted board)
    */
   public static boolean loadBoardIfNeeded(RoutingJob job) {
     // Check if board is already loaded
     if (job.board != null) {
       return true;
+    }
+
+    if (job.isBoardReleased()) {
+      return false;
     }
 
     // Check if input is available

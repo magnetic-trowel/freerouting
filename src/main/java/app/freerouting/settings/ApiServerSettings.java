@@ -42,4 +42,21 @@ public class ApiServerSettings implements Serializable {
    */
   @SerializedName("max_parallel_jobs")
   public Integer maxParallelJobs;
+
+  /**
+   * Maximum number of finished routing jobs (completed, cancelled, timed out, terminated or
+   * invalid) the scheduler keeps; the oldest are removed first. Queued and running jobs never
+   * count. Defaults to null (resolved at runtime to 200); values below 1 also use the default.
+   */
+  @SerializedName("max_finished_jobs")
+  public Integer maxFinishedJobs;
+
+  /**
+   * Number of the most recently finished routing jobs that keep their routed board in memory, for
+   * DRC reports and KiCad JSON output generated from the board. Older finished jobs keep their
+   * output file and statistics only. Defaults to null (resolved at runtime to 4); {@code 0} keeps
+   * no finished board, negative values use the default.
+   */
+  @SerializedName("max_finished_job_boards")
+  public Integer maxFinishedJobBoards;
 }

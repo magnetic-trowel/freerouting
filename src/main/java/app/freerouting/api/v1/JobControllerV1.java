@@ -520,7 +520,12 @@ public class JobControllerV1 extends BaseController {
         @ApiResponse(responseCode = "404", description = "Job not found"),
         @ApiResponse(
             responseCode = "400",
-            description = "Job output is not in JSON format, or job failed/was cancelled")
+            description = "Job output is not in JSON format, or job failed/was cancelled"),
+        @ApiResponse(
+            responseCode = "410",
+            description =
+                "The output is not JSON and the routed board of this finished job is no longer"
+                    + " kept in memory")
       })
   @Path("/{jobId}/output/json")
   public Response downloadOutputJson(
@@ -664,7 +669,7 @@ public class JobControllerV1 extends BaseController {
    * <p>If the job's board is not already loaded in memory, the input DSN file is loaded on demand.
    * The report JSON follows the {@code https://schemas.kicad.org/drc.v1.json} schema and includes
    * unconnected items and clearance violations. Returns HTTP 500 if the board cannot be loaded from
-   * the stored DSN input.
+   * the stored DSN input, and HTTP 410 for a finished job whose routed board is no longer kept.
    */
   @Operation(
       summary = "Get DRC report",
@@ -682,6 +687,9 @@ public class JobControllerV1 extends BaseController {
                     schema = @Schema(implementation = KiCadDrcReport.class))),
         @ApiResponse(responseCode = "404", description = "Job not found"),
         @ApiResponse(responseCode = "400", description = "Invalid session or failed to load board"),
+        @ApiResponse(
+            responseCode = "410",
+            description = "The routed board of this finished job is no longer kept in memory"),
         @ApiResponse(responseCode = "500", description = "Failed to load board for DRC check")
       })
   @Path("/{jobId}/drc")

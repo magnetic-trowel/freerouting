@@ -27,11 +27,17 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -43,6 +49,22 @@ import java.util.stream.Stream;
 public final class RoutingJobScheduler {
 
   private static final int MAX_QUEUED_JOBS = 5_000;
+
+  /**
+   * Default for {@code api_server.max_finished_jobs}. A finished job without its board holds its
+   * input and output files only (usually well under a few MB each), so 200 of them stay within a
+   * few hundred MB, while a client normally downloads its result within seconds of completion.
+   */
+  static final int DEFAULT_MAX_FINISHED_JOBS = 200;
+
+  /**
+   * Smallest default for {@code api_server.max_finished_job_boards}. A routed board with its search
+   * trees can take tens of MB, so not every finished job keeps one; the default is twice the number
+   * of parallel jobs, and at least this, so that a client running as many jobs as the server runs
+   * at once can still poll, download and check each result after the others finish.
+   */
+  static final int DEFAULT_MAX_FINISHED_JOB_BOARDS = 4;
+
   private static final RoutingJobScheduler instance = new RoutingJobScheduler();
   public final LinkedList<RoutingJob> jobs = new LinkedList<>();
 
@@ -316,6 +338,9 @@ public final class RoutingJobScheduler {
                     }
                   }
 
+                  // Boards are released on this thread only, so never during the set-up above.
+                  enforceRetention();
+
                   // wait for a short time before checking the queue again
                   Thread.sleep(250);
                 } catch (InterruptedException e) {
@@ -374,6 +399,142 @@ public final class RoutingJobScheduler {
     return defaultMaxParallelJobs();
   }
 
+  /**
+   * Returns how many finished jobs the scheduler keeps, from {@code api_server.max_finished_jobs}.
+   * Values below 1 and unloaded settings use {@link #DEFAULT_MAX_FINISHED_JOBS}.
+   */
+  int getMaxFinishedJobs() {
+    GlobalSettings gs = globalSettings();
+    Integer configured =
+        gs != null && gs.apiServerSettings != null ? gs.apiServerSettings.maxFinishedJobs : null;
+    return configured != null && configured > 0 ? configured : DEFAULT_MAX_FINISHED_JOBS;
+  }
+
+  /**
+   * Returns how many of the most recently finished jobs keep their board, from {@code
+   * api_server.max_finished_job_boards}. Negative values and unloaded settings use twice the number
+   * of parallel jobs, at least {@link #DEFAULT_MAX_FINISHED_JOB_BOARDS}.
+   */
+  int getMaxFinishedJobBoards() {
+    GlobalSettings gs = globalSettings();
+    Integer configured =
+        gs != null && gs.apiServerSettings != null
+            ? gs.apiServerSettings.maxFinishedJobBoards
+            : null;
+    if (configured != null && configured >= 0) {
+      return configured;
+    }
+    return Math.max(DEFAULT_MAX_FINISHED_JOB_BOARDS, 2 * getMaxParallelJobs());
+  }
+
+  /**
+   * Applies the retention limits: removes the oldest finished jobs beyond {@link
+   * #getMaxFinishedJobs()} and releases the boards of the finished jobs older than the newest
+   * {@link #getMaxFinishedJobBoards()}. Queued and running jobs, jobs whose routing thread is still
+   * alive and the jobs of the primary (GUI) session are never touched. The scheduler thread calls
+   * it after each start-up pass; releasing a board elsewhere could race with the set-up of a job
+   * that was cancelled while it loaded.
+   */
+  void enforceRetention() {
+    synchronized (jobs) {
+      evictFinishedJobs(getMaxFinishedJobs());
+      List<RoutingJob> finished = finishedJobsNewestFirst();
+      int released = 0;
+      for (int i = getMaxFinishedJobBoards(); i < finished.size(); i++) {
+        RoutingJob job = finished.get(i);
+        if (!job.keepBoardWhenFinished && job.board != null) {
+          job.releaseBoard();
+          released++;
+        }
+      }
+      if (released > 0) {
+        FRLogger.debug("Released the routing boards of " + released + " finished jobs.");
+      }
+    }
+  }
+
+  /**
+   * Removes the oldest finished jobs so that at most {@code keep} of them remain. The caller holds
+   * the lock of {@link #jobs}.
+   *
+   * @return the number of finished jobs that remain
+   */
+  private int evictFinishedJobs(int keep) {
+    List<RoutingJob> finished = finishedJobsNewestFirst();
+    if (finished.size() <= keep) {
+      return finished.size();
+    }
+    Set<RoutingJob> evicted = Collections.newSetFromMap(new IdentityHashMap<>());
+    evicted.addAll(finished.subList(keep, finished.size()));
+    this.jobs.removeIf(evicted::contains);
+    FRLogger.debug("Removed the " + evicted.size() + " oldest finished routing jobs.");
+    return keep;
+  }
+
+  /**
+   * Returns the jobs that retention may remove or strip, newest first. The caller holds the lock of
+   * {@link #jobs}.
+   */
+  private List<RoutingJob> finishedJobsNewestFirst() {
+    List<RoutingJob> finished = new ArrayList<>();
+    for (RoutingJob job : this.jobs) {
+      if (job != null && isFinished(job) && !isPrimarySessionJob(job)) {
+        finished.add(job);
+      }
+    }
+    // The list sort is stable, so jobs that ended at the same instant keep their queue order.
+    finished.sort(Comparator.comparing(RoutingJobScheduler::endedAt).reversed());
+    return finished;
+  }
+
+  /** A finished job is in a terminal state and its routing thread, if any, has ended. */
+  private static boolean isFinished(RoutingJob job) {
+    RoutingJobState state = job.state;
+    StoppableThread thread = job.thread;
+    return state != null && state.isTerminal() && (thread == null || !thread.isAlive());
+  }
+
+  /** The primary session is the GUI's; its job is reused for every run and owns the GUI board. */
+  private static boolean isPrimarySessionJob(RoutingJob job) {
+    if (job.sessionId == null) {
+      return false;
+    }
+    Session session = SessionManager.getInstance().getSession(job.sessionId.toString());
+    return session != null && session.isPrimary;
+  }
+
+  /** When the job ended, or when it was created if it never ran. */
+  private static Instant endedAt(RoutingJob job) {
+    return job.finishedAt != null ? job.finishedAt : job.createdAt;
+  }
+
+  /**
+   * Returns the sessions that have a job which is queued, starting, running, stopping or paused, or
+   * whose routing thread is still alive.
+   */
+  public Set<UUID> sessionIdsWithActiveJobs() {
+    Set<UUID> active = new HashSet<>();
+    synchronized (jobs) {
+      for (RoutingJob job : this.jobs) {
+        if (job != null && job.sessionId != null && !isFinished(job)) {
+          active.add(job.sessionId);
+        }
+      }
+    }
+    return active;
+  }
+
+  /**
+   * Removes the finished jobs of a session; jobs that are still active stay.
+   *
+   * @param sessionId the session identifier
+   */
+  public void removeFinishedJobs(UUID sessionId) {
+    synchronized (jobs) {
+      this.jobs.removeIf(j -> j != null && sessionId.equals(j.sessionId) && isFinished(j));
+    }
+  }
+
   private String uuidToShortCode(UUID uuid) {
     return uuid.toString().substring(0, 6).toUpperCase(Locale.ROOT);
   }
@@ -404,15 +565,11 @@ public final class RoutingJobScheduler {
     job.state = RoutingJobState.QUEUED;
 
     synchronized (jobs) {
-      if (this.jobs.size() >= MAX_QUEUED_JOBS) {
-        // Evict finished/terminal jobs first
-        this.jobs.removeIf(
-            j ->
-                j.state == RoutingJobState.COMPLETED
-                    || j.state == RoutingJobState.CANCELLED
-                    || j.state == RoutingJobState.INVALID
-                    || j.state == RoutingJobState.TIMED_OUT
-                    || j.state == RoutingJobState.TERMINATED);
+      int finishedJobs = evictFinishedJobs(getMaxFinishedJobs());
+      int excess = this.jobs.size() + 1 - MAX_QUEUED_JOBS;
+      if (excess > 0) {
+        // Make room with the oldest remaining finished jobs before refusing the new one.
+        evictFinishedJobs(Math.max(0, finishedJobs - excess));
       }
       if (this.jobs.size() >= MAX_QUEUED_JOBS) {
         throw new IllegalStateException(

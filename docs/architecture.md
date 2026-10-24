@@ -89,6 +89,18 @@ closing. Terminal errors, a closed client, or failed delivery release the worker
 bounded to ten seconds to prevent indefinite retention by a client that stops reading. Checksums
 are subscription-local so reconnecting or additional clients receive the current snapshot.
 
+## Finished-job retention
+
+`management.jobs.RoutingJobScheduler` keeps at most `api_server.max_finished_jobs` finished jobs
+(terminal state and routing thread ended) and removes the oldest first; only the newest
+`api_server.max_finished_job_boards` of them keep their `RoutingBoard`. Older ones keep input,
+output and `RoutingJob.finalStatistics`, and the board endpoints answer `410 Gone` rather than
+reloading the unrouted input. Queued and running jobs and the primary (GUI) session's job are never
+touched. A caller that reads the final board itself (CLI, `POST /v1/autoroute`) sets
+`RoutingJob.keepBoardWhenFinished` until it is done. Boards are released only on the scheduler
+thread. `management.sessions.SessionManager` evicts the oldest session that is neither primary nor
+has an active job, together with its finished jobs.
+
 ## Repository Layout
 
 | Path | Purpose |
