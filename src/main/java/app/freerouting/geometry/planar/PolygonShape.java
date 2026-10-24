@@ -1,10 +1,14 @@
 package app.freerouting.geometry.planar;
 
 import app.freerouting.logger.FRLogger;
+import java.awt.geom.Path2D;
+import java.awt.geom.PathIterator;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Random;
 
 /**
@@ -546,6 +550,10 @@ public class PolygonShape extends PolylineShape {
    * Splits this polygon shape into convex pieces. The result is not exact, because rounded
    * intersections of lines are used in the result pieces. It can be made exact, if Polylines are
    * returned instead of Polygons, so that no intersection points are needed in the result.
+   *
+   * <p>The division-line split only works on a simple polygon. A polygon whose border crosses or
+   * touches itself is split as the region it encloses with the non-zero winding rule instead (see
+   * {@link #splitEnclosedRegion}), so the result is never null.
    */
   @Override
   public TileShape[] splitToConvex() {
@@ -554,8 +562,9 @@ public class PolygonShape extends PolylineShape {
       // a fixed seed per split gives a reproducible result, also across threads
       Collection<PolygonShape> convexPieces = splitToConvexRecu(new Random(seed));
       if (convexPieces == null) {
-        // split failed, maybe the polygon has selfontersections
-        return null;
+        // the border crosses or touches itself
+        precalculatedConvexPieces = splitEnclosedRegion();
+        return precalculatedConvexPieces;
       }
       precalculatedConvexPieces = new TileShape[convexPieces.size()];
       Iterator<PolygonShape> it = convexPieces.iterator();
@@ -565,6 +574,120 @@ public class PolygonShape extends PolylineShape {
       }
     }
     return this.precalculatedConvexPieces;
+  }
+
+  /**
+   * Splits the region that this polygon encloses under the non-zero winding rule into convex
+   * pieces, for a border that crosses or touches itself. The region is resolved into simple outer
+   * borders and holes with {@link java.awt.geom.Area}; each outer border is split as a simple
+   * polygon, with the holes inside it cut out. Crossing points are rounded to integer corners, as
+   * the division-line split also does. Loops that still cannot be split are left out with a
+   * warning, so the result may be empty but is never null.
+   */
+  private TileShape[] splitEnclosedRegion() {
+    Path2D.Double path = new Path2D.Double(Path2D.WIND_NON_ZERO);
+    for (int i = 0; i < corners.length; i++) {
+      FloatPoint corner = corners[i].toFloat();
+      if (i == 0) {
+        path.moveTo(corner.x, corner.y);
+      } else {
+        path.lineTo(corner.x, corner.y);
+      }
+    }
+    path.closePath();
+    // java.awt.geom.Area orients holes against the outer borders, and the largest loop is an outer
+    // border, so the sign of its area tells the two apart.
+    List<List<Point>> loops = loopsOf(new java.awt.geom.Area(path));
+    double outerSign = 0;
+    double largestArea = 0;
+    for (List<Point> loop : loops) {
+      double area = signedArea(loop);
+      if (Math.abs(area) > largestArea) {
+        largestArea = Math.abs(area);
+        outerSign = Math.signum(area);
+      }
+    }
+    List<PolygonShape> outers = new ArrayList<>();
+    List<PolygonShape> holes = new ArrayList<>();
+    for (List<Point> loop : loops) {
+      PolygonShape shape = new PolygonShape(loop.toArray(new Point[0]));
+      if (shape.dimension() < 2) {
+        continue;
+      }
+      if (Math.signum(signedArea(loop)) == outerSign) {
+        outers.add(shape);
+      } else {
+        holes.add(shape);
+      }
+    }
+    List<TileShape> result = new ArrayList<>();
+    int skipped = 0;
+    for (PolygonShape outer : outers) {
+      List<PolylineShape> holesInside = new ArrayList<>();
+      for (PolygonShape hole : holes) {
+        if (outer.contains(hole.corners[0])) {
+          holesInside.add(hole);
+        }
+      }
+      if (outer.splitToConvexRecu(new Random(seed)) == null) {
+        ++skipped;
+        continue;
+      }
+      TileShape[] pieces =
+          holesInside.isEmpty()
+              ? outer.splitToConvex()
+              : new PolylineArea(outer, holesInside.toArray(new PolylineShape[0])).splitToConvex();
+      if (pieces == null) {
+        ++skipped;
+        continue;
+      }
+      result.addAll(Arrays.asList(pieces));
+    }
+    FRLogger.warn(
+        "PolygonShape.split_to_convex: the border of the polygon with "
+            + corners.length
+            + " corners starting at "
+            + corners[0]
+            + " crosses or touches itself; it was split as the region it encloses"
+            + (skipped > 0 ? " (" + skipped + " loop(s) left out)" : ""));
+    return result.toArray(new TileShape[0]);
+  }
+
+  /** Twice the signed area of a closed loop (shoelace formula). */
+  private static double signedArea(List<Point> loop) {
+    double sum = 0;
+    for (int i = 0; i < loop.size(); i++) {
+      FloatPoint a = loop.get(i).toFloat();
+      FloatPoint b = loop.get((i + 1) % loop.size()).toFloat();
+      sum += a.x * b.y - b.x * a.y;
+    }
+    return sum;
+  }
+
+  /** Returns the closed loops of the border of an area, with corners rounded to integers. */
+  private static List<List<Point>> loopsOf(java.awt.geom.Area area) {
+    List<List<Point>> loops = new ArrayList<>();
+    List<Point> loop = new ArrayList<>();
+    double[] coords = new double[6];
+    for (PathIterator it = area.getPathIterator(null); !it.isDone(); it.next()) {
+      int type = it.currentSegment(coords);
+      if (type == PathIterator.SEG_MOVETO) {
+        if (loop.size() >= 3) {
+          loops.add(loop);
+        }
+        loop = new ArrayList<>();
+      }
+      if (type == PathIterator.SEG_MOVETO || type == PathIterator.SEG_LINETO) {
+        IntPoint corner = new IntPoint((int) Math.round(coords[0]), (int) Math.round(coords[1]));
+        if (loop.isEmpty() || !loop.getLast().equals(corner)) {
+          loop.add(corner);
+        }
+      }
+    }
+    if (loop.size() >= 3) {
+      loops.add(loop);
+    }
+    return loops;
   }
 
   /** Private recursive part of split_to_convex. Returns a collection of polygon shape pieces. */
