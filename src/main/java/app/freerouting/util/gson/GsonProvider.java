@@ -8,10 +8,8 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.Locale;
 
 /** Shared Gson instance configured for Freerouting API and settings serialization. */
 public final class GsonProvider {
@@ -23,23 +21,28 @@ public final class GsonProvider {
           .registerTypeAdapter(Instant.class, new InstantTypeAdapter())
           .registerTypeAdapter(byte[].class, new ByteArrayToBase64TypeAdapter())
           .registerTypeAdapter(Path.class, new PathTypeAdapter())
-          .registerTypeAdapter(Float.class, new TwoDecimalFloatAdapter())
-          .registerTypeAdapter(float.class, new TwoDecimalFloatAdapter())
-          .registerTypeAdapter(Double.class, new TwoDecimalDoubleAdapter())
-          .registerTypeAdapter(double.class, new TwoDecimalDoubleAdapter())
+          .registerTypeAdapter(Float.class, new FiniteFloatAdapter())
+          .registerTypeAdapter(float.class, new FiniteFloatAdapter())
+          .registerTypeAdapter(Double.class, new FiniteDoubleAdapter())
+          .registerTypeAdapter(double.class, new FiniteDoubleAdapter())
           .registerTypeAdapterFactory(new RouterSettingsTypeAdapterFactory())
           .setStrictness(Strictness.LENIENT)
           .create();
 
   private GsonProvider() {}
 
-  private static final class TwoDecimalFloatAdapter extends TypeAdapter<Float> {
+  /**
+   * Writes a float in its shortest exact form, so that it reads back as the same value (KiCad JSON
+   * coordinates, settings such as clearance_tolerance_um). A value that JSON cannot represent is
+   * written as null.
+   */
+  private static final class FiniteFloatAdapter extends TypeAdapter<Float> {
     @Override
     public void write(JsonWriter out, Float value) throws IOException {
       if (value == null || !Float.isFinite(value)) {
         out.nullValue();
       } else {
-        out.value(new BigDecimal(String.format(Locale.ROOT, "%.2f", value)));
+        out.value(value.floatValue());
       }
     }
 
@@ -53,13 +56,14 @@ public final class GsonProvider {
     }
   }
 
-  private static final class TwoDecimalDoubleAdapter extends TypeAdapter<Double> {
+  /** Writes a double in its shortest exact form; see {@link FiniteFloatAdapter}. */
+  private static final class FiniteDoubleAdapter extends TypeAdapter<Double> {
     @Override
     public void write(JsonWriter out, Double value) throws IOException {
       if (value == null || !Double.isFinite(value)) {
         out.nullValue();
       } else {
-        out.value(new BigDecimal(String.format(Locale.ROOT, "%.2f", value)));
+        out.value(value.doubleValue());
       }
     }
 
