@@ -129,6 +129,21 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     if (fillArea == null) {
       fillArea = new java.awt.geom.Area();
     }
+    // Pours are filled only on the board. Zone outlines may extend past the board edge (KiCad
+    // exports them that way); unclipped, the part outside the edge becomes an off-board frame.
+    var outline = this.board.getOutline();
+    if (!fillArea.isEmpty() && outline != null && outline.shapeCount() > 0) {
+      java.awt.geom.Area boardArea = new java.awt.geom.Area();
+      for (int i = 0; i < outline.shapeCount(); i++) {
+        java.awt.geom.Area outlinePiece = getAwtAreaFromShapeInBoardUnits(outline.getShape(i));
+        if (outlinePiece != null) {
+          boardArea.exclusiveOr(outlinePiece);
+        }
+      }
+      if (!boardArea.isEmpty()) {
+        fillArea.intersect(boardArea);
+      }
+    }
     if (!fillArea.isEmpty()) {
       IntBox bbox = this.boundingBox();
       double spokeWidth = 400.0 * this.board.communication.getResolution(Unit.UM);

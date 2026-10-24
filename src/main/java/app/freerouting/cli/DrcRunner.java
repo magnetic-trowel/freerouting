@@ -50,6 +50,17 @@ public final class DrcRunner {
       return false;
     }
 
+    // Check the board under the same merged settings a routing job loads it with (CliRunner):
+    // board-level overrides such as copper-to-edge and hole clearance are applied at load time.
+    try {
+      var loadSettingsMerger = globalSettings.settingsMergerProtype.clone();
+      loadSettingsMerger.addOrReplaceSources(
+          new DsnFileSettings(drcJob.input.getData(), drcJob.input.getFilename()));
+      drcJob.routerSettings = loadSettingsMerger.merge();
+    } catch (Exception e) {
+      FRLogger.warn("Failed to merge router settings for DRC: " + e.getMessage());
+    }
+
     if (!BoardLoader.loadBoardIfNeeded(drcJob)) {
       FRLogger.error("Failed to load board for DRC check", null);
       return false;
@@ -88,6 +99,11 @@ public final class DrcRunner {
           } else {
             FRLogger.info("Loading SES file for DRC: " + globalSettings.designSessionFilename);
             try (java.io.FileInputStream sesStream = new java.io.FileInputStream(sessionFile)) {
+              int replaced = SesReader.removeSessionRouting(drcJob.board);
+              if (replaced > 0) {
+                FRLogger.info(
+                    "Removed " + replaced + " design wires/vias that the SES file replaces");
+              }
               SesImportSummary summary = SesReader.read(sesStream, drcJob.board);
               FRLogger.info(
                   "SES file loaded for DRC: "

@@ -89,6 +89,38 @@ public final class SesReader {
     }
   }
 
+  /**
+   * Removes the copper that a Specctra session replaces: every wire and via with a net that is not
+   * {@link FixedState#SYSTEM_FIXED}. {@link SesWriter} exports exactly these items, including the
+   * ones that were already present in the design's wiring, so reading a session onto a freshly
+   * loaded design without this step duplicates all pre-existing routing.
+   *
+   * @param board the board whose session-owned routing is removed
+   * @return the number of removed items
+   */
+  public static int removeSessionRouting(BasicBoard board) {
+    java.util.List<app.freerouting.board.model.items.Item> sessionRouting =
+        new java.util.ArrayList<>();
+    for (app.freerouting.board.model.items.Item item : board.getItems()) {
+      if ((item instanceof app.freerouting.board.trace.PolylineTrace
+              || item instanceof app.freerouting.board.model.items.Via)
+          && item.netCount() > 0
+          && item.getFixedState() != FixedState.SYSTEM_FIXED) {
+        sessionRouting.add(item);
+      }
+    }
+    int removed = 0;
+    for (app.freerouting.board.model.items.Item item : sessionRouting) {
+      // DSN wiring loads as USER_FIXED, which removeItem refuses; the session carries its copy.
+      item.unfix();
+      if (!item.isDeletionForbidden()) {
+        board.removeItem(item);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers for session-file parsing.
   // ---------------------------------------------------------------------------
@@ -411,6 +443,15 @@ public final class SesReader {
       if (viaPadstack == null && padstackName != null) {
         viaPadstack = this.board.library.padstacks.get(padstackName.replaceAll("\\.\\d+", ""));
       }
+      // Older writers (v2.5.0) strip the decimals from padstack names (via-0.5:... -> via-0:...).
+      for (int id = 1; viaPadstack == null && id <= this.board.library.padstacks.count(); id++) {
+        Padstack candidate = this.board.library.padstacks.get(id);
+        if (candidate != null
+            && candidate.name != null
+            && candidate.name.replaceAll("\\.\\d+", "").equals(padstackName)) {
+          viaPadstack = candidate;
+        }
+      }
       if (viaPadstack == null) {
         FRLogger.warn("SesReader.processViaScope: via padstack not found: " + padstackName);
         return false;
@@ -425,8 +466,28 @@ public final class SesReader {
               .defaultItemClearanceClasses
               .get(app.freerouting.rules.DefaultItemClearanceClasses.ItemClass.VIA);
 
+      // Mirror the design rules: a via may sit on an SMD pad only where its rule allows it.
+      boolean attachAllowed = viaPadstack.attachAllowed;
+      boolean ruleFound = false;
+      boolean ruleAllowsAttach = false;
+      for (int i = 0; i < this.board.rules.viaInfos.count(); i++) {
+        app.freerouting.rules.ViaInfo viaInfo = this.board.rules.viaInfos.get(i);
+        if (viaInfo.getPadstack() == viaPadstack) {
+          ruleFound = true;
+          ruleAllowsAttach |= viaInfo.attachSmdAllowed();
+        }
+      }
+      if (ruleFound) {
+        attachAllowed &= ruleAllowsAttach;
+      }
+
       board.insertVia(
-          viaPadstack, viaLocation, netNumbers, clearanceClass, FixedState.USER_FIXED, true);
+          viaPadstack,
+          viaLocation,
+          netNumbers,
+          clearanceClass,
+          FixedState.USER_FIXED,
+          attachAllowed);
 
       viasImported++;
       return true;
