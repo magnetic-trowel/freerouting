@@ -86,17 +86,32 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     if (!this.isFilled) {
       return;
     }
-    int layerIndex = this.getLayer();
+    ensureDetailedFillCache(maxClearanceLookup(), this.getLayer());
+  }
+
+  /** The distance around the area within which other items can reduce its fill. */
+  private double maxClearanceLookup() {
     double maxClearanceLookupBoard = 2000.0 * this.board.communication.getResolution(Unit.UM);
     if (this.board.rules != null && this.board.rules.clearanceMatrix != null) {
       double maxMatrixClearance =
-          this.board.rules.clearanceMatrix.maxValue(this.clearanceClassIndex(), layerIndex);
+          this.board.rules.clearanceMatrix.maxValue(this.clearanceClassIndex(), this.getLayer());
       maxClearanceLookupBoard =
           Math.max(
               maxClearanceLookupBoard,
               maxMatrixClearance + 100.0 * this.board.communication.getResolution(Unit.UM));
     }
-    ensureDetailedFillCache(maxClearanceLookupBoard, layerIndex);
+    return maxClearanceLookupBoard;
+  }
+
+  /**
+   * Returns the copper of this area that connects the items of its net: {@link
+   * #getDetailedFillArea()} without the clearances to the pours of other nets. The design file does
+   * not give pour priorities, and with each of two overlapping pours cleared from the other, the
+   * smaller one (a teardrop, or a local zone on a plane) has no copper left. Computed on every
+   * call.
+   */
+  public java.awt.geom.Area getConnectingFill() {
+    return computeFill(maxClearanceLookup(), this.getLayer(), false);
   }
 
   /**
@@ -124,7 +139,16 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     if (cachedBoardFillArea != null && !boardChanged) {
       return;
     }
+    cachedBoardFillArea = computeFill(maxClearanceLookupBoard, layerIndex, true);
+    cachedBoardRevision = this.board.getRevision();
+  }
 
+  /**
+   * Computes the fill on {@code layerIndex}: as drawn ({@link #getDetailedFillArea()}), or as it
+   * connects ({@link #getConnectingFill()}), without clearances to other pours.
+   */
+  private java.awt.geom.Area computeFill(
+      double maxClearanceLookupBoard, int layerIndex, boolean asDrawn) {
     java.awt.geom.Area fillArea = getAwtAreaInBoardUnits(this.getArea());
     if (fillArea == null) {
       fillArea = new java.awt.geom.Area();
@@ -170,6 +194,11 @@ public class ConductionArea extends ObstacleArea implements Connectable {
           if (currentItem.sharesNet(this)) {
             continue;
           }
+        }
+        if (!asDrawn
+            && currentItem instanceof ConductionArea
+            && currentItem.getComponentId() <= 0) {
+          continue;
         }
 
         int clClass1 = this.clearanceClassIndex();
@@ -262,8 +291,7 @@ public class ConductionArea extends ObstacleArea implements Connectable {
       }
       AwtAreas.subtractAll(fillArea, foreignClearances);
     }
-    cachedBoardFillArea = fillArea;
-    cachedBoardRevision = this.board.getRevision();
+    return fillArea;
   }
 
   private static java.awt.geom.Area getAwtAreaInBoardUnits(Area area) {

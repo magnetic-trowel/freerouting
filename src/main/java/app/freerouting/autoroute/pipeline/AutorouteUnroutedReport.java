@@ -3,15 +3,19 @@ package app.freerouting.autoroute.pipeline;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
+import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.Component;
 import app.freerouting.core.library.Package;
 import app.freerouting.drc.AirLine;
 import app.freerouting.drc.DesignRulesChecker;
+import app.freerouting.drc.PlaneFillConnectivity;
+import app.freerouting.rules.Net;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
-/** Formats the diagnostic report emitted when autoroute stagnates. */
+/** Formats the diagnostic reports about connections the routed board leaves open. */
 final class AutorouteUnroutedReport {
 
   private AutorouteUnroutedReport() {}
@@ -51,6 +55,47 @@ final class AutorouteUnroutedReport {
       }
     }
     return result.toString().stripTrailing();
+  }
+
+  /**
+   * Returns a report of the pads and vias that the board counts as connected only through a pour
+   * polygon, although foreign copper cuts them off from the pour's fill, or null if there are none.
+   * The router does not see these open connections: it routes nothing to them, and the ratsnest and
+   * the session file show the net as complete.
+   */
+  static String planeFillCutOffs(RoutingBoard board) {
+    StringBuilder result = new StringBuilder();
+    int itemCount = 0;
+    for (int netNumber : PlaneFillConnectivity.pourNets(board)) {
+      PlaneFillConnectivity.Result connectivity = PlaneFillConnectivity.analyze(board, netNumber);
+      if (connectivity.cutOffGroups.isEmpty()) {
+        continue;
+      }
+      Net net = board.rules.nets.get(netNumber);
+      result.append("\n  Net '").append(net != null ? net.name : "#" + netNumber).append("':");
+      for (Set<Item> group : connectivity.cutOffGroups) {
+        result.append("\n    - ");
+        String separator = "";
+        for (Item item : group) {
+          if (item instanceof Pin || item instanceof Via) {
+            result.append(separator).append(describeItem(board, item));
+            separator = ", ";
+            itemCount++;
+          }
+        }
+        if (separator.isEmpty()) {
+          result.append(group.size()).append(" trace(s) from ").append(group.iterator().next());
+        }
+      }
+    }
+    if (result.isEmpty()) {
+      return null;
+    }
+    return itemCount
+        + " pin(s) or via(s) are cut off from the fill of their pour by foreign tracks and count as"
+        + " connected only through the pour polygon; they stay unconnected when the pour is"
+        + " refilled:"
+        + result;
   }
 
   /**

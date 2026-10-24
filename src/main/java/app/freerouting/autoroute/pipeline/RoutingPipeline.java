@@ -89,7 +89,23 @@ public final class RoutingPipeline {
     }
     runRoutingStage();
     runOptimizationStage();
+    reportPlaneFillCutOffs();
     this.job.stage = RoutingStage.IDLE;
+  }
+
+  /**
+   * Warns about pads and vias that the final board connects only through a pour polygon, while
+   * foreign tracks cut them off from the pour's fill. The board's connectivity cannot see them (it
+   * follows pour polygons, not fills), so this is the only report of them besides the DRC.
+   */
+  private void reportPlaneFillCutOffs() {
+    if (this.job.board == null || this.job.thread.isStopRequested()) {
+      return;
+    }
+    String report = AutorouteUnroutedReport.planeFillCutOffs(this.job.board);
+    if (report != null) {
+      this.job.logWarning(report);
+    }
   }
 
   private void runRoutingStage() {
