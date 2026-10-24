@@ -7,7 +7,6 @@ import app.freerouting.api.BaseController;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
-import app.freerouting.core.events.RoutingJobLogEntryAddedEventListener;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.management.jobs.RoutingJobScheduler;
 import app.freerouting.management.sessions.SessionManager;
@@ -28,14 +27,9 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.sse.OutboundSseEvent;
 import jakarta.ws.rs.sse.Sse;
 import jakarta.ws.rs.sse.SseEventSink;
 import java.util.UUID;
-import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 /**
  * JAX-RS resource for the routing job API.
@@ -410,115 +404,10 @@ public class JobProgressResource extends BaseController {
       return;
     }
 
-    // Create a scheduled executor for periodic updates and terminal state checks
-    ScheduledExecutorService executor =
-        Executors.newSingleThreadScheduledExecutor(
-            r -> {
-              Thread t = new Thread(r, "job-progress-stream-worker");
-              t.setDaemon(true);
-              return t;
-            });
-
-    RoutingJobLogEntryAddedEventListener[] listenerHolder =
-        new RoutingJobLogEntryAddedEventListener[1];
-
-    // The listener runs on the routing thread. Hand delivery to this stream's executor so a slow
-    // or disconnected client can neither stall routing nor throw into it.
-    listenerHolder[0] =
-        e -> {
-          var result = e.getLogEntry();
-          try {
-            executor.execute(
-                () -> sendLogEntry(job, eventSink, sse, result, listenerHolder, executor));
-          } catch (RejectedExecutionException _) {
-            job.removeLogEntryAddedEventListener(listenerHolder[0]);
-          }
-        };
-
-    job.addLogEntryAddedEventListener(listenerHolder[0]);
-
-    // Periodically verify if job reached a terminal state even if no new log entries were added,
-    // and send keep-alive comments so that a disconnected client is noticed and released.
-    long[] nextKeepAliveAt = {System.currentTimeMillis() + SseKeepAlive.intervalMillis};
-    Runnable release =
-        () -> {
-          job.removeLogEntryAddedEventListener(listenerHolder[0]);
-          try {
-            eventSink.close();
-          } catch (Exception closeEx) {
-            FRLogger.error("Error closing SSE event sink", closeEx);
-          }
-          executor.shutdown();
-        };
-    executor.scheduleAtFixedRate(
-        () -> {
-          if ((job.state != null && job.state.isTerminal()) || eventSink.isClosed()) {
-            release.run();
-          } else if (System.currentTimeMillis() >= nextKeepAliveAt[0]) {
-            nextKeepAliveAt[0] = System.currentTimeMillis() + SseKeepAlive.intervalMillis;
-            try {
-              eventSink
-                  .send(SseKeepAlive.event(sse))
-                  .whenComplete(
-                      (ignored, error) -> {
-                        if (error != null) {
-                          try {
-                            executor.execute(release);
-                          } catch (RejectedExecutionException _) {
-                            // Already released.
-                          }
-                        }
-                      });
-            } catch (RuntimeException sendEx) {
-              release.run();
-            }
-          }
-        },
-        200,
-        200,
-        TimeUnit.MILLISECONDS);
+    JobOutputStream.startLogs(job, eventSink, sse);
 
     // Log the API call
     FRAnalytics.apiEndpointCalled(
         "GET v1/jobs/" + jobId + "/logs/stream", "", "stream-started", userId);
-  }
-
-  /** Sends one log entry and closes the stream once the job is finished or delivery fails. */
-  private static void sendLogEntry(
-      RoutingJob job,
-      SseEventSink eventSink,
-      Sse sse,
-      Object result,
-      RoutingJobLogEntryAddedEventListener[] listenerHolder,
-      ScheduledExecutorService executor) {
-    try {
-      OutboundSseEvent event =
-          sse.newEventBuilder()
-              .id(String.valueOf(System.currentTimeMillis()))
-              .data(GSON.toJson(result))
-              .build();
-
-      eventSink.send(event);
-
-      // Close the connection if the job reached a terminal state
-      if (job.state != null && job.state.isTerminal()) {
-        job.removeLogEntryAddedEventListener(listenerHolder[0]);
-        try {
-          eventSink.close();
-        } catch (Exception closeEx) {
-          FRLogger.error("Error closing SSE event sink", closeEx);
-        }
-        executor.shutdown();
-      }
-    } catch (Exception ex) {
-      FRLogger.error("Error while streaming logs", ex);
-      job.removeLogEntryAddedEventListener(listenerHolder[0]);
-      try {
-        eventSink.close();
-      } catch (Exception closeEx) {
-        FRLogger.error("Error closing SSE event sink", closeEx);
-      }
-      executor.shutdown();
-    }
   }
 }

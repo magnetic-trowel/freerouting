@@ -6,6 +6,7 @@ import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -26,7 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * The log stream of a queued job never sends, so a client that disconnected kept its stream worker
+ * The log stream of a queued job never sends, so a client that disconnected kept its stream poll
  * and its job listener until the job ended. Keep-alive comments detect the vanished client.
  */
 class JobLogStreamKeepAliveTest {
@@ -67,6 +68,27 @@ class JobLogStreamKeepAliveTest {
     }
   }
 
+  /** A burst of entries is sent in full, and the stream of a completed job closes after it. */
+  @Test
+  void everyEntryIsSentBeforeTheStreamOfCompletedJobCloses() throws Exception {
+    when(sink.send(any(OutboundSseEvent.class)))
+        .thenReturn(CompletableFuture.completedFuture(null));
+    job.state = RoutingJobState.RUNNING;
+    try {
+      withJob(() -> resource.streamLogs(job.id.toString(), sink, sse));
+      for (int i = 0; i < 30; i++) {
+        job.logInfo("entry " + i);
+      }
+      job.state = RoutingJobState.COMPLETED;
+      verify(sink, timeout(3000)).close();
+      verify(sink, times(30)).send(any(OutboundSseEvent.class));
+      assertTrue(awaitWorkerExit(), "A finished stream must release its poll");
+    } finally {
+      job.state = RoutingJobState.CANCELLED;
+      awaitWorkerExit();
+    }
+  }
+
   private void withJob(Runnable request) {
     RoutingJobScheduler scheduler = mock(RoutingJobScheduler.class);
     SessionManager sessions = mock(SessionManager.class);
@@ -84,12 +106,7 @@ class JobLogStreamKeepAliveTest {
   private static boolean awaitWorkerExit() throws InterruptedException {
     long deadline = System.nanoTime() + 2_000_000_000L;
     while (System.nanoTime() < deadline) {
-      boolean running =
-          Thread.getAllStackTraces().keySet().stream()
-              .anyMatch(
-                  thread ->
-                      thread.getName().equals("job-progress-stream-worker") && thread.isAlive());
-      if (!running) {
+      if (JobOutputStream.openStreams() == 0) {
         return true;
       }
       Thread.sleep(10);

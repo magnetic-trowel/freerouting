@@ -30,11 +30,9 @@ import jakarta.ws.rs.sse.OutboundSseEvent;
 import jakarta.ws.rs.sse.Sse;
 import jakarta.ws.rs.sse.SseEventSink;
 import java.nio.charset.StandardCharsets;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -89,7 +87,7 @@ class JobOutputStreamLifecycleTest {
   }
 
   private void assertStreamCloses(RoutingJobState state, boolean json) throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     try {
       withJob(() -> startStream(json));
       assertTrue(awaitNewWorker(existing));
@@ -103,9 +101,31 @@ class JobOutputStreamLifecycleTest {
     }
   }
 
+  /** Streams are scheduled polls on a shared executor: clients do not cost a thread each. */
+  @Test
+  void manyStreamsShareTheTwoStreamThreads() throws Exception {
+    final int existing = JobOutputStream.openStreams();
+    try {
+      for (int i = 0; i < 20; i++) {
+        boolean json = i % 2 == 0;
+        withJob(() -> startStream(json));
+      }
+      assertTrue(await(() -> JobOutputStream.openStreams() == existing + 20));
+      long threads =
+          Thread.getAllStackTraces().keySet().stream()
+              .filter(thread -> thread.getName().equals("job-stream-worker"))
+              .count();
+      assertTrue(threads <= 2, threads + " stream threads");
+    } finally {
+      job.state = RoutingJobState.CANCELLED;
+      closed.set(true);
+      assertTrue(awaitWorkerExit(existing));
+    }
+  }
+
   @Test
   void disconnectedIdleClientReleasesWorker() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     try {
       withJob(() -> startStream(false));
       assertTrue(awaitNewWorker(existing));
@@ -134,7 +154,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void separateSubscribersReceiveSameCurrentSnapshot() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     SseEventSink secondSink = mock(SseEventSink.class);
     when(secondSink.send(any(OutboundSseEvent.class)))
         .thenReturn(CompletableFuture.completedFuture(null));
@@ -154,7 +174,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void completedStreamWaitsForFinalSendBeforeClosing() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     CompletableFuture<Void> delivery = new CompletableFuture<>();
     when(sink.send(any(OutboundSseEvent.class))).thenAnswer(invocation -> delivery);
     job.output = new BoardFileDetails();
@@ -175,9 +195,8 @@ class JobOutputStreamLifecycleTest {
   }
 
   @Test
-  @app.freerouting.logger.AllowErrorLogs("Exercises asynchronous SSE delivery failure")
   void asynchronousSendFailureReleasesWorker() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     CompletableFuture<Void> delivery = new CompletableFuture<>();
     when(sink.send(any(OutboundSseEvent.class))).thenAnswer(invocation -> delivery);
     job.output = new BoardFileDetails();
@@ -201,9 +220,8 @@ class JobOutputStreamLifecycleTest {
    * is sent while there is nothing else to send.
    */
   @Test
-  @app.freerouting.logger.AllowErrorLogs("Exercises a keep-alive to a disconnected client")
   void keepAliveReleasesWorkerOfVanishedClientWhileThereIsNoOutput() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     long interval = SseKeepAlive.intervalMillis;
     SseKeepAlive.intervalMillis = 100;
     when(sink.send(any(OutboundSseEvent.class)))
@@ -223,7 +241,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void invalidJobDoesNotPublishEarlierPreview() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     job.output = new BoardFileDetails();
     job.output.setData("earlier-preview".getBytes(StandardCharsets.UTF_8));
     job.state = RoutingJobState.INVALID;
@@ -241,7 +259,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void cancellationReleasesPendingSend() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     CompletableFuture<Void> delivery = new CompletableFuture<>();
     when(sink.send(any(OutboundSseEvent.class))).thenAnswer(invocation -> delivery);
     job.output = new BoardFileDetails();
@@ -261,9 +279,8 @@ class JobOutputStreamLifecycleTest {
   }
 
   @Test
-  @app.freerouting.logger.AllowErrorLogs("Exercises the bounded SSE send deadline")
   void stalledSendTimesOutAndReleasesWorker() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     CompletableFuture<Void> delivery = new CompletableFuture<>();
     when(sink.send(any(OutboundSseEvent.class))).thenAnswer(invocation -> delivery);
     job.output = new BoardFileDetails();
@@ -283,7 +300,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void pendingDeliveryCoalescesChangesAndStillSendsFinalSnapshot() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     CompletableFuture<Void> delivery = new CompletableFuture<>();
     when(sink.send(any(OutboundSseEvent.class))).thenAnswer(invocation -> delivery);
     job.output = new BoardFileDetails();
@@ -313,7 +330,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void jsonStreamSuppressesUnchangedBoardAndWaitsForFinalDelivery() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     job.board = DsnTestFixtures.loadBoard("Issue026-J2_reference.dsn");
     try {
       withJob(() -> startStream(true));
@@ -343,7 +360,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void jsonStreamSendsTheJsonOutputOnceTheBoardIsReleased() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     String finalJson =
         KiCadJsonWriter.write(DsnTestFixtures.loadBoard("Issue026-J2_reference.dsn"), job.name);
     job.output = new BoardFileDetails();
@@ -368,7 +385,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void pausedJobKeepsStreamOpen() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     job.state = RoutingJobState.PAUSED;
     try {
       withJob(() -> startStream(false));
@@ -385,7 +402,7 @@ class JobOutputStreamLifecycleTest {
 
   @Test
   void nullJobStateRemainsNonTerminalDuringPolling() throws Exception {
-    final Set<Thread> existing = workers();
+    final int existing = JobOutputStream.openStreams();
     try {
       withJob(() -> startStream(false));
       assertTrue(awaitNewWorker(existing));
@@ -425,27 +442,20 @@ class JobOutputStreamLifecycleTest {
     }
   }
 
-  private static Set<Thread> workers() {
-    return Thread.getAllStackTraces().keySet().stream()
-        .filter(thread -> thread.getName().startsWith("job-output-") && thread.isAlive())
-        .collect(Collectors.toSet());
+  // A stream is a scheduled poll on a shared executor; "worker" here means that poll.
+  private static boolean awaitNewWorker(int existing) throws InterruptedException {
+    return await(() -> JobOutputStream.openStreams() > existing);
   }
 
-  private static boolean awaitNewWorker(Set<Thread> existing) throws InterruptedException {
-    long deadline = System.nanoTime() + 2_000_000_000L;
-    while (System.nanoTime() < deadline) {
-      if (workers().stream().anyMatch(thread -> !existing.contains(thread))) {
-        return true;
-      }
-      Thread.sleep(10);
-    }
-    return false;
+  private static boolean awaitWorkerExit(int existing) throws InterruptedException {
+    return await(() -> JobOutputStream.openStreams() <= existing);
   }
 
-  private static boolean awaitWorkerExit(Set<Thread> existing) throws InterruptedException {
+  private static boolean await(java.util.function.BooleanSupplier condition)
+      throws InterruptedException {
     long deadline = System.nanoTime() + 2_000_000_000L;
     while (System.nanoTime() < deadline) {
-      if (workers().stream().noneMatch(thread -> !existing.contains(thread))) {
+      if (condition.getAsBoolean()) {
         return true;
       }
       Thread.sleep(10);

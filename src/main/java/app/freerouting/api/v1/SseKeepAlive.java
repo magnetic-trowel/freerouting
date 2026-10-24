@@ -8,8 +8,8 @@ import jakarta.ws.rs.sse.Sse;
  *
  * <p>A stream only notices that its client went away when a write fails. A stream of a job that
  * produces no events (for example one that is queued and never started) would otherwise keep its
- * worker thread and its job listener forever after the client disconnected, so every stream sends a
- * comment event at this interval while it has nothing else to send.
+ * scheduled poll and its job listener forever after the client disconnected, so every stream sends
+ * a comment event at this interval while it has nothing else to send.
  */
 final class SseKeepAlive {
 
