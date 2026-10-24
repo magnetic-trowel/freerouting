@@ -38,27 +38,44 @@ public class Nets implements Serializable {
     return nets.size();
   }
 
-  /** Returns the net with the given name and subnet number, or null if no such net exists. */
+  /**
+   * Returns the net with the given name and subnet number, or null if no such net exists. Net names
+   * are case-sensitive in KiCad: an exact match wins, and a match that differs only in case is the
+   * fallback for writers that change the case of references.
+   */
   public Net get(String name, int subnetNumber) {
+    Net caseInsensitiveMatch = null;
     for (Net currentNet : nets) {
-      if (currentNet != null && currentNet.name.equalsIgnoreCase(name)) {
-        if (currentNet.subnetNumber == subnetNumber) {
+      if (currentNet != null
+          && currentNet.subnetNumber == subnetNumber
+          && currentNet.name.equalsIgnoreCase(name)) {
+        if (currentNet.name.equals(name)) {
           return currentNet;
+        }
+        if (caseInsensitiveMatch == null) {
+          caseInsensitiveMatch = currentNet;
         }
       }
     }
-    return null;
+    return caseInsensitiveMatch;
   }
 
-  /** Returns all subnets with the given name. */
+  /**
+   * Returns all subnets with the given name: the exact matches, or if there are none, the nets
+   * whose name differs only in case.
+   */
   public Collection<Net> get(String name) {
-    Collection<Net> result = new LinkedList<>();
+    Collection<Net> exact = new LinkedList<>();
+    Collection<Net> caseInsensitive = new LinkedList<>();
     for (Net currentNet : nets) {
       if (currentNet != null && currentNet.name.equalsIgnoreCase(name)) {
-        result.add(currentNet);
+        caseInsensitive.add(currentNet);
+        if (currentNet.name.equals(name)) {
+          exact.add(currentNet);
+        }
       }
     }
-    return result;
+    return exact.isEmpty() ? caseInsensitive : exact;
   }
 
   /** Returns the net with the given net number, or null if no such net exists. */
