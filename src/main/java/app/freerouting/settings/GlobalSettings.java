@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -621,6 +622,31 @@ public class GlobalSettings implements Serializable {
       }
     }
     processOverrides.record(before, toJsonTree());
+    keepAnalyticsOptOut();
+  }
+
+  /**
+   * Applies {@code change} to these settings for this process only: values it changes are not saved
+   * to {@code freerouting.json}. Used for state derived at runtime, such as whether a server could
+   * be started or the address it is bound to.
+   *
+   * @param change the change to apply
+   */
+  public void applyProcessOnly(Runnable change) {
+    JsonObject before = toJsonTree();
+    change.run();
+    processOverrides.record(before, toJsonTree());
+  }
+
+  /**
+   * An analytics opt-out given on the command line or in the environment is kept: it errs on the
+   * side of collecting nothing, and a GUI save used to persist it before command-line values became
+   * process-only.
+   */
+  private void keepAnalyticsOptOut() {
+    if (usageAndDiagnosticData != null && usageAndDiagnosticData.disableAnalytics) {
+      processOverrides.forget(List.of("usage_and_diagnostic_data", "disable_analytics"));
+    }
   }
 
   /**
@@ -685,6 +711,7 @@ public class GlobalSettings implements Serializable {
     JsonObject before = toJsonTree();
     parseCommandLineArguments(args);
     processOverrides.record(before, toJsonTree());
+    keepAnalyticsOptOut();
   }
 
   private void parseCommandLineArguments(String[] args) {

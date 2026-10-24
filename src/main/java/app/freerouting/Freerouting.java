@@ -639,10 +639,15 @@ public class Freerouting {
     }
 
     // Disable GUI and API if in DRC-only mode
+    // Runtime state below (modes, whether a server started, derived addresses) is for this
+    // process only and must not be saved to freerouting.json by a later GUI save.
     if (globalSettings.drcReportFile != null) {
-      globalSettings.guiSettings.isEnabled = false;
-      globalSettings.apiServerSettings.isEnabled = false;
-      globalSettings.mcpServerSettings.isEnabled = false;
+      globalSettings.applyProcessOnly(
+          () -> {
+            globalSettings.guiSettings.isEnabled = false;
+            globalSettings.apiServerSettings.isEnabled = false;
+            globalSettings.mcpServerSettings.isEnabled = false;
+          });
     }
 
     // Create the settings merger prototype based on the sources that will not change at runtime
@@ -656,7 +661,9 @@ public class Freerouting {
     // Initialize the API server
     if (globalSettings.apiServerSettings.isEnabled) {
       apiServer = initializeAPI(globalSettings.apiServerSettings);
-      globalSettings.apiServerSettings.isEnabled = apiServer != null;
+      boolean apiStarted = apiServer != null;
+      globalSettings.applyProcessOnly(
+          () -> globalSettings.apiServerSettings.isEnabled = apiStarted);
       globalSettings.apiServerSettings.isRunning = apiServer != null;
 
       if (apiServer != null
@@ -670,14 +677,18 @@ public class Freerouting {
           if (port <= 0) {
             port = connector.getPort();
           }
-          globalSettings.mcpServerSettings.targetApiBaseUrl = "http://127.0.0.1:" + port;
+          String targetApiBaseUrl = "http://127.0.0.1:" + port;
+          globalSettings.applyProcessOnly(
+              () -> globalSettings.mcpServerSettings.targetApiBaseUrl = targetApiBaseUrl);
         }
       }
     }
 
     if (globalSettings.mcpServerSettings.isEnabled) {
       mcpServer = initializeMCP(globalSettings.mcpServerSettings);
-      globalSettings.mcpServerSettings.isEnabled = mcpServer != null;
+      boolean mcpStarted = mcpServer != null;
+      globalSettings.applyProcessOnly(
+          () -> globalSettings.mcpServerSettings.isEnabled = mcpStarted);
       globalSettings.mcpServerSettings.isRunning = mcpServer != null;
 
       if (mcpServer != null && Boolean.TRUE.equals(globalSettings.mcpServerSettings.isStdioMode)) {
@@ -689,7 +700,7 @@ public class Freerouting {
     if (globalSettings.guiSettings.isEnabled) {
       if (!GuiManager.initializeGUI(globalSettings)) {
         FRLogger.error("Couldn't initialize the GUI", null);
-        globalSettings.guiSettings.isEnabled = false;
+        globalSettings.applyProcessOnly(() -> globalSettings.guiSettings.isEnabled = false);
       } else {
         globalSettings.guiSettings.isRunning = true;
       }

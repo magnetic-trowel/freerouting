@@ -168,6 +168,43 @@ class ProcessOnlySettingsPersistenceTest {
         Files.readString(GlobalSettings.getConfigurationFilePath(), StandardCharsets.UTF_8));
   }
 
+  @Test
+  void analyticsOptOutGivenOnTheCommandLineIsKept() throws IOException {
+    GlobalSettings globalSettings = startGuiSession("-da");
+
+    GlobalSettings.saveAsJson(globalSettings);
+
+    assertTrue(GlobalSettings.load().usageAndDiagnosticData.disableAnalytics);
+  }
+
+  @Test
+  void runtimeStateAppliedForTheProcessIsNotSaved() throws IOException {
+    writeConfigurationFile(
+        """
+        {
+          "version": "%s",
+          "api_server": { "enabled": true }
+        }
+        """
+            .formatted(GlobalSettings.getReleaseSafeVersion()));
+    GlobalSettings globalSettings = startGuiSession();
+    // The API server failed to start, and the MCP target was derived from a bound port.
+    globalSettings.applyProcessOnly(
+        () -> {
+          globalSettings.apiServerSettings.isEnabled = false;
+          globalSettings.mcpServerSettings.targetApiBaseUrl = "http://127.0.0.1:40000";
+        });
+    globalSettings.guiSettings.inputDirectory = "/gui/boards";
+
+    GlobalSettings.saveAsJson(globalSettings);
+
+    GlobalSettings nextRun = GlobalSettings.load();
+    assertEquals("/gui/boards", nextRun.guiSettings.inputDirectory);
+    assertTrue(nextRun.apiServerSettings.isEnabled);
+    assertEquals(
+        new McpServerSettings().targetApiBaseUrl, nextRun.mcpServerSettings.targetApiBaseUrl);
+  }
+
   private static GlobalSettings startGuiSession(String... args) {
     return GlobalSettingsBootstrap.initialize(args, "", true);
   }

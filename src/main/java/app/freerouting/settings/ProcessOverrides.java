@@ -39,6 +39,12 @@ final class ProcessOverrides {
     recordDifferences(before, after, new ArrayList<>());
   }
 
+  /** Stops tracking {@code path}, so that its live value is saved like any other. */
+  synchronized void forget(List<String> path) {
+    overrideValues.remove(path);
+    originalValues.remove(path);
+  }
+
   /** Returns whether nothing was overridden for this process. */
   synchronized boolean isEmpty() {
     return overrideValues.isEmpty();
