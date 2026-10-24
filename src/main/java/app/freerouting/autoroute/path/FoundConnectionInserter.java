@@ -107,10 +107,11 @@ public final class FoundConnectionInserter {
     }
     if (targetItem instanceof PolylineTrace toTrace) {
       if (newInstance.firstCorner != null) {
+        // The stub lies on the layer of the trace it joins.
         board.connectToTrace(
             newInstance.firstCorner,
             toTrace,
-            ctrl.traceHalfWidth[startLayer],
+            ctrl.traceHalfWidth[toTrace.getLayer()],
             ctrl.traceClearanceClassIndex);
       } else {
         FRLogger.warn(
@@ -125,7 +126,7 @@ public final class FoundConnectionInserter {
         board.connectToTrace(
             newInstance.lastCorner,
             toTrace,
-            ctrl.traceHalfWidth[targetLayer],
+            ctrl.traceHalfWidth[toTrace.getLayer()],
             ctrl.traceClearanceClassIndex);
       } else {
         FRLogger.warn(
