@@ -3,11 +3,13 @@ package app.freerouting.autoroute.pipeline;
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.core.RoutingJob;
+import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.drc.ClearanceBaseline;
 import app.freerouting.settings.RouterSettings;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -21,6 +23,9 @@ final class RoutingFallbackRunner {
 
   private final Map<String, RoutingFallback.Outcome> passLoopStarts = new LinkedHashMap<>();
   private final BatchAutorouter listenerSource;
+
+  /** The attempts run and the one chosen, for the result manifest; null if none ran. */
+  private RoutingResultManifest.FallbackDetail detail;
 
   RoutingFallbackRunner(BatchAutorouter listenerSource) {
     this.listenerSource = listenerSource;
@@ -86,6 +91,7 @@ final class RoutingFallbackRunner {
     if (defaultRouter.passLoopStartHash != null) {
       this.passLoopStarts.put(defaultRouter.passLoopStartHash, best);
     }
+    record(best, defaultRouter);
     ClearanceBaseline defaultClearance =
         RoutingFallback.captureClearance(job.board, best.violations);
     Attempt bestAttempt = new Attempt(best, job.board, defaultRouter, defaultClearance);
@@ -157,7 +163,36 @@ final class RoutingFallbackRunner {
             + "': "
             + bestAttempt.outcome
             + ".");
+    this.detail.chosen = bestAttempt.outcome.strategy;
     return bestAttempt.router;
+  }
+
+  /** The fallback and exploration attempts and the chosen one; null if no attempt ran. */
+  RoutingResultManifest.FallbackDetail detail() {
+    return this.detail;
+  }
+
+  private void record(RoutingFallback.Outcome outcome, BatchAutorouter router) {
+    if (this.detail == null) {
+      this.detail = new RoutingResultManifest.FallbackDetail();
+    }
+    RoutingResultManifest.FallbackAttempt attempt = new RoutingResultManifest.FallbackAttempt();
+    attempt.strategy = outcome.strategy;
+    attempt.stopReason =
+        router.lastStopReason != null
+            ? router.lastStopReason.name().toLowerCase(Locale.ROOT)
+            : null;
+    attempt.unrouted = outcome.unrouted;
+    attempt.newOrChangedViolations = outcome.newOrChanged;
+    attempt.clearanceViolations = outcome.violations;
+    attempt.routerScore = outcome.score;
+    attempt.durationSeconds =
+        seconds(router.phaseMetrics.fanout) + seconds(router.phaseMetrics.autorouter);
+    this.detail.attempts.add(attempt);
+  }
+
+  private static float seconds(RoutingResultManifest.PhaseDetail phase) {
+    return phase.durationSeconds != null ? phase.durationSeconds : 0f;
   }
 
   /**
@@ -170,14 +205,18 @@ final class RoutingFallbackRunner {
       return incumbent;
     }
     RoutingSupervisor supervisor = new RoutingSupervisor();
+    String incumbentName = this.detail != null ? this.detail.chosen : "default";
     RoutingFallback.Outcome best =
-        RoutingFallback.Outcome.of("incumbent", job.board, job.routerSettings);
+        RoutingFallback.Outcome.of(incumbentName, job.board, job.routerSettings);
     // The incumbent's own violations are its baseline, as for the default attempt in run():
     // without one, every candidate with any violation (even the input's) counts them all as new
     // and can never replace the incumbent.
     ClearanceBaseline incumbentClearance =
         RoutingFallback.captureClearance(job.board, best.violations);
     Attempt bestAttempt = new Attempt(best, job.board, incumbent, incumbentClearance);
+    if (this.detail == null) {
+      record(best, incumbent);
+    }
     RouterSettings jobSettings = job.routerSettings;
     int round = 0;
     while (!bestAttempt.outcome.isCompleteAndClean()
@@ -223,6 +262,7 @@ final class RoutingFallbackRunner {
     }
     job.board = bestAttempt.board;
     job.routerSettings = jobSettings;
+    this.detail.chosen = bestAttempt.outcome.strategy;
     return bestAttempt.router;
   }
 
@@ -325,6 +365,7 @@ final class RoutingFallbackRunner {
       RoutingFallback.Outcome outcome =
           RoutingFallback.Outcome.of(strategyName, job.board, savedSettings);
       ClearanceBaseline baseline = RoutingFallback.captureClearance(job.board, outcome.violations);
+      record(outcome, router);
       return new Attempt(outcome, job.board, router, baseline);
     } catch (RuntimeException e) {
       job.board = savedBoard;

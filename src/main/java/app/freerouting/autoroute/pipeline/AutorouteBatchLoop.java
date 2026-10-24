@@ -253,7 +253,7 @@ final class AutorouteBatchLoop {
 
     if (fanoutBeforeStats != null) {
       BoardStatistics fanoutAfterStats = router.boardStatistics();
-      RoutingResultManifest.PhaseDetail phase = job.resultPhaseMetrics.fanout;
+      RoutingResultManifest.PhaseDetail phase = router.phaseMetrics.fanout;
       phase.before = new RoutingResultManifest.PhaseSnapshot();
       phase.before.boardStatistics = fanoutBeforeStats;
       phase.before.scoreSource = "not_applicable";
@@ -305,6 +305,7 @@ final class AutorouteBatchLoop {
     }
 
     int currentPass = 1;
+    int passesCompleted = 0;
     int consecutiveNoImprovementPasses = 0;
     boolean fanoutRecoveryApplied = false;
     int lastMileAttempts = 0;
@@ -374,6 +375,7 @@ final class AutorouteBatchLoop {
         stopFor(BatchAutorouter.StopReason.ERROR);
         break;
       }
+      passesCompleted = currentPass;
 
       BoardStatistics boardStatisticsAfter = router.boardStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
@@ -650,7 +652,7 @@ final class AutorouteBatchLoop {
 
     if (isRouterEnabled && autorouterBeforeStats != null) {
       BoardStatistics autorouterAfterStats = router.boardStatistics();
-      RoutingResultManifest.PhaseDetail phase = job.resultPhaseMetrics.autorouter;
+      RoutingResultManifest.PhaseDetail phase = router.phaseMetrics.autorouter;
       phase.before =
           RoutingResultManifest.PhaseSnapshot.fromBoardStatistics(
               autorouterBeforeStats, job.routerSettings, "current");
@@ -659,7 +661,7 @@ final class AutorouteBatchLoop {
           RoutingResultManifest.PhaseSnapshot.fromBoardStatistics(
               autorouterAfterStats, job.routerSettings, "current");
       phase.after.score = phase.after.routerScore;
-      phase.passesCompleted = Math.max(0, currentPass);
+      phase.passesCompleted = passesCompleted;
       phase.durationSeconds =
           (float) (Duration.between(autorouterStageStart, Instant.now()).toMillis() / 1000.0);
       float autorouterCpuEnd = AutorouteRuntimeMetrics.currentThreadCpuSeconds();

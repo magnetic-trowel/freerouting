@@ -100,6 +100,7 @@ class AutorouteBatchLoopStopTest {
     assertFalse(run.job().thread.isStopAutoRouterRequested());
     assertEquals(TaskState.FINISHED, lastState(run));
     assertEquals(0, run.job().board.getViaCount(), "the final cleanup removes the fanout stub");
+    assertEquals(1, run.router().phaseMetrics.autorouter.passesCompleted);
   }
 
   @Test
@@ -114,6 +115,7 @@ class AutorouteBatchLoopStopTest {
     assertEquals(BatchAutorouter.StopReason.TIMED_OUT, run.router().lastStopReason);
     assertEquals(TaskState.TIMED_OUT, lastState(run));
     assertEquals(1, run.job().board.getViaCount(), "a stopped loop does not clean up");
+    assertEquals(0, run.router().phaseMetrics.autorouter.passesCompleted);
   }
 
   @Test

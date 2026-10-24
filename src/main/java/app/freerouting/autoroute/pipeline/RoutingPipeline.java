@@ -130,6 +130,7 @@ public final class RoutingPipeline {
       if (RoutingSupervisor.explores(this.job.routerSettings)) {
         this.autorouter = fallback.explore(this.job, this.autorouter);
       }
+      this.job.resultPhaseMetrics.fallback = fallback.detail();
     } else if (this.job.routerSettings.isFanoutEnabled()
         && !this.job.thread.isStopAutoRouterRequested()) {
       Integer originalMaxPasses = this.job.routerSettings.autorouter.maxPasses;
@@ -141,6 +142,9 @@ public final class RoutingPipeline {
       }
     }
 
+    // The kept router's stages, not those of the last fallback attempt.
+    this.job.resultPhaseMetrics.fanout = this.autorouter.phaseMetrics.fanout;
+    this.job.resultPhaseMetrics.autorouter = this.autorouter.phaseMetrics.autorouter;
     this.job.board.finishAutoroute();
     for (StageListener listener : this.stageListeners) {
       listener.afterRouting(this.autorouter);

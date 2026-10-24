@@ -14,6 +14,7 @@ import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.StoppableThread;
+import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.UndoableObjects;
 import app.freerouting.geometry.planar.FloatLine;
@@ -132,6 +133,12 @@ public final class BatchAutorouter extends NamedAlgorithm {
 
   /** Why the last pass loop stopped. Null until the loop records a reason. */
   public StopReason lastStopReason;
+
+  /**
+   * Fanout and autorouter stage metrics of this router's pass loop. The pipeline reports those of
+   * the router whose board it keeps, which after a routing fallback need not be the last one run.
+   */
+  final RoutingResultManifest.PhaseMetrics phaseMetrics = new RoutingResultManifest.PhaseMetrics();
 
   /** The exception that aborted the last pass, or null if it ran to its end. */
   public Exception lastPassFailure;
