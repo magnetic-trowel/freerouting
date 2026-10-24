@@ -728,10 +728,7 @@ public class DesignRulesChecker {
     items.add(new KiCadDrcViolationItem(secondItemDesc, secondItemPos, secondUuid));
 
     // Determine violation type
-    String type = "clearance";
-    if (isHole(violation.firstItem) || isHole(violation.secondItem)) {
-      type = "holeClearance";
-    }
+    String type = violation.holeClearance ? "holeClearance" : "clearance";
 
     // Create violation description
     String description;
@@ -879,15 +876,6 @@ public class DesignRulesChecker {
     String severity =
         "isolated_island_unconnected".equals(zoneViolation.type) ? "error" : "warning";
     return new KiCadDrcViolation(zoneViolation.type, description, severity, items);
-  }
-
-  private boolean isHole(Item item) {
-    if (item instanceof Via) {
-      return true;
-    }
-    // Pins are treated as holes for DRC classification to match expected output,
-    // although this might include SMT pins (DrillItem).
-    return item instanceof Pin;
   }
 
   /**

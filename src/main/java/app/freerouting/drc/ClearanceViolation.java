@@ -43,6 +43,12 @@ public class ClearanceViolation implements ItemInfoPrinter.Printable {
   public final double expectedClearance;
   public final double actualClearance;
 
+  /**
+   * True if only the hole clearance is violated: one item comes too close to the drill hole of the
+   * other although it keeps the copper clearance. The clearances are then measured from the hole.
+   */
+  public final boolean holeClearance;
+
   /** Creates a new instance of ClearanceViolation. */
   public ClearanceViolation(
       Item firstItem,
@@ -51,12 +57,25 @@ public class ClearanceViolation implements ItemInfoPrinter.Printable {
       int layer,
       double expectedClearance,
       double actualClearance) {
+    this(firstItem, secondItem, shape, layer, expectedClearance, actualClearance, false);
+  }
+
+  /** Creates a new instance of ClearanceViolation, of the hole clearance if holeClearance. */
+  public ClearanceViolation(
+      Item firstItem,
+      Item secondItem,
+      ConvexShape shape,
+      int layer,
+      double expectedClearance,
+      double actualClearance,
+      boolean holeClearance) {
     this.firstItem = firstItem;
     this.secondItem = secondItem;
     this.shape = shape;
     this.layer = layer;
     this.expectedClearance = expectedClearance;
     this.actualClearance = actualClearance;
+    this.holeClearance = holeClearance;
   }
 
   /**

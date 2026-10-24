@@ -1201,33 +1201,7 @@ public class ShapeSearchTree extends MinAreaTree {
     }
     TileShape[] result = new TileShape[drillItem.tileShapeCount()];
     for (int i = 0; i < result.length; i++) {
-      Shape currentShape = drillItem.getShape(i);
-      if (currentShape == null) {
-        currentShape = drillHoleObstacle(drillItem);
-      }
-      if (currentShape == null) {
-        result[i] = null;
-      } else {
-        TileShape currentTileShape;
-        if (this.board.rules.getTraceAngleRestriction() == AngleRestriction.NINETY_DEGREE) {
-          currentTileShape = currentShape.boundingBox();
-        } else if (this.board.rules.getTraceAngleRestriction()
-            == AngleRestriction.FORTYFIVE_DEGREE) {
-          currentTileShape = currentShape.boundingOctagon();
-        } else {
-          currentTileShape = currentShape.boundingTile();
-        }
-        int offsetWidth =
-            this.clearanceCompensationValue(
-                drillItem.clearanceClassIndex(), drillItem.shapeLayer(i));
-        offsetWidth += drillHoleClearanceDelta(drillItem, currentShape, drillItem.shapeLayer(i));
-        if (currentTileShape == null) {
-          FRLogger.warn("ShapeSearchTree.calculate_tree_shapes: shape is null");
-        } else {
-          currentTileShape = (TileShape) currentTileShape.enlarge(offsetWidth);
-        }
-        result[i] = currentTileShape;
-      }
+      result[i] = drillTreeShape(drillItem, i, true);
     }
     return result;
   }
@@ -1338,6 +1312,64 @@ public class ShapeSearchTree extends MinAreaTree {
   }
 
   /**
+   * The tree shape of shape {@code index} of a drill item without the drill-hole clearance
+   * inflation: its pad, or the bare hole on a layer without a pad, as this tree bounds it. Valid
+   * for this class's own trees; the 45- and 90-degree trees bound shapes differently.
+   */
+  public TileShape drillCopperTreeShape(DrillItem drillItem, int index) {
+    return drillTreeShape(drillItem, index, false);
+  }
+
+  private TileShape drillTreeShape(DrillItem drillItem, int index, boolean withHoleClearance) {
+    Shape currentShape = drillShape(drillItem, index);
+    if (currentShape == null) {
+      return null;
+    }
+    TileShape currentTileShape;
+    if (this.board.rules.getTraceAngleRestriction() == AngleRestriction.NINETY_DEGREE) {
+      currentTileShape = currentShape.boundingBox();
+    } else if (this.board.rules.getTraceAngleRestriction() == AngleRestriction.FORTYFIVE_DEGREE) {
+      currentTileShape = currentShape.boundingOctagon();
+    } else {
+      currentTileShape = currentShape.boundingTile();
+    }
+    int offsetWidth =
+        this.clearanceCompensationValue(
+            drillItem.clearanceClassIndex(), drillItem.shapeLayer(index));
+    if (withHoleClearance) {
+      offsetWidth += drillHoleClearanceDelta(drillItem, currentShape, drillItem.shapeLayer(index));
+    }
+    if (currentTileShape == null) {
+      FRLogger.warn("ShapeSearchTree.calculate_tree_shapes: shape is null");
+      return null;
+    }
+    return (TileShape) currentTileShape.enlarge(offsetWidth);
+  }
+
+  /** The pad shape {@code index} of a drill item, or its hole on a layer without a pad. */
+  private Shape drillShape(DrillItem drillItem, int index) {
+    Shape shape = drillItem.getShape(index);
+    return shape != null ? shape : drillHoleObstacle(drillItem);
+  }
+
+  /**
+   * The distance that other copper must keep from shape {@code index} of a drill item (its pad, or
+   * the hole on a layer without a pad) to stay the hole clearance away from the drill hole: the
+   * drill radius plus the hole clearance minus the radius of the copper around the hole. 0 without
+   * a hole-clearance rule or a known drill.
+   */
+  public double drillHoleClearance(DrillItem drillItem, int index) {
+    double copperRadius =
+        holeCopperRadius(drillItem, drillShape(drillItem, index), drillItem.shapeLayer(index));
+    if (Double.isNaN(copperRadius)) {
+      return 0;
+    }
+    return drillItem.getPadstack().getDrillRadius()
+        + this.board.rules.getHoleClearance()
+        - copperRadius;
+  }
+
+  /**
    * Synthesized obstacle for copper layers where a drilled item has NO pad shape: the drill hole
    * still passes through (e.g. a through-via with unused inner layers), so other-net copper on
    * those layers must keep hole clearance from it. Returns null when the hole-clearance rule is
@@ -1367,28 +1399,12 @@ public class ShapeSearchTree extends MinAreaTree {
    * hole-only (NPTH) padstacks alike; returns 0 when the hole-clearance rule is disabled.
    */
   protected int drillHoleClearanceDelta(DrillItem drillItem, Shape shape, int layer) {
-    if (this.board == null || this.board.rules == null) {
+    double copperRadius = holeCopperRadius(drillItem, shape, layer);
+    if (Double.isNaN(copperRadius)) {
       return 0;
     }
     int holeClearance = this.board.rules.getHoleClearance();
-    if (holeClearance <= 0 || shape == null || drillItem.getPadstack() == null) {
-      return 0;
-    }
-
     double drillRadius = drillItem.getPadstack().getDrillRadius();
-    if (drillRadius <= 0) {
-      return 0;
-    }
-    double copperRadius;
-    if (drillItem.getPadstack().holeOnly) {
-      copperRadius = drillRadius;
-    } else {
-      copperRadius = shape.borderDistance(drillItem.getCenter().toFloat());
-      if (copperRadius <= 0) {
-        Shape padShape = drillItem.getPadstack().getShape(layer);
-        copperRadius = padShape == null ? drillRadius : padShape.borderDistance(FloatPoint.ZERO);
-      }
-    }
     int clearanceClass =
         this.compensatedClearanceClassNo > 0
             ? this.compensatedClearanceClassNo
@@ -1405,6 +1421,33 @@ public class ShapeSearchTree extends MinAreaTree {
                     + DRILL_HOLE_CLEARANCE_MARGIN
                     - copperRadius
                     - copperClearance));
+  }
+
+  /**
+   * The radius of the copper around the drill hole of a drill item's shape on a layer (the drill
+   * radius for a bare hole), or NaN without a hole-clearance rule or a known drill.
+   */
+  private double holeCopperRadius(DrillItem drillItem, Shape shape, int layer) {
+    if (this.board == null || this.board.rules == null) {
+      return Double.NaN;
+    }
+    int holeClearance = this.board.rules.getHoleClearance();
+    if (holeClearance <= 0 || shape == null || drillItem.getPadstack() == null) {
+      return Double.NaN;
+    }
+    double drillRadius = drillItem.getPadstack().getDrillRadius();
+    if (drillRadius <= 0) {
+      return Double.NaN;
+    }
+    if (drillItem.getPadstack().holeOnly) {
+      return drillRadius;
+    }
+    double copperRadius = shape.borderDistance(drillItem.getCenter().toFloat());
+    if (copperRadius <= 0) {
+      Shape padShape = drillItem.getPadstack().getShape(layer);
+      copperRadius = padShape == null ? drillRadius : padShape.borderDistance(FloatPoint.ZERO);
+    }
+    return copperRadius;
   }
 
   /**
