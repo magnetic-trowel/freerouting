@@ -42,6 +42,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.locks.Lock;
@@ -57,6 +58,59 @@ public class ShapeSearchTree extends MinAreaTree {
   /** Reusable traversal stack for complete-shape queries, isolated per caller thread. */
   protected final ThreadLocal<ArrayStack<TreeNode>> completeShapeStack =
       ThreadLocal.withInitial(() -> new ArrayStack<>(10000));
+
+  /** Reusable nearest-first queue for complete-shape queries, isolated per caller thread. */
+  protected final ThreadLocal<PriorityQueue<NearNode>> completeShapeQueue =
+      ThreadLocal.withInitial(PriorityQueue::new);
+
+  /**
+   * A node waiting in a nearest-first walk, keyed by the squared gap between its bounding box and
+   * the shape a free-space room must contain. A node's gap is at most the gap of every leaf below
+   * it, and inner nodes go before leaves at equal gap, so the walk meets the leaves in the order of
+   * (gap, {@link Leaf} order) whatever the tree structure is.
+   */
+  protected record NearNode(long gap, TreeNode node) implements Comparable<NearNode> {
+
+    /** Creates the entry of node for a walk around target. */
+    public static NearNode of(TreeNode node, IntBox target) {
+      return new NearNode(squaredGap(node.boundingShape, target), node);
+    }
+
+    @Override
+    public int compareTo(NearNode other) {
+      int result = Long.compare(gap, other.gap);
+      if (result != 0) {
+        return result;
+      }
+      boolean leaf = node instanceof Leaf;
+      if (leaf != other.node instanceof Leaf) {
+        return leaf ? 1 : -1;
+      }
+      return leaf ? ((Leaf) node).compareTo((Leaf) other.node) : 0;
+    }
+
+    private static long squaredGap(RegularTileShape shape, IntBox target) {
+      long minX;
+      long minY;
+      long maxX;
+      long maxY;
+      if (shape instanceof IntOctagon octagon) {
+        minX = octagon.leftX;
+        minY = octagon.bottomY;
+        maxX = octagon.rightX;
+        maxY = octagon.topY;
+      } else {
+        IntBox box = shape instanceof IntBox intBox ? intBox : shape.boundingBox();
+        minX = box.ll.x;
+        minY = box.ll.y;
+        maxX = box.ur.x;
+        maxY = box.ur.y;
+      }
+      long dx = Math.max(0, Math.max(minX - target.ur.x, target.ll.x - maxX));
+      long dy = Math.max(0, Math.max(minY - target.ur.y, target.ll.y - maxY));
+      return dx * dx + dy * dy;
+    }
+  }
 
   /** Reusable result list for spatial overlap queries, isolated per caller thread. */
   private final ThreadLocal<List<Leaf>> queryLeafBuffer =

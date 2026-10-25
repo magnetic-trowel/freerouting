@@ -7,7 +7,6 @@ import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.ObstacleArea;
 import app.freerouting.board.model.structure.BoardOutline;
-import app.freerouting.datastructures.ArrayStack;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.OrthogonalBoundingDirections;
 import app.freerouting.geometry.planar.Polyline;
@@ -17,6 +16,7 @@ import app.freerouting.logger.FRLogger;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedList;
+import java.util.PriorityQueue;
 import java.util.concurrent.locks.Lock;
 
 /**
@@ -80,19 +80,21 @@ public class ShapeSearchTree90Degree extends ShapeSearchTree {
     Collection<IncompleteFreeSpaceExpansionRoom> result = new ArrayList<>();
     result.add(new IncompleteFreeSpaceExpansionRoom(startShape, roomLayer, shapeToBeContained));
 
-    // Process obstacles inline during tree traversal with dynamic boundingShape updates.
-    // This matches v1.9's algorithm exactly: as obstacles are processed, boundingShape
-    // shrinks, which prunes subsequent tree traversal (just like v1.9 does).
-    ArrayStack<TreeNode> stack = completeShapeStack.get();
-    stack.reset();
-    stack.push(this.root);
+    // Process obstacles inline during tree traversal with dynamic boundingShape updates: as
+    // obstacles are processed, boundingShape shrinks, which prunes the rest of the walk. They
+    // restrain the room nearest first, so the room depends on the geometry and the item order
+    // only, not on the structure of the tree.
+    PriorityQueue<NearNode> queue = completeShapeQueue.get();
+    queue.clear();
+    queue.add(NearNode.of(this.root, shapeToBeContained));
     TreeNode currentNode;
 
     for (; ; ) {
-      currentNode = stack.pop();
-      if (currentNode == null) {
+      NearNode next = queue.poll();
+      if (next == null) {
         break;
       }
+      currentNode = next.node();
       if (currentNode.boundingShape.intersects(boundingShape)) {
         if (currentNode instanceof Leaf currentLeaf) {
           SearchTreeObject currentObject = (SearchTreeObject) currentLeaf.object;
@@ -202,8 +204,8 @@ public class ShapeSearchTree90Degree extends ShapeSearchTree {
             debugStep++;
           }
         } else {
-          stack.push(((InnerNode) currentNode).firstChild);
-          stack.push(((InnerNode) currentNode).secondChild);
+          queue.add(NearNode.of(((InnerNode) currentNode).firstChild, shapeToBeContained));
+          queue.add(NearNode.of(((InnerNode) currentNode).secondChild, shapeToBeContained));
         }
       }
     }

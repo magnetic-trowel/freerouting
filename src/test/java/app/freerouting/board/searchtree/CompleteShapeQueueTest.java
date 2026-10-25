@@ -1,6 +1,5 @@
 package app.freerouting.board.searchtree;
 
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.Freerouting;
@@ -15,13 +14,13 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The 45-degree tree's room completion stops walking the tree once no room piece is left. The nodes
- * still on its thread-local stack must not stay there: they keep the tree, its board and the
+ * still in its thread-local queue must not stay there: they keep the tree, its board and the
  * autoroute engine reachable from the thread, so every engine an optimizer thread used leaked.
  */
-class CompleteShapeStackTest {
+class CompleteShapeQueueTest {
 
   @Test
-  void earlyExitLeavesNoNodesOnTheThreadLocalStack() throws Exception {
+  void earlyExitLeavesNoNodesInTheThreadLocalQueue() throws Exception {
     Freerouting.globalSettings = new GlobalSettings();
     RoutingBoard board = DsnTestFixtures.loadBoard("scoring-perfect-two-pin.dsn");
     ShapeSearchTree45Degree tree = new ShapeSearchTree45Degree(board, 0);
@@ -40,6 +39,6 @@ class CompleteShapeStackTest {
             new IncompleteFreeSpaceExpansionRoom(null, 0, inside), otherNet, null, null);
 
     assertTrue(result.isEmpty(), "the pad must leave no room piece");
-    assertNull(tree.completeShapeStack.get().pop(), "nodes were left on the stack");
+    assertTrue(tree.completeShapeQueue.get().isEmpty(), "nodes were left in the queue");
   }
 }
