@@ -681,7 +681,7 @@ public final class BatchAutorouter extends NamedAlgorithm {
   int connectPourCutOffs() {
     int kept = 0;
     Set<Integer> pourNets = PlaneFillConnectivity.pourNets(this.board);
-    int cutOffCount = cutOffGroupCount(pourNets);
+    int cutOffCount = PlaneFillConnectivity.cutOffGroupCount(this.board);
     Set<Integer> failedGroups = new TreeSet<>(); // by the lowest item id of the group
     boolean progress = cutOffCount > 0;
     while (progress && !this.thread.isStopRequested()) {
@@ -704,7 +704,7 @@ public final class BatchAutorouter extends NamedAlgorithm {
               connectionRouter.routeWithoutRipup(netNumber, group, connectivity.mainGroup);
           int newCutOffCount =
               result.state == AutorouteAttemptState.ROUTED
-                  ? cutOffGroupCount(pourNets)
+                  ? PlaneFillConnectivity.cutOffGroupCount(this.board)
                   : cutOffCount;
           boolean keep = newCutOffCount < cutOffCount;
           if (keep || this.board.itemList.getContentVersion() == contentVersion) {
@@ -723,14 +723,6 @@ public final class BatchAutorouter extends NamedAlgorithm {
       }
     }
     return kept;
-  }
-
-  private int cutOffGroupCount(Set<Integer> pourNets) {
-    int result = 0;
-    for (int netNumber : pourNets) {
-      result += PlaneFillConnectivity.analyze(this.board, netNumber).cutOffGroups.size();
-    }
-    return result;
   }
 
   /**

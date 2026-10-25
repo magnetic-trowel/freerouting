@@ -697,7 +697,8 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
             : 0;
     double durationSec = durationMs / 1000.0;
 
-    var finalBoardStats = routingJob.board != null ? routingJob.board.getStatistics() : null;
+    var finalBoardStats =
+        routingJob.board != null ? BoardStatistics.ofResult(routingJob.board) : null;
     Integer netsTotal =
         finalBoardStats != null && finalBoardStats.nets != null
             ? finalBoardStats.nets.totalCount
@@ -777,8 +778,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
     if (routingJob.board == null) {
       return null;
     }
-    BoardStatistics stats =
-        new BoardStatistics(routingJob.board, sessionPort.displayUnit(), true, true);
+    BoardStatistics stats = BoardStatistics.ofResult(routingJob.board, sessionPort.displayUnit());
     double duration = this.autoroutingSecondsToComplete;
     if (routingJob.startedAt != null && routingJob.finishedAt != null) {
       duration =

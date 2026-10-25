@@ -10,6 +10,8 @@ import app.freerouting.board.model.structure.Layer;
 import app.freerouting.board.model.structure.LayerStructure;
 import app.freerouting.board.state.Communication;
 import app.freerouting.core.library.Padstack;
+import app.freerouting.core.scoring.BoardStatistics;
+import app.freerouting.core.scoring.BoardStatisticsConnections;
 import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntPoint;
@@ -102,6 +104,21 @@ class PlaneFillConnectivityTest {
     assertEquals(1, result.cutOffGroups.size());
     assertTrue(result.mainGroup.contains(left), "ties go to the group with the lowest item id");
     assertTrue(result.cutOffGroups.get(0).contains(right));
+  }
+
+  @Test
+  void resultStatisticsCountCutOffGroupAsOpenConnection() {
+    gndVia(500000, 2000000);
+    gndVia(3500000, 2000000);
+    assertEquals(0, BoardStatistics.ofResult(board).connections.incompleteCount);
+    trace(0, sigNet.netNumber, 2000000, 0, 2000000, 4000000);
+
+    BoardStatisticsConnections result = BoardStatistics.ofResult(board).connections;
+
+    assertEquals(1, result.pourCutOffCount);
+    assertEquals(1, result.incompleteCount);
+    // The routing view follows the pour polygon, as the router's item selection does.
+    assertEquals(0, new BoardStatistics(board, null, false).connections.incompleteCount);
   }
 
   @Test

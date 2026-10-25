@@ -9,6 +9,7 @@ import app.freerouting.core.ProgressThrottler;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.StoppableThread;
+import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.GlobalSettings;
 import app.freerouting.util.TextManager;
@@ -207,7 +208,7 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
       // Before the job turns terminal: a caller that waits for the terminal state (the CLI, the
       // synchronous autoroute endpoint) reports these instead of reading the board again while
       // this thread computes them.
-      var finalBoardStats = job.board != null ? job.board.getStatistics() : null;
+      var finalBoardStats = job.board != null ? BoardStatistics.ofResult(job.board) : null;
       job.finalStatistics = finalBoardStats;
 
       boolean fanoutTimedOut = pipeline.getAutorouter().isFanoutTimedOut();

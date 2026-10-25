@@ -14,6 +14,7 @@ import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.constants.Constants;
 import app.freerouting.datastructures.UndoableObjects;
+import app.freerouting.drc.PlaneFillConnectivity;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Polyline;
@@ -568,6 +569,34 @@ public class BoardStatistics implements Serializable {
         FRLogger.error("Failed to parse JSON statistics: " + e.getMessage(), e);
       }
     }
+  }
+
+  /**
+   * Returns the statistics of a routing or check result, in which copper that foreign tracks cut
+   * off from the fill of its pour counts as an open connection ({@link
+   * BoardStatisticsConnections#pourCutOffCount}).
+   *
+   * <p>The constructors count connections as the router sees them: through pour polygons, as the
+   * incremental ledger and the router's item selection do. The router cannot target a cut-off
+   * group, so the routing loop, the optimizer and the fallback comparison keep that view (counting
+   * cut-offs there only made the fallback strategies re-route boards for nothing);
+   * BatchAutorouter.connectPourCutOffs repairs cut-offs after routing, and this view reports what
+   * is left.
+   */
+  public static BoardStatistics ofResult(BasicBoard board, Unit unit) {
+    return withPourCutOffs(new BoardStatistics(board, unit, true, true), board);
+  }
+
+  /** Returns {@link #ofResult(BasicBoard, Unit)} in the board's own unit. */
+  public static BoardStatistics ofResult(BasicBoard board) {
+    // getStatistics returns a copy of the board's cached statistics, which may be changed.
+    return withPourCutOffs(board.getStatistics(), board);
+  }
+
+  private static BoardStatistics withPourCutOffs(BoardStatistics statistics, BasicBoard board) {
+    statistics.connections.pourCutOffCount = PlaneFillConnectivity.cutOffGroupCount(board);
+    statistics.connections.incompleteCount += statistics.connections.pourCutOffCount;
+    return statistics;
   }
 
   /** Returns whether a pin has a valid trace or via escape. */

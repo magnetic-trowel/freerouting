@@ -86,6 +86,18 @@ public final class PlaneFillConnectivity {
   }
 
   /**
+   * Returns the number of cut-off groups of all nets with a pour: the connections that the board's
+   * connectivity counts as made through a pour polygon although no copper and no fill makes them.
+   */
+  public static int cutOffGroupCount(BasicBoard board) {
+    int result = 0;
+    for (int netNumber : pourNets(board)) {
+      result += analyze(board, netNumber).cutOffGroups.size();
+    }
+    return result;
+  }
+
+  /**
    * Analyses the net with number {@code netNumber}. Computes the fill of each pour of the net,
    * unless the net's copper is one group without its pours.
    */

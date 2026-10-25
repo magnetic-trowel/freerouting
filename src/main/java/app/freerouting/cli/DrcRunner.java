@@ -1,5 +1,6 @@
 package app.freerouting.cli;
 
+import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.io.kicad.KiCadDrcReport;
 import app.freerouting.io.specctra.SesImportSummary;
@@ -142,7 +143,7 @@ public final class DrcRunner {
       settingsMerger.addOrReplaceSources(
           new DsnFileSettings(drcJob.input.getData(), drcJob.input.getFilename()));
       var routerSettings = settingsMerger.merge();
-      var finalStats = drcJob.board.getStatistics();
+      var finalStats = BoardStatistics.ofResult(drcJob.board);
       report.qualityScore = (double) finalStats.getRouterScore(routerSettings);
       report.optimizerScore = (double) finalStats.getOptimizerScore(routerSettings);
     } catch (Exception e) {
