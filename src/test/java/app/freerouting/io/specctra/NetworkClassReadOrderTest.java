@@ -10,6 +10,9 @@ import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.ObstacleArea;
 import app.freerouting.io.BoardReadResult;
+import app.freerouting.rules.DefaultItemClearanceClasses.ItemClass;
+import app.freerouting.rules.NetClass;
+import app.freerouting.rules.ViaRule;
 import app.freerouting.settings.GlobalSettings;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -54,7 +57,7 @@ class NetworkClassReadOrderTest {
           (net B (pins U3-1 U4-1))
           (class kicad_default A GND
             (circuit (use_via "Via[0-1]_800:400_um"))
-            (rule (width 250) (clearance 200)))
+            (rule (width 250) (clearance 200) (clearance 400 (type via_wire))))
           (class HV B
             (circuit (use_via "Via[0-1]_800:400_um"))
             (rule (width 300) (clearance 500))))
@@ -92,5 +95,18 @@ class NetworkClassReadOrderTest {
     }
     assertEquals(2, keepouts);
     assertEquals(1, planes);
+  }
+
+  /** The default class's typed via clearance used to leave its via rule without any via. */
+  @Test
+  void defaultClassWithItsOwnViaClearanceKeepsItsVias() {
+    RoutingBoard board = load();
+    NetClass defaultClass = board.rules.getDefaultNetClass();
+    int viaClass = defaultClass.defaultItemClearanceClasses.get(ItemClass.VIA);
+    assertEquals("default-via", board.rules.clearanceMatrix.getName(viaClass));
+    ViaRule viaRule = defaultClass.getViaRule();
+    assertEquals(1, viaRule.viaCount());
+    assertEquals(viaClass, viaRule.getVia(0).getClearanceClassIndex());
+    assertEquals(1, board.rules.netClasses.get("HV").getViaRule().viaCount());
   }
 }
