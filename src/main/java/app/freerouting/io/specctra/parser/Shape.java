@@ -458,6 +458,17 @@ public abstract class Shape {
       if (circleLayer == null) {
         return null;
       }
+      if (DsnFile.isUnsetSize(circleCoor[0])) {
+        // KiCad exports "(circle F.Cu -0.001)" for the via of a net class whose via size is not
+        // set. There is no shape without a diameter, so a padstack does not get a tiny circle.
+        FRLogger.warn(
+            "Shape.read_circle_scope: ignoring circle with unset diameter "
+                + circleCoor[0]
+                + " at '"
+                + scanner.getScopeIdentifier()
+                + "'");
+        return null;
+      }
       return new Circle(circleLayer, circleCoor);
     } catch (IOException e) {
       FRLogger.error("Shape.read_rectangle_scope: IO error scanning file", e);

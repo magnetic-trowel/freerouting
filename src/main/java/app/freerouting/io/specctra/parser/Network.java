@@ -567,9 +567,12 @@ public class Network extends ScopeKeyword {
       viaInfosCreated = true;
     }
 
-    if (!netClass.useVia.isEmpty()) {
-      createViaRule(netClass.useVia, boardNetClass, board, viaAtSmdAllowed);
-    } else if (viaInfosCreated) {
+    // A class whose use_via names no via that could be read (KiCad exports an unset via size as a
+    // padstack with "(circle F.Cu -0.001)", which is not read) keeps the vias of the default rule,
+    // as a class without use_via does.
+    boolean viaRuleCreated =
+        !netClass.useVia.isEmpty() && createViaRule(netClass.useVia, boardNetClass, board);
+    if (!viaRuleCreated && viaInfosCreated) {
       board.rules.createDefaultViaRule(boardNetClass, boardNetClass.getName());
     }
     if (!netClass.useLayer.isEmpty()) {
@@ -715,11 +718,12 @@ public class Network extends ScopeKeyword {
     getClearanceClass(clearanceMatrix, netClass, "area");
   }
 
-  private static void createViaRule(
-      Collection<String> useVia,
-      app.freerouting.rules.NetClass netClass,
-      BasicBoard board,
-      boolean attachAllowed) {
+  /**
+   * Creates the via rule of a class from its use_via names. Returns false, and creates no rule, if
+   * none of the names is a via of the board.
+   */
+  private static boolean createViaRule(
+      Collection<String> useVia, app.freerouting.rules.NetClass netClass, BasicBoard board) {
     ViaRule newViaRule = new ViaRule(netClass.getName());
     int defaultViaClClass =
         netClass.defaultItemClearanceClasses.get(DefaultItemClearanceClasses.ItemClass.VIA);
@@ -737,8 +741,18 @@ public class Network extends ScopeKeyword {
         }
       }
     }
+    if (newViaRule.viaCount() == 0) {
+      FRLogger.warn(
+          "Network.create_via_rule: no via of use_via "
+              + useVia
+              + " found, class '"
+              + netClass.getName()
+              + "' keeps the default vias");
+      return false;
+    }
     board.rules.viaRules.add(newViaRule);
     netClass.setViaRule(newViaRule);
+    return true;
   }
 
   private static void createActiveTraceLayers(

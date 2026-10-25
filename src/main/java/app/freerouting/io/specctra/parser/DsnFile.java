@@ -106,6 +106,17 @@ public final class DsnFile {
     return !nothingChanged;
   }
 
+  /**
+   * Whether a size or distance read from a DSN file is unset. Exporters mark an unset value with a
+   * negative number: KiCad writes -0.001 for a net class width, clearance or via diameter that is
+   * not set. A number that could not be read or is not finite is unset as well. Readers treat an
+   * unset value as absent, so the enclosing scope's value or the default applies, and a shape whose
+   * size is unset is not read.
+   */
+  static boolean isUnsetSize(Double value) {
+    return value == null || !Double.isFinite(value) || value < 0;
+  }
+
   static boolean readOnOffScope(IJFlexScanner scanner) {
     try {
       Object nextToken = scanner.nextToken();
