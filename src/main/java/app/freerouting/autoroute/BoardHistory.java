@@ -2,6 +2,7 @@ package app.freerouting.autoroute;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.drc.ClearanceBaseline;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.RoutingCostSettings;
 import java.io.Serializable;
@@ -107,7 +108,7 @@ public class BoardHistory {
    * not keep it (it was full and the board scored no better than its worst entry).
    */
   public synchronized RoutingBoard restoreLastAdded() {
-    return lastAdded == null ? null : (RoutingBoard) BasicBoard.deserialize(lastAdded.board);
+    return lastAdded == null ? null : lastAdded.restore();
   }
 
   private static RouterSettings createLegacyRouterSettings(RoutingCostSettings scoringSettings) {
@@ -184,7 +185,7 @@ public class BoardHistory {
       for (BoardHistoryEntry entry : boards) {
         if (entry.restoreCount < maxRestores) {
           entry.restoreCount++;
-          return (RoutingBoard) BasicBoard.deserialize(entry.board);
+          return entry.restore();
         }
       }
       return null;
@@ -215,11 +216,27 @@ public class BoardHistory {
     public final float score;
     public int restoreCount;
 
+    /**
+     * The board's baseline of pre-existing clearance violations. It is transient on the board, so
+     * the bytes do not carry it; without it a restored board counts every pre-existing violation as
+     * new. It is immutable and shared.
+     */
+    private final transient ClearanceBaseline clearanceBaseline;
+
     public BoardHistoryEntry(RoutingBoard board, float score) {
       this.board = board.serialize(false);
       this.hash = board.getHash();
       this.score = score;
       this.restoreCount = 0;
+      this.clearanceBaseline = board.clearanceBaseline;
+    }
+
+    RoutingBoard restore() {
+      RoutingBoard result = (RoutingBoard) BasicBoard.deserialize(this.board);
+      if (result != null) {
+        result.clearanceBaseline = this.clearanceBaseline;
+      }
+      return result;
     }
   }
 }
