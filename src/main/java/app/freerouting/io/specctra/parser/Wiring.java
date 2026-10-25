@@ -4,6 +4,7 @@ import app.freerouting.board.actions.ItemSelectionFilter;
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.ConductionArea;
+import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
@@ -14,6 +15,7 @@ import app.freerouting.datastructures.IdentifierType;
 import app.freerouting.datastructures.IndentFileWriter;
 import app.freerouting.datastructures.UndoableObjects;
 import app.freerouting.geometry.planar.Area;
+import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntPoint;
@@ -21,6 +23,7 @@ import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.Polygon;
 import app.freerouting.geometry.planar.Polyline;
+import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.rules.BoardRules;
 import app.freerouting.rules.DefaultItemClearanceClasses;
@@ -29,7 +32,9 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 
 /** Class for reading and writing wiring scopes from dsn-files. */
 @SuppressWarnings({
@@ -346,6 +351,7 @@ public class Wiring extends ScopeKeyword {
       }
     }
     RoutingBoard board = scopeParameter.boardHandling.getRoutingBoard();
+    connectWireEndsInsidePads(board);
     try {
       board.normalizeAllTraces();
     } catch (Exception e) {
@@ -586,6 +592,107 @@ public class Wiring extends ScopeKeyword {
       tryCorrectNet(result);
     }
     return result;
+  }
+
+  /**
+   * Joins wire ends that lie inside a pad of their own net to the pad's centre.
+   *
+   * <p>The host tool connects a track to a pad or via wherever the track end lies inside its
+   * copper, but Freerouting connects items only at shared points: a trace end meets a pin or via
+   * only at its centre ({@link Trace#getNormalContacts(Point, boolean)}). A track that ends off the
+   * centre, or on it in the host but beside it after the DSN rounding (KiCad writes pad positions
+   * and track ends with different rounding, so they differ by up to 0.5 um), therefore imports as
+   * an open. The wiring is usually fixed, so the router cannot rebuild it and instead spends vias
+   * and passes on a connection that exists in copper.
+   *
+   * <p>For each wire end, open ends first, this inserts a straight trace of the wire's width, net,
+   * clearance class and fixed state from the end to the centre of the nearest drill item of the net
+   * on the wire's layer whose convex pad contains both points, so the added centre line stays
+   * inside the pad. It is skipped where the end already reaches that item through copper, so no
+   * cycle is made, and where the new trace would add a clearance violation. The wiring itself is
+   * not moved.
+   */
+  static void connectWireEndsInsidePads(BasicBoard board) {
+    List<Trace> wires = List.copyOf(board.getTraces());
+    // Open ends first, so a short stub that ends inside the pad is joined instead of the wire
+    // it continues, which would leave the stub dangling; then ends where wires meet.
+    for (boolean openEndsOnly : new boolean[] {true, false}) {
+      for (Trace wire : wires) {
+        connectWireEndInsidePad(board, wire, wire.firstCorner(), openEndsOnly);
+        connectWireEndInsidePad(board, wire, wire.lastCorner(), openEndsOnly);
+      }
+    }
+  }
+
+  private static void connectWireEndInsidePad(
+      BasicBoard board, Trace trace, Point end, boolean openEndsOnly) {
+    if (end == null
+        || trace.netCount() == 0
+        || (openEndsOnly && !trace.getNormalContacts(end, false).isEmpty())) {
+      return;
+    }
+    DrillItem pad = null;
+    double padDistance = Double.MAX_VALUE;
+    for (Object object : board.overlappingObjects(TileShape.getInstance(end), trace.getLayer())) {
+      if (!(object instanceof DrillItem drillItem)
+          || !drillItem.sharesNet(trace)
+          || !drillItem.isOnLayer(trace.getLayer())
+          || drillItem.getCenter() == null
+          || drillItem.getCenter().equals(end)) {
+        continue;
+      }
+      app.freerouting.geometry.planar.Shape shape = drillItem.getShapeOnLayer(trace.getLayer());
+      if (!(shape instanceof ConvexShape)
+          || !shape.contains(end)
+          || !shape.contains(drillItem.getCenter())) {
+        continue;
+      }
+      double distance = end.toFloat().distance(drillItem.getCenter().toFloat());
+      if (distance < padDistance) {
+        pad = drillItem;
+        padDistance = distance;
+      }
+    }
+    if (pad == null || trace.getConnectedSet(-1, true).contains(pad)) {
+      return;
+    }
+    // Inserted unfixed, so that it can be removed again, and fixed like the wire once kept.
+    PolylineTrace join =
+        board.insertTraceWithoutCleaning(
+            new Polyline(end, pad.getCenter()),
+            trace.getLayer(),
+            trace.getHalfWidth(),
+            trace.netNumbers,
+            trace.clearanceClassIndex(),
+            FixedState.UNFIXED);
+    if (join == null) {
+      return;
+    }
+    if (violatesOnlyWhatTheWireViolates(join, trace)) {
+      join.setFixedState(trace.getFixedState());
+    } else {
+      board.removeItem(join);
+    }
+  }
+
+  /**
+   * Returns true if every item that the join violates a clearance to is one the wire it extends
+   * already violates: the join then adds no violation of its own. Measuring against the rules alone
+   * would refuse to join a wire that the host routed closer to a neighbour than the DSN rules allow
+   * (KiCad does not export its custom rules), although the join adds no copper there.
+   */
+  private static boolean violatesOnlyWhatTheWireViolates(Trace join, Trace wire) {
+    Set<Item> wireObstacles = new TreeSet<>();
+    for (var violation : wire.clearanceViolations()) {
+      wireObstacles.add(violation.firstItem == wire ? violation.secondItem : violation.firstItem);
+    }
+    for (var violation : join.clearanceViolations()) {
+      Item other = violation.firstItem == join ? violation.secondItem : violation.firstItem;
+      if (other != wire && !wireObstacles.contains(other)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
