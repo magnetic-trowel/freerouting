@@ -34,6 +34,9 @@ public final class BatchFanout {
   private Long deadlineMs;
   private boolean isTimedOut;
 
+  /** The connected sets of the pins, kept across pins while the board does not change. */
+  private final WholeNetConnectivity connectivity = new WholeNetConnectivity();
+
   /** Pin id to the component generation observed when that pin failed. */
   private final Map<Integer, Integer> failedPinGeneration = new HashMap<>();
 
@@ -68,7 +71,6 @@ public final class BatchFanout {
     }
     int pinCount = 0;
     int alreadyConnected = 0;
-    WholeNetConnectivity connectivity = new WholeNetConnectivity();
     for (Component component : sortedComponents) {
       pinCount += component.smdPinCount;
       for (Component.Pin pin : component.smdPins) {
@@ -243,7 +245,7 @@ public final class BatchFanout {
         // Only the granular trace messages below report it; the connectivity walk is not free.
         int targetCount =
             FRLogger.isGranularTraceActive()
-                ? currentPin.boardPin.getUnconnectedSet(netNumber).size()
+                ? this.connectivity.unconnectedSet(currentPin.boardPin, netNumber).size()
                 : -1;
 
         app.freerouting.rules.Net net = this.routingBoard.rules.nets.get(netNumber);
@@ -300,7 +302,11 @@ public final class BatchFanout {
         long pinStartNanos = System.nanoTime();
         AutorouteAttemptResult currentResult =
             this.routingBoard.fanout(
-                currentPin.boardPin, this.settings, effectiveRipupCosts, this.thread);
+                currentPin.boardPin,
+                this.settings,
+                effectiveRipupCosts,
+                this.thread,
+                this.connectivity);
         long pinDurationMs = (System.nanoTime() - pinStartNanos) / 1_000_000L;
 
         if (currentResult.state == app.freerouting.autoroute.AutorouteAttemptState.ROUTED) {

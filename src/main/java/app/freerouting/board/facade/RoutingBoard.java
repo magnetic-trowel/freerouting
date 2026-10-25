@@ -16,6 +16,7 @@ import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
+import app.freerouting.board.model.items.WholeNetConnectivity;
 import app.freerouting.board.model.structure.AngleRestriction;
 import app.freerouting.board.model.structure.Component;
 import app.freerouting.board.model.structure.FixedState;
@@ -823,10 +824,15 @@ public class RoutingBoard extends BasicBoard implements Serializable {
    * Autoroutes from the input pin until the first via, in case the pin and its connected set has
    * only 1 layer. Ripup is allowed if ripupCosts is {@literal >}= 0. Returns an enum of type
    * AutorouteEngine.AutorouteResult. The search has no work budget; only the stop request of
-   * stoppableThread ends it early.
+   * stoppableThread ends it early. The pin's connected and unconnected sets come from connectivity,
+   * which a caller fanning out many pins keeps across them.
    */
   public AutorouteAttemptResult fanout(
-      Pin pin, RouterSettings routerSettings, int ripupCosts, Stoppable stoppableThread) {
+      Pin pin,
+      RouterSettings routerSettings,
+      int ripupCosts,
+      Stoppable stoppableThread,
+      WholeNetConnectivity connectivity) {
     if (pin.firstLayer() != pin.lastLayer() || pin.netCount() != 1) {
       return new AutorouteAttemptResult(
           AutorouteAttemptState.ALREADY_CONNECTED, "The pin '" + pin + "' is already connected.");
@@ -837,14 +843,14 @@ public class RoutingBoard extends BasicBoard implements Serializable {
     }
     int pinNetNo = pin.getNetNumber(0);
     int pinLayer = pin.firstLayer();
-    Set<Item> pinConnectedSet = pin.getConnectedSet(pinNetNo);
+    Set<Item> pinConnectedSet = connectivity.connectedSet(pin, pinNetNo);
     for (Item currentItem : pinConnectedSet) {
       if (currentItem.firstLayer() != pinLayer || currentItem.lastLayer() != pinLayer) {
         return new AutorouteAttemptResult(
             AutorouteAttemptState.ALREADY_CONNECTED, "The pin '" + pin + "' is already connected.");
       }
     }
-    Set<Item> unconnectedSet = pin.getUnconnectedSet(pinNetNo);
+    Set<Item> unconnectedSet = connectivity.unconnectedSet(pin, pinNetNo);
     if (unconnectedSet.isEmpty()) {
       return new AutorouteAttemptResult(
           AutorouteAttemptState.NO_UNCONNECTED_NETS, "The pin '" + pin + "' is already connected.");
