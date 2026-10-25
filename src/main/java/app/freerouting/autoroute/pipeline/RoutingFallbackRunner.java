@@ -36,6 +36,11 @@ final class RoutingFallbackRunner {
       BatchAutorouter defaultRouter,
       List<RoutingFallback.Strategy> strategies,
       byte[] input) {
+    // A stopped pass loop is not retried (RoutingFallback.isRetryable), so measuring its board
+    // first, a full statistics and airline analysis, would only delay the stop.
+    if (stopped(job)) {
+      return defaultRouter;
+    }
     ClearanceBaseline inputBaseline = job.board.clearanceBaseline;
     RoutingFallback.Outcome best =
         RoutingFallback.Outcome.of("default", job.board, job.routerSettings);
