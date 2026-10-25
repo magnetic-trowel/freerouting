@@ -360,6 +360,29 @@ final class AutorouteBatchLoop {
 
       continueAutorouting = autoroutePass(currentPass);
 
+      // A pass that finds nothing left to attempt ends the loop as COMPLETED even when a few
+      // connections are still open (their items failed or were dropped as unroutable). The
+      // last-mile rip-up otherwise runs only in the stagnation branch below, which such a
+      // loop never reaches, so it gets its bounded attempts here as well.
+      if (!continueAutorouting && !router.thread.isStopAutoRouterRequested()) {
+        int incompleteAtEnd = router.boardStatistics().connections.incompleteCount;
+        if (tryLastMileAtLoopEnd(incompleteAtEnd, lastMileAttempts)) {
+          int removed = LastMileBlockerRipup.ripBlockers(router.board);
+          lastMileAttempts++;
+          if (removed > 0) {
+            continueAutorouting = true;
+            consecutiveNoImprovementPasses = 0;
+            alreadyRoutedBoardHashes.clear();
+            job.logInfo(
+                "Last-mile rip-up at the end of the pass loop removed "
+                    + removed
+                    + " blocking trace(s) or via(s) around "
+                    + incompleteAtEnd
+                    + " remaining connection(s).");
+          }
+        }
+      }
+
       BoardStatistics boardStatisticsAfter = router.boardStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
 
@@ -733,6 +756,17 @@ final class AutorouteBatchLoop {
 
   private void removeTails(Item.StopConnectionOption option) {
     router.removeTails(option);
+  }
+
+  /**
+   * Whether a pass loop that would end with {@code incomplete} open connections, after {@code
+   * attemptsSoFar} last-mile rip-ups, gets another one: only a few connections left (at most {@link
+   * BatchAutorouter#LAST_MILE_INCOMPLETE_LIMIT}) and attempts left.
+   */
+  static boolean tryLastMileAtLoopEnd(int incomplete, int attemptsSoFar) {
+    return incomplete > 0
+        && incomplete <= LAST_MILE_INCOMPLETE_LIMIT
+        && attemptsSoFar < LAST_MILE_MAX_ATTEMPTS;
   }
 
   private boolean autoroutePass(int passNo) {
