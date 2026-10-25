@@ -1,7 +1,5 @@
 package app.freerouting.autoroute.pipeline;
 
-import app.freerouting.autoroute.events.BoardSnapshotEvent;
-import app.freerouting.autoroute.events.BoardSnapshotEventListener;
 import app.freerouting.autoroute.events.BoardUpdatedEvent;
 import app.freerouting.autoroute.events.BoardUpdatedEventListener;
 import app.freerouting.autoroute.events.TaskStateChangedEvent;
@@ -23,8 +21,6 @@ public abstract sealed class NamedAlgorithm implements Serializable
     permits BatchAutorouter, BatchOptimizer {
 
   protected final transient StoppableThread thread;
-  protected final transient List<BoardSnapshotEventListener> boardSnapshotEventListeners =
-      new ArrayList<>();
   protected final transient List<BoardUpdatedEventListener> boardUpdatedEventListeners =
       new ArrayList<>();
   protected final transient List<TaskStateChangedEventListener> taskStateChangedEventListeners =
@@ -79,24 +75,10 @@ public abstract sealed class NamedAlgorithm implements Serializable
    */
   protected abstract NamedAlgorithmType getType();
 
-  /** Adds a listener for board snapshot events. */
-  public void addBoardSnapshotEventListener(BoardSnapshotEventListener listener) {
-    boardSnapshotEventListeners.add(listener);
-  }
-
-  /** Fires a board snapshot event. */
-  public void fireBoardSnapshotEvent(RoutingBoard board) {
-    BoardSnapshotEvent event = new BoardSnapshotEvent(this, board);
-    for (BoardSnapshotEventListener listener : boardSnapshotEventListeners) {
-      listener.onBoardSnapshotEvent(event);
-    }
-  }
-
   /**
    * Copies listeners onto another algorithm stage so a fallback attempt reports the same events.
    */
   public void copyListenersFrom(NamedAlgorithm source) {
-    this.boardSnapshotEventListeners.addAll(source.boardSnapshotEventListeners);
     this.boardUpdatedEventListeners.addAll(source.boardUpdatedEventListeners);
     this.taskStateChangedEventListeners.addAll(source.taskStateChangedEventListeners);
   }

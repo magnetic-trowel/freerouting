@@ -455,10 +455,6 @@ final class AutorouteBatchLoop {
 
       logUnroutedBreakdown(currentPass);
 
-      if (Boolean.TRUE.equals(router.settings.autorouter.saveIntermediateStages)) {
-        fireBoardSnapshotEvent(router.board);
-      }
-
       // Stagnation detection: abort when the normalized score hasn't improved by
       // at least STAGNATION_SCORE_THRESHOLD over STAGNATION_PASS_LIMIT consecutive
       // passes. This now fires whenever the router is still actively running
@@ -738,10 +734,6 @@ final class AutorouteBatchLoop {
 
   private String buildUnroutedConnectionsReport() {
     return router.buildUnroutedConnectionsReport();
-  }
-
-  private void fireBoardSnapshotEvent(RoutingBoard board) {
-    router.fireBoardSnapshotEvent(board);
   }
 
   /**

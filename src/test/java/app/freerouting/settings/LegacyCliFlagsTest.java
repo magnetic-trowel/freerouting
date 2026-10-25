@@ -84,6 +84,20 @@ class LegacyCliFlagsTest {
   }
 
   @Test
+  void removedSaveIntermediateStagesSettingWarns() {
+    Instant mark = logMark();
+
+    RouterSettings merged = merge("--router.autorouter.save_intermediate_stages=true", "-mp", "5");
+
+    assertTrue(
+        Arrays.stream(FRLogger.getLogEntries().getEntries(mark, null))
+            .filter(e -> e.getType() == LogEntryType.Warning)
+            .map(LogEntry::getMessage)
+            .anyMatch(m -> m.contains("save_intermediate_stages")));
+    assertEquals(5, merged.autorouter.maxPasses);
+  }
+
+  @Test
   void deprecatedImprovementThresholdFlagIsStillApplied() {
     RouterSettings merged = merge("-oit", "5");
 

@@ -218,19 +218,6 @@ class EnvironmentVariablesSourceTest {
   }
 
   @Test
-  void saveIntermediateStages() {
-    Map<String, String> env = new HashMap<>();
-    env.put("FREEROUTING__ROUTER__SAVE_INTERMEDIATE_STAGES", "true");
-
-    EnvironmentVariablesSource source = new EnvironmentVariablesSource(env);
-    RouterSettings settings = source.getSettings();
-
-    assertNotNull(settings);
-    assertTrue(settings.autorouter.saveIntermediateStages);
-    assertEquals(1, source.getParsedCount());
-  }
-
-  @Test
   void optimizerStrategies() {
     Map<String, String> env =
         new HashMap<>(
@@ -255,14 +242,14 @@ class EnvironmentVariablesSourceTest {
   void lowercaseEnvironmentVariableNames() {
     Map<String, String> env = new HashMap<>();
     env.put("freerouting__router__max_passes", "100");
-    env.put("freerouting__router__save_intermediate_stages", "true");
+    env.put("freerouting__router__max_items", "7");
 
     EnvironmentVariablesSource source = new EnvironmentVariablesSource(env);
     RouterSettings settings = source.getSettings();
 
     assertNotNull(settings);
     assertEquals(100, settings.autorouter.maxPasses);
-    assertTrue(settings.autorouter.saveIntermediateStages);
+    assertEquals(7, settings.autorouter.maxItems);
     assertEquals(2, source.getParsedCount());
   }
 

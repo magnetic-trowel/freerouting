@@ -147,7 +147,6 @@ Like every other section, these values come from `freerouting.json`, `FREEROUTIN
     - **`algorithm`**: Algorithm identifier (`freerouting-router` by default; legacy identifiers such as `freerouting-router-v19` safely normalize to `freerouting-router`).
     - **`max_passes`**: Maximum autorouter passes. `0` means no limit; values above `9999` are capped at `9999`.
     - **`max_items`**: Maximum items attempted in the autorouter stage.
-    - **`save_intermediate_stages`**: Save board snapshots between passes.
     - **`ignore_net_classes`**: Net class names the autorouter should skip.
     - **`max_threads`**: Canonical CLI is `--router.autorouter.max_threads`. The autorouter pass
       does not read it. Fanout is also single-threaded. The optimizer pool uses

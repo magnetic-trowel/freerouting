@@ -188,7 +188,6 @@ public class DefaultSettings implements SettingsSource {
     settings.tracePullTightAccuracy = 500;
     settings.viasAllowed = true;
     settings.automaticNeckdown = true;
-    settings.autorouter.saveIntermediateStages = false;
     settings.autorouter.ignoreNetClasses = new String[0];
     settings.autorouter.startNecked = true;
     settings.autorouter.fallbackStrategies = DEFAULT_FALLBACK_STRATEGIES;
