@@ -8,7 +8,6 @@ import app.freerouting.api.BaseController;
 import app.freerouting.api.LocalFileAccess;
 import app.freerouting.api.dto.AutorouteRequest;
 import app.freerouting.api.dto.AutorouteResponse;
-import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
@@ -229,7 +228,7 @@ public class AutorouteControllerV1 extends BaseController {
 
     // 4. Synchronous wait for completion or timeout
     Instant waitStart = Instant.now();
-    while (!isTerminalState(job.state) || isThreadAlive(job)) {
+    while (!isTerminalState(job.state) || !job.isRoutingThreadEnded()) {
       // The job clock starts when the scheduler starts the job, after it has loaded the board.
       Instant clockStart =
           job.startedAt != null && job.startedAt.isAfter(waitStart) ? job.startedAt : waitStart;
@@ -249,7 +248,7 @@ public class AutorouteControllerV1 extends BaseController {
 
     double elapsedSeconds = Duration.between(waitStart, Instant.now()).toMillis() / 1000.0;
 
-    if (!isTerminalState(job.state) || isThreadAlive(job)) {
+    if (!isTerminalState(job.state) || !job.isRoutingThreadEnded()) {
       // The router has not stopped (or not started); reading its board now would race with it.
       if (job.thread != null) {
         job.thread.requestStop();
@@ -295,10 +294,9 @@ public class AutorouteControllerV1 extends BaseController {
       requestedFormats.add(FileFormat.SES);
     }
 
-    RoutingBoard finalBoard = job.board;
     MultiOutputGenerator.MultiOutputResult multiOut =
         MultiOutputGenerator.generateOutputs(
-            finalBoard, job.name, requestedFormats, job.drcSettings, includeDrcSummary);
+            job.board, job.name, requestedFormats, job.drcSettings, includeDrcSummary);
 
     // 6. Build response
     AutorouteResponse responsePayload = new AutorouteResponse();
@@ -307,17 +305,16 @@ public class AutorouteControllerV1 extends BaseController {
     responsePayload.status = job.state;
     responsePayload.durationSeconds = elapsedSeconds;
 
-    if (finalBoard != null) {
-      var stats = finalBoard.getStatistics();
-      if (stats != null) {
-        responsePayload.unroutedConnections =
-            stats.connections != null ? stats.connections.incompleteCount : 0;
-        responsePayload.clearanceViolations =
-            stats.clearanceViolations != null ? stats.clearanceViolations.totalCount : 0;
-        if (job.routerSettings != null && job.routerSettings.scoring != null) {
-          responsePayload.normalizedScore = stats.getRouterScore(job.routerSettings);
-          responsePayload.optimizerScore = stats.getOptimizerScore(job.routerSettings);
-        }
+    // The routing thread took them of the final board; measuring the board again would repeat it.
+    var stats = job.finalStatistics;
+    if (stats != null) {
+      responsePayload.unroutedConnections =
+          stats.connections != null ? stats.connections.incompleteCount : 0;
+      responsePayload.clearanceViolations =
+          stats.clearanceViolations != null ? stats.clearanceViolations.totalCount : 0;
+      if (job.routerSettings != null && job.routerSettings.scoring != null) {
+        responsePayload.normalizedScore = stats.getRouterScore(job.routerSettings);
+        responsePayload.optimizerScore = stats.getOptimizerScore(job.routerSettings);
       }
     }
 
@@ -346,10 +343,6 @@ public class AutorouteControllerV1 extends BaseController {
       return Response.status(Response.Status.ACCEPTED).entity(responseJson).build();
     }
     return Response.ok(responseJson).build();
-  }
-
-  private static boolean isThreadAlive(RoutingJob job) {
-    return job.thread != null && job.thread.isAlive();
   }
 
   private static boolean isTerminalState(RoutingJobState state) {

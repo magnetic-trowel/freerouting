@@ -63,6 +63,8 @@ class AutorouteControllerV1Test extends RoutingFixtureTest {
     String json = response.getEntity().toString();
     assertTrue(json.contains("\"job_id\"") || json.contains("\"jobId\""));
     assertTrue(json.contains("\"outputs\""));
+    // From the statistics the routing thread took of the final board.
+    assertTrue(json.contains("\"normalized_score\""), json);
   }
 
   @Test
