@@ -20,8 +20,10 @@ public final class DsnFile {
 
   /**
    * Sets containsPlane to true for nets with a conductionArea covering a large part of a signal
-   * layer (at least 50% of the board outline area). This is useful in case the layer type was not
-   * set correctly to plane in the dsn-file. Returns true, if something was changed.
+   * layer (at least 30% of the board outline area). This is useful in case the layer type was not
+   * set correctly to plane in the dsn-file. Each signal layer is judged on its own: a board that
+   * types some layers as power layers may still pour planes on its signal layers. Returns true, if
+   * something was changed.
    *
    * <p>Called from {@link app.freerouting.io.specctra.DsnReader#readBoard} when the DSN file
    * contains no {@code (autoroute ...)} scope.
@@ -34,11 +36,6 @@ public final class DsnFile {
         routingBoard.layerStructure;
     if (boardLayerStructure.layers.length < 1) {
       return false;
-    }
-    for (app.freerouting.board.model.structure.Layer currentLayer : boardLayerStructure.layers) {
-      if (!currentLayer.isSignal) {
-        return false;
-      }
     }
     boolean[] changedLayerArr = new boolean[boardLayerStructure.layers.length];
     Collection<ConductionArea> conductionAreaList = routingBoard.getConductionAreas();
