@@ -244,7 +244,7 @@ public final class RoutingFallback {
      */
     public static Outcome of(
         String strategy, RoutingBoard board, RouterSettings scoring, ClearanceBaseline incumbent) {
-      BoardStatistics statistics = new BoardStatistics(board);
+      BoardStatistics statistics = board.getStatistics();
       int incomplete =
           statistics.connections.incompleteCount != null
               ? statistics.connections.incompleteCount

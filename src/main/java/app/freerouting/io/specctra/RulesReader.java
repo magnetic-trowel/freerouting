@@ -2,7 +2,6 @@ package app.freerouting.io.specctra;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.structure.AngleRestriction;
-import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.io.CoordinateTransform;
 import app.freerouting.io.specctra.parser.AutorouteSettings;
 import app.freerouting.io.specctra.parser.IJFlexScanner;
@@ -168,7 +167,7 @@ public final class RulesReader {
     } finally {
       closeQuietly(in);
       // Widths, clearances and vias may have changed, and the optimizer's score bounds use them.
-      BoardStatistics.forgetBounds(board);
+      board.forgetStatistics();
     }
   }
 

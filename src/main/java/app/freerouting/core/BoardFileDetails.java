@@ -68,7 +68,7 @@ public class BoardFileDetails implements Serializable {
 
   /** Creates a new BoardDetails object from a RoutingBoard object. */
   public BoardFileDetails(BasicBoard board) {
-    this.statistics = new BoardStatistics(board);
+    this.statistics = board.getStatistics();
   }
 
   /** Calculates the CRC32 checksum of the supplied stream. */

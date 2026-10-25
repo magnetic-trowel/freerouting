@@ -110,9 +110,6 @@ public final class BatchAutorouter extends NamedAlgorithm {
   int profileRouteItemCount;
   int profilePlaneItemCount;
   BoardStatistics progressStatistics;
-  private BoardStatistics boardStatistics;
-  private RoutingBoard boardStatisticsBoard;
-  private long boardStatisticsStamp;
   int progressItemsSinceStatistics;
 
   /**
@@ -747,23 +744,6 @@ public final class BatchAutorouter extends NamedAlgorithm {
       return null;
     }
     return this.airLine;
-  }
-
-  /**
-   * Returns the full statistics of the current board, reused until the board is replaced or its
-   * item list, item contents or net assignments change.
-   */
-  BoardStatistics boardStatistics() {
-    long stamp =
-        board.itemList.getVersion()
-            + board.itemList.getContentVersion()
-            + board.getNetAssignmentChangeCount();
-    if (boardStatistics == null || boardStatisticsBoard != board || boardStatisticsStamp != stamp) {
-      boardStatistics = new BoardStatistics(board);
-      boardStatisticsBoard = board;
-      boardStatisticsStamp = stamp;
-    }
-    return boardStatistics;
   }
 
   int calculateIncompleteCount(RoutingBoard board) {

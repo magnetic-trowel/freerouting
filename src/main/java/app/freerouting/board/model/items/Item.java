@@ -1083,6 +1083,9 @@ public abstract class Item
     }
     clearanceClassIndex = index;
     this.clearDerivedData();
+    if (this.board != null) {
+      this.board.itemList.noteContentChange();
+    }
     if (this.board != null && this.board.searchTreeManager.isClearanceCompensationUsed()) {
       // reinsert the item into the search tree, because the compensated shape has changed.
       this.board.searchTreeManager.remove(this);

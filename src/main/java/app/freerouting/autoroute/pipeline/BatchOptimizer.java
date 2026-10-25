@@ -399,7 +399,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
                     + " accepted board (optimizer score %.2f).",
                 currentPass,
                 this.bestScore));
-        this.fireBoardUpdatedEvent(new BoardStatistics(this.board), null, this.board);
+        this.fireBoardUpdatedEvent(this.board.getStatistics(), null, this.board);
         this.lastStopReason = StopReason.ERROR;
         break;
       }
@@ -587,7 +587,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     phase.totalAllocatedGb = allocMbUsed / 1024.0f;
     phase.peakHeapMb = peakHeapMb;
 
-    BoardStatistics finalStats = new BoardStatistics(this.board);
+    BoardStatistics finalStats = this.board.getStatistics();
     float finalRouterScore = finalStats.getRouterScore(job.routerSettings);
     float finalOptimizerScore = finalStats.getOptimizerScore(job.routerSettings);
     phase.after =
@@ -625,7 +625,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
   private void restoreIncumbentBoard() {
     this.board = this.bestBoard.deepCopy();
     this.job.board = this.board;
-    this.fireBoardUpdatedEvent(new BoardStatistics(this.board), null, this.board);
+    this.fireBoardUpdatedEvent(this.board.getStatistics(), null, this.board);
   }
 
   /**
@@ -971,7 +971,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     }
 
     double routeoptimizerPassDuration = FRLogger.traceExit(optimizationPassId);
-    BoardStatistics boardStatisticsAfter = new BoardStatistics(this.board);
+    BoardStatistics boardStatisticsAfter = this.board.getStatistics();
     this.fireBoardUpdatedEvent(boardStatisticsAfter, routerCounters, this.board);
     job.logInfo(
         String.format(

@@ -167,7 +167,7 @@ public final class BatchFanout {
       }
       lastBoardHash = currentBoardHash;
     }
-    BoardStatistics stats = new BoardStatistics(board, null, false);
+    BoardStatistics stats = board.getStatistics(false);
     EscapeStatistics finalEscape = EscapeStatistics.fromBoardStatistics(stats);
     long totalDurationMillis = Math.max(0, System.currentTimeMillis() - fanoutStart);
     return new FanoutRunSummary(
@@ -213,7 +213,7 @@ public final class BatchFanout {
         new app.freerouting.geometry.planar.Point[0]);
 
     this.progressThrottler.reset();
-    BoardStatistics progressStats = new BoardStatistics(this.routingBoard, null, false);
+    BoardStatistics progressStats = this.routingBoard.getStatistics(false);
     publishProgress(
         progressListener,
         passNo,
@@ -459,7 +459,7 @@ public final class BatchFanout {
         if (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs) {
           FRLogger.info("Fanout stage timed out.");
           this.isTimedOut = true;
-          BoardStatistics passStats = new BoardStatistics(this.routingBoard, null, false);
+          BoardStatistics passStats = this.routingBoard.getStatistics(false);
           EscapeStatistics escapeStats = EscapeStatistics.fromBoardStatistics(passStats);
           publishProgress(
               progressListener,
@@ -477,7 +477,7 @@ public final class BatchFanout {
           return routedCount;
         }
         if (this.thread != null && this.thread.isStopAutoRouterRequested()) {
-          BoardStatistics passStats = new BoardStatistics(this.routingBoard, null, false);
+          BoardStatistics passStats = this.routingBoard.getStatistics(false);
           EscapeStatistics escapeStats = EscapeStatistics.fromBoardStatistics(passStats);
           publishProgress(
               progressListener,
@@ -501,7 +501,7 @@ public final class BatchFanout {
     }
     int extraViasThisPass = Math.max(0, this.routingBoard.getViaCount() - viasBeforePass);
     this.extraViasTotal += extraViasThisPass;
-    BoardStatistics passStats = new BoardStatistics(this.routingBoard, null, false);
+    BoardStatistics passStats = this.routingBoard.getStatistics(false);
     EscapeStatistics escapeStats = EscapeStatistics.fromBoardStatistics(passStats);
 
     long passDurationMs = System.currentTimeMillis() - passStart;

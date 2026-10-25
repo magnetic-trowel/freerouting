@@ -30,6 +30,11 @@ import app.freerouting.util.TextManager;
 import app.freerouting.util.gson.GsonProvider;
 import com.google.gson.annotations.SerializedName;
 import java.awt.geom.Rectangle2D;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -597,6 +602,22 @@ public class BoardStatistics implements Serializable {
       index += target.length();
     }
     return count;
+  }
+
+  /** Returns a deep copy of these statistics, which shares no object with them. */
+  public BoardStatistics copy() {
+    try {
+      ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+      try (ObjectOutputStream out = new ObjectOutputStream(bytes)) {
+        out.writeObject(this);
+      }
+      try (ObjectInputStream in =
+          new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+        return (BoardStatistics) in.readObject();
+      }
+    } catch (IOException | ClassNotFoundException e) {
+      throw new IllegalStateException("Board statistics could not be copied", e);
+    }
   }
 
   /** Returns a JSON representation of this object. */

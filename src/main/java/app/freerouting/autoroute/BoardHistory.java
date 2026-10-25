@@ -2,7 +2,6 @@ package app.freerouting.autoroute;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
-import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.RoutingCostSettings;
 import java.io.Serializable;
@@ -62,7 +61,7 @@ public class BoardHistory {
 
   /** Adds a routing board to history if it improves overall score or space permits. */
   public synchronized void add(RoutingBoard board) {
-    add(board, new BoardStatistics(board).getRouterScore(routerSettings));
+    add(board, board.getStatistics().getRouterScore(routerSettings));
   }
 
   /** Same as {@link #add(RoutingBoard)} for a board whose router score is already known. */

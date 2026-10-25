@@ -3,7 +3,6 @@ package app.freerouting.gui.board;
 import app.freerouting.Freerouting;
 import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.core.RoutingJob;
-import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.gui.rendering.TutorialBoardPalette;
 import app.freerouting.gui.windows.board.WindowBase;
 import app.freerouting.gui.windows.board.WindowMessage;
@@ -167,8 +166,7 @@ public class GuiManager {
         System.exit(1);
         return false;
       }
-      var bs =
-          new BoardStatistics(newFrame.boardPanel.boardHandling.getRoutingBoard(), null, false);
+      var bs = newFrame.boardPanel.boardHandling.getRoutingBoard().getStatistics(false);
       newFrame.boardPanel.boardHandling.screenMessages.setBoardScore(
           bs.getRouterScore(routingJob.routerSettings),
           bs.connections.incompleteCount,

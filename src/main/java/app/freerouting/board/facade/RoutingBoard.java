@@ -30,7 +30,6 @@ import app.freerouting.board.searchtree.ShapeSearchTree;
 import app.freerouting.board.state.ChangedArea;
 import app.freerouting.board.state.Communication;
 import app.freerouting.board.trace.PolylineTrace;
-import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.Stoppable;
 import app.freerouting.datastructures.TimeLimit;
 import app.freerouting.datastructures.UndoableObjects;
@@ -1511,10 +1510,6 @@ public class RoutingBoard extends BasicBoard implements Serializable {
   @Override
   public boolean redo(Set<Integer> changedNets) {
     return getUndoFacade().redo(changedNets);
-  }
-
-  public BoardStatistics getStatistics() {
-    return new BoardStatistics(this);
   }
 
   /**

@@ -105,7 +105,7 @@ final class DirectPinRouting {
         }
       }
     }
-    BoardStatistics stats = new BoardStatistics(board);
+    BoardStatistics stats = board.getStatistics();
     FRLogger.info(
         "Direct pin routing: "
             + routed
