@@ -1,0 +1,29 @@
+# E03 via-fitting drill candidates. Paths are relative to the repository root.
+# Group A: dense QFP/QFN/BGA boards with open connections (should benefit).
+fixtures/Issue269-caniot-tiny-arm.dsn
+fixtures/Issue508-DAC2020_bm04.dsn
+fixtures/Issue508-DAC2020_bm05.dsn
+fixtures/Issue684-Autorouter_PCB1_2026-5-8.dsn
+fixtures/Issue313-FastTest.dsn
+fixtures/Issue039-bug-design.dsn
+fixtures/Issue157-TeamAdapt-LinePCB.dsn
+fixtures/Issue732-RoyalBlue54L-Feather.dsn
+# Group A2: dense fine-pitch boards without camp3 data (status unknown; included to widen the sample).
+fixtures/Issue066-Project_GP8B.dsn
+fixtures/Issue145-smoothieboard.dsn
+fixtures/Issue179-Autorouter_PCB1_2023-3-24.dsn
+# Group B: regression boards, complete at head (must stay complete, watch vias and CPU).
+fixtures/Issue508-DAC2020_bm01.dsn
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue508-DAC2020_bm06.dsn
+fixtures/Issue508-DAC2020_bm07.dsn
+fixtures/Issue508-DAC2020_bm10.dsn
+fixtures/Issue508-DAC2020_bm11.dsn
+fixtures/Issue558-dev-board.dsn
+fixtures/Issue110-RelayModule.dsn
+fixtures/Issue034-Green14SegLED.dsn
+fixtures/Issue155-CH376_MCP795_Module.dsn
+fixtures/Issue217-8088sbc.dsn
+# Group C: cheap smoke boards.
+fixtures/Issue957-smoke-ldo-led.dsn
+fixtures/Issue676-ch32v-tx118s.dsn

@@ -8,11 +8,13 @@ import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
+import app.freerouting.board.model.items.WholeNetConnectivity;
 import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.constants.Constants;
 import app.freerouting.datastructures.UndoableObjects;
+import app.freerouting.drc.PlaneFillConnectivity;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Polyline;
@@ -29,13 +31,16 @@ import app.freerouting.util.TextManager;
 import app.freerouting.util.gson.GsonProvider;
 import com.google.gson.annotations.SerializedName;
 import java.awt.geom.Rectangle2D;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 
 /** Statistics of a board. */
 public class BoardStatistics implements Serializable {
@@ -272,32 +277,7 @@ public class BoardStatistics implements Serializable {
       }
     }
 
-    this.traces.totalWeightedLength = 0.0f;
-    int defaultClearanceClass = BoardRules.defaultClearanceClass();
-    Iterator<UndoableObjects.UndoableObjectNode> it2 = board.itemList.startReadObject();
-    for (; ; ) {
-      UndoableObjects.Storable currentItem = board.itemList.readObject(it2);
-      if (currentItem == null) {
-        break;
-      }
-      if (currentItem instanceof Trace currentTrace) {
-        FixedState fixedState = currentTrace.getFixedState();
-        if (fixedState == FixedState.UNFIXED || fixedState == FixedState.SHOVE_FIXED) {
-          double weightedTraceLength =
-              currentTrace.getLength()
-                  * (currentTrace.getHalfWidth()
-                      + board.clearanceValue(
-                          currentTrace.clearanceClassIndex(),
-                          defaultClearanceClass,
-                          currentTrace.getLayer()));
-          if (fixedState == FixedState.SHOVE_FIXED) {
-            // to produce less violations with pin exit directions.
-            weightedTraceLength /= 2;
-          }
-          this.traces.totalWeightedLength += (float) weightedTraceLength;
-        }
-      }
-    }
+    this.traces.totalWeightedLength = OptimizerMetrics.of(board).totalWeightedLength();
 
     // Connections
     if (includeConnections) {
@@ -424,68 +404,36 @@ public class BoardStatistics implements Serializable {
       this.clearanceViolations.avgViolationUm = 0.0;
     }
 
-    // Convert all length values from board.communication.unit to the preferred unit
+    // Convert all length values from board units to the preferred unit
     if (unit == null) {
       unit = Unit.MM;
     }
-
-    if (unit != board.communication.unit) {
-      // convert all length values to the preferred unit
-      Unit fromUnit = board.communication.unit;
-      Unit toUnit = unit;
-      this.unit = unit.toString();
-
-      // Board
-      this.board.boundingBox =
-          new Rectangle2D.Float(
-              (float) Unit.scale(this.board.boundingBox.x, fromUnit, toUnit),
-              (float) Unit.scale(this.board.boundingBox.y, fromUnit, toUnit),
-              (float) Unit.scale(this.board.boundingBox.width, fromUnit, toUnit),
-              (float) Unit.scale(this.board.boundingBox.height, fromUnit, toUnit));
-      this.board.size =
-          new Rectangle2D.Float(
-              0,
-              0,
-              (float) Unit.scale(this.board.size.width, fromUnit, toUnit),
-              (float) Unit.scale(this.board.size.height, fromUnit, toUnit));
-
-      // Traces
-      this.traces.totalLength = (float) Unit.scale(this.traces.totalLength, fromUnit, toUnit);
-      this.traces.totalWeightedLength =
-          (float) Unit.scale(this.traces.totalWeightedLength, fromUnit, toUnit);
-      this.traces.averageLength = (float) Unit.scale(this.traces.averageLength, fromUnit, toUnit);
-      this.traces.totalHorizontalLength =
-          (float) Unit.scale(this.traces.totalHorizontalLength, fromUnit, toUnit);
-      this.traces.totalVerticalLength =
-          (float) Unit.scale(this.traces.totalVerticalLength, fromUnit, toUnit);
-      this.traces.totalAngledLength =
-          (float) Unit.scale(this.traces.totalAngledLength, fromUnit, toUnit);
-    }
+    this.unit = unit.toString();
+    float toUnit = (float) board.communication.boardUnitSize(unit);
+    this.board.boundingBox.setRect(
+        this.board.boundingBox.x * toUnit,
+        this.board.boundingBox.y * toUnit,
+        this.board.boundingBox.width * toUnit,
+        this.board.boundingBox.height * toUnit);
+    this.board.size.setRect(0, 0, this.board.size.width * toUnit, this.board.size.height * toUnit);
+    this.traces.totalLength *= toUnit;
+    // length times (half width + clearance): an area
+    this.traces.totalWeightedLength *= toUnit * toUnit;
+    this.traces.averageLength *= toUnit;
+    this.traces.totalHorizontalLength *= toUnit;
+    this.traces.totalVerticalLength *= toUnit;
+    this.traces.totalAngledLength *= toUnit;
 
     // Calculate fanout statistics
     java.util.Collection<Pin> smdPins = board.getSmdPins();
     int total = 0;
     int escaped = 0;
     int alreadyConnected = 0;
-    // All pins of one net share the answer: the connected set is an equivalence class over the
-    // net's connectable items, so it either covers the whole net for every pin or for none.
-    Map<Integer, Boolean> netFullyConnected = new HashMap<>();
+    WholeNetConnectivity connectivity = new WholeNetConnectivity();
     for (Pin pin : smdPins) {
       if (pin.netCount() > 0) {
         total++;
-        int netNumber = pin.getNetNumber(0);
-        boolean pinConnected;
-        if (netNumber > 0) {
-          Boolean memo = netFullyConnected.get(netNumber);
-          if (memo == null) {
-            memo = pin.getUnconnectedSet(netNumber).isEmpty();
-            netFullyConnected.put(netNumber, memo);
-          }
-          pinConnected = memo;
-        } else {
-          pinConnected = pin.getUnconnectedSet(netNumber).isEmpty();
-        }
-        if (pinConnected) {
+        if (connectivity.isConnectedToWholeNet(pin, pin.getNetNumber(0))) {
           alreadyConnected++;
         }
         if (isPinEscaped(pin)) {
@@ -623,6 +571,34 @@ public class BoardStatistics implements Serializable {
     }
   }
 
+  /**
+   * Returns the statistics of a routing or check result, in which copper that foreign tracks cut
+   * off from the fill of its pour counts as an open connection ({@link
+   * BoardStatisticsConnections#pourCutOffCount}).
+   *
+   * <p>The constructors count connections as the router sees them: through pour polygons, as the
+   * incremental ledger and the router's item selection do. The router cannot target a cut-off
+   * group, so the routing loop, the optimizer and the fallback comparison keep that view (counting
+   * cut-offs there only made the fallback strategies re-route boards for nothing);
+   * BatchAutorouter.connectPourCutOffs repairs cut-offs after routing, and this view reports what
+   * is left.
+   */
+  public static BoardStatistics ofResult(BasicBoard board, Unit unit) {
+    return withPourCutOffs(new BoardStatistics(board, unit, true, true), board);
+  }
+
+  /** Returns {@link #ofResult(BasicBoard, Unit)} in the board's own unit. */
+  public static BoardStatistics ofResult(BasicBoard board) {
+    // getStatistics returns a copy of the board's cached statistics, which may be changed.
+    return withPourCutOffs(board.getStatistics(), board);
+  }
+
+  private static BoardStatistics withPourCutOffs(BoardStatistics statistics, BasicBoard board) {
+    statistics.connections.pourCutOffCount = PlaneFillConnectivity.cutOffGroupCount(board);
+    statistics.connections.incompleteCount += statistics.connections.pourCutOffCount;
+    return statistics;
+  }
+
   /** Returns whether a pin has a valid trace or via escape. */
   public static boolean isPinEscaped(Pin pin) {
     java.util.Set<Item> contacts = pin.getNormalContacts();
@@ -655,6 +631,22 @@ public class BoardStatistics implements Serializable {
       index += target.length();
     }
     return count;
+  }
+
+  /** Returns a deep copy of these statistics, which shares no object with them. */
+  public BoardStatistics copy() {
+    try {
+      ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+      try (ObjectOutputStream out = new ObjectOutputStream(bytes)) {
+        out.writeObject(this);
+      }
+      try (ObjectInputStream in =
+          new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+        return (BoardStatistics) in.readObject();
+      }
+    } catch (IOException | ClassNotFoundException e) {
+      throw new IllegalStateException("Board statistics could not be copied", e);
+    }
   }
 
   /** Returns a JSON representation of this object. */
@@ -866,6 +858,9 @@ public class BoardStatistics implements Serializable {
   /**
    * Calculates the V3 optimizer score: excess vias and bends are converted to the trace length that
    * uses the same routing space, and the total excess length is measured against the lower bound.
+   * The score is {@code 1000 / (1 + weight / 1000 * excess / bound)}: 1000 at the bound, falling
+   * with every millimetre of excess and never reaching 0, so that a long board still ranks its
+   * candidates. With the default weight it is 1000 times the bound over the equivalent length.
    */
   private float getV3OptimizerScore(
       OptimizerScoreSettings settings, double traceLengthMm, int viaCount, int bendCount) {
@@ -887,13 +882,11 @@ public class BoardStatistics implements Serializable {
         Math.max(0.0, traceLengthMm - minTraceLength)
             + viaLength * Math.max(0.0, viaCount - minViaCount)
             + bendLength * Math.max(0.0, bendCount - minBendCount);
-    return (float)
-        Math.max(
-            0.0,
-            1000.0
-                - valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
-                    * excessLength
-                    / Math.max(minTraceLength, lengthFloor));
+    double penalty =
+        valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
+            * excessLength
+            / Math.max(minTraceLength, lengthFloor);
+    return (float) (1000.0 * 1000.0 / (1000.0 + penalty));
   }
 
   private float getV2OptimizerScore(
@@ -945,11 +938,14 @@ public class BoardStatistics implements Serializable {
     public int escapedCount;
   }
 
-  /** Lightweight metrics for optimizer evaluation without building full {@link BoardStatistics}. */
-  public record OptimizerMetrics(int viaCount, float totalLength, float totalWeightedLength) {
+  /**
+   * Lightweight metrics for optimizer evaluation without building full {@link BoardStatistics}. The
+   * weighted trace length (length times half width plus clearance) is in square board units: the
+   * optimizer only compares it with itself.
+   */
+  public record OptimizerMetrics(int viaCount, float totalWeightedLength) {
     public static OptimizerMetrics of(BasicBoard board) {
       int viaCount = 0;
-      float totalLength = 0.0f;
       float totalWeightedLength = 0.0f;
       int defaultClearanceClass = BoardRules.defaultClearanceClass();
 
@@ -962,7 +958,6 @@ public class BoardStatistics implements Serializable {
         if (currentItem instanceof Via) {
           viaCount++;
         } else if (currentItem instanceof Trace currentTrace) {
-          totalLength += (float) currentTrace.getLength();
           FixedState fixedState = currentTrace.getFixedState();
           if (fixedState == FixedState.UNFIXED || fixedState == FixedState.SHOVE_FIXED) {
             double weightedTraceLength =
@@ -979,12 +974,7 @@ public class BoardStatistics implements Serializable {
           }
         }
       }
-      Unit unit = board.communication.unit;
-      if (unit != null && unit != Unit.MM) {
-        totalLength = (float) Unit.scale(totalLength, unit, Unit.MM);
-        totalWeightedLength = (float) Unit.scale(totalWeightedLength, unit, Unit.MM);
-      }
-      return new OptimizerMetrics(viaCount, totalLength, totalWeightedLength);
+      return new OptimizerMetrics(viaCount, totalWeightedLength);
     }
   }
 }

@@ -15,11 +15,14 @@ public final class AutorouteSettings {
 
   private AutorouteSettings() {}
 
+  /**
+   * Reads an {@code (autoroute_settings ...)} scope. The result is a settings source: it sets only
+   * what the scope states, so an absent keyword such as {@code (postroute ...)} leaves the value to
+   * the other sources (freerouting.json, the defaults) instead of forcing one.
+   */
   public static RouterSettings readScope(IJFlexScanner scanner, LayerStructure layerStructure) {
     RouterSettings result = new RouterSettings();
     result.setLayerCount(layerStructure.layers.length);
-    boolean withAutoroute = true;
-    boolean withPostroute = true;
     Object nextToken = null;
     for (; ; ) {
       Object prevToken = nextToken;
@@ -44,9 +47,9 @@ public final class AutorouteSettings {
         if (nextToken == Keyword.FANOUT) {
           DsnFile.readOnOffScope(scanner);
         } else if (nextToken == Keyword.AUTOROUTE) {
-          withAutoroute = DsnFile.readOnOffScope(scanner);
+          result.setRunRouter(DsnFile.readOnOffScope(scanner));
         } else if (nextToken == Keyword.POSTROUTE) {
-          withPostroute = DsnFile.readOnOffScope(scanner);
+          result.setRunOptimizer(DsnFile.readOnOffScope(scanner));
         } else if (nextToken == Keyword.VIAS) {
           result.setViasAllowed(DsnFile.readOnOffScope(scanner));
         } else if (nextToken == Keyword.VIA_COSTS) {
@@ -65,8 +68,6 @@ public final class AutorouteSettings {
         }
       }
     }
-    result.setRunRouter(withAutoroute);
-    result.setRunOptimizer(withPostroute);
     return result;
   }
 

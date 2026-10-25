@@ -13,9 +13,11 @@ import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.io.CoordinateTransform;
 import app.freerouting.logger.FRLogger;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
 
 /** Class for reading and writing library scopes from dsn-files. */
 @SuppressWarnings({
@@ -348,7 +350,10 @@ public class Library extends ScopeKeyword {
 
   @Override
   public boolean readScope(ReadScopeParameter scopeParameter) {
-    RoutingBoard board = scopeParameter.boardHandling.getRoutingBoard();
+    RoutingBoard board = scopeParameter.boardForScope("library");
+    if (board == null) {
+      return false;
+    }
     board.library.padstacks =
         new Padstacks(scopeParameter.boardHandling.getRoutingBoard().layerStructure);
     Collection<Package> packageList = new LinkedList<>();
@@ -452,44 +457,11 @@ public class Library extends ScopeKeyword {
       generateMissingKeepoutNames("via_keepout_", currentPackage.viaKeepouts);
       generateMissingKeepoutNames("place_keepout_", currentPackage.placeKeepouts);
       app.freerouting.core.library.Package.Keepout[] keepouts =
-          new app.freerouting.core.library.Package.Keepout[currentPackage.keepouts.size()];
-      Iterator<Shape.ReadAreaScopeResult> it2 = currentPackage.keepouts.iterator();
-      for (int i = 0; i < keepouts.length; i++) {
-        Shape.ReadAreaScopeResult currentKeepout = it2.next();
-        final Layer currentLayer = currentKeepout.shapeList.iterator().next().layer;
-        Area currentArea =
-            Shape.transformAreaToBoardRel(
-                currentKeepout.shapeList, scopeParameter.coordinateTransform);
-        keepouts[i] =
-            new app.freerouting.core.library.Package.Keepout(
-                currentKeepout.areaName, currentArea, currentLayer.no);
-      }
+          toBoardKeepouts(currentPackage.keepouts, scopeParameter.coordinateTransform);
       app.freerouting.core.library.Package.Keepout[] viaKeepouts =
-          new app.freerouting.core.library.Package.Keepout[currentPackage.viaKeepouts.size()];
-      it2 = currentPackage.viaKeepouts.iterator();
-      for (int i = 0; i < viaKeepouts.length; i++) {
-        Shape.ReadAreaScopeResult currentKeepout = it2.next();
-        final Layer currentLayer = (currentKeepout.shapeList.iterator().next()).layer;
-        Area currentArea =
-            Shape.transformAreaToBoardRel(
-                currentKeepout.shapeList, scopeParameter.coordinateTransform);
-        viaKeepouts[i] =
-            new app.freerouting.core.library.Package.Keepout(
-                currentKeepout.areaName, currentArea, currentLayer.no);
-      }
+          toBoardKeepouts(currentPackage.viaKeepouts, scopeParameter.coordinateTransform);
       app.freerouting.core.library.Package.Keepout[] placeKeepoutArr =
-          new app.freerouting.core.library.Package.Keepout[currentPackage.placeKeepouts.size()];
-      it2 = currentPackage.placeKeepouts.iterator();
-      for (int i = 0; i < placeKeepoutArr.length; i++) {
-        Shape.ReadAreaScopeResult currentKeepout = it2.next();
-        final Layer currentLayer = (currentKeepout.shapeList.iterator().next()).layer;
-        Area currentArea =
-            Shape.transformAreaToBoardRel(
-                currentKeepout.shapeList, scopeParameter.coordinateTransform);
-        placeKeepoutArr[i] =
-            new app.freerouting.core.library.Package.Keepout(
-                currentKeepout.areaName, currentArea, currentLayer.no);
-      }
+          toBoardKeepouts(currentPackage.placeKeepouts, scopeParameter.coordinateTransform);
       board.library.packages.add(
           currentPackage.name != null ? currentPackage.name : "Package",
           pins,
@@ -502,6 +474,26 @@ public class Library extends ScopeKeyword {
           currentPackage.isFront);
     }
     return true;
+  }
+
+  /**
+   * Transforms image keepouts to board keepouts. A keepout whose area cannot be transformed is left
+   * out; Shape.transformAreaToBoardRel already reported why.
+   */
+  private static app.freerouting.core.library.Package.Keepout[] toBoardKeepouts(
+      Collection<Shape.ReadAreaScopeResult> keepoutList, CoordinateTransform coordinateTransform) {
+    List<app.freerouting.core.library.Package.Keepout> result = new ArrayList<>();
+    for (Shape.ReadAreaScopeResult currentKeepout : keepoutList) {
+      final Layer currentLayer = currentKeepout.shapeList.iterator().next().layer;
+      Area currentArea =
+          Shape.transformAreaToBoardRel(currentKeepout.shapeList, coordinateTransform);
+      if (currentArea != null) {
+        result.add(
+            new app.freerouting.core.library.Package.Keepout(
+                currentKeepout.areaName, currentArea, currentLayer.no));
+      }
+    }
+    return result.toArray(new app.freerouting.core.library.Package.Keepout[0]);
   }
 
   private void generateMissingKeepoutNames(

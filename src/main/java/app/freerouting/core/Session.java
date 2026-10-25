@@ -4,9 +4,12 @@ import app.freerouting.management.jobs.RoutingJobScheduler;
 import com.google.gson.annotations.SerializedName;
 import java.io.Serializable;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Represents a user session that contains the jobs that will be processed by the router. */
 public class Session implements Serializable {
+
+  private static final AtomicLong CREATION_COUNTER = new AtomicLong();
 
   @SerializedName("id")
   public final UUID id = UUID.randomUUID();
@@ -23,7 +26,10 @@ public class Session implements Serializable {
    */
   public final transient String apiKeyHash;
 
-  public transient boolean isPrimary;
+  public transient volatile boolean isPrimary;
+
+  /** Position in creation order, used to evict the oldest sessions first. */
+  public final transient long creationSequence = CREATION_COUNTER.incrementAndGet();
 
   /**
    * Creates a new session.
@@ -59,6 +65,20 @@ public class Session implements Serializable {
               + host
               + "'. It must contain the host name and version separated by '/'.");
     }
+  }
+
+  /**
+   * Returns whether the caller owns this session: the same profile and, for an authenticated
+   * caller, the API key that created the session. The profile comes from a request header the
+   * client chooses, so without the key check any valid key could act as any profile.
+   *
+   * @param userId the caller's profile id
+   * @param apiKeyHash the SHA-256 hash of the caller's validated API key, or {@code null} when
+   *     authentication is disabled
+   * @return whether the caller owns this session
+   */
+  public boolean isOwnedBy(UUID userId, String apiKeyHash) {
+    return this.userId.equals(userId) && (apiKeyHash == null || apiKeyHash.equals(this.apiKeyHash));
   }
 
   /**

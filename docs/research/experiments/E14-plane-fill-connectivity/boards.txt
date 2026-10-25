@@ -1,0 +1,21 @@
+# Boards with pours ((plane ...) scopes or ConductionAreas after load).
+# Should benefit (pads cut off from the actual fill):
+fixtures/Issue054-tairakb.dsn
+fixtures/Issue093-interf_u.dsn
+fixtures/Issue153-wavefolder.dsn
+fixtures/Issue367-Charger.dsn
+fixtures/Issue676-ch32v-tx118s.dsn
+fixtures/Issue690-ecc83.dsn
+fixtures/Issue957-smoke-ldo-led.dsn
+fixtures/Issue733-kicad_interf_u_input_design.dsn
+fixtures/Issue163-pic_programmer.dsn
+fixtures/Issue649-kicad_ecc83-pp_input_board_v2.dsn
+fixtures/Issue029-hw48na.dsn
+fixtures/Issue756-tomu-fpga.dsn
+# Must not regress (larger pour boards):
+fixtures/Issue145-smoothieboard.dsn
+fixtures/Issue732-CM5_MINIMA_3.dsn
+fixtures/Issue754-avionics_hub.dsn
+# No pours: the check must be a no-op (identical SES, ~0 s):
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue269-caniot-tiny-arm.dsn

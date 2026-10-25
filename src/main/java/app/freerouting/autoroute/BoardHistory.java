@@ -2,7 +2,7 @@ package app.freerouting.autoroute;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
-import app.freerouting.core.scoring.BoardStatistics;
+import app.freerouting.drc.ClearanceBaseline;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.RoutingCostSettings;
 import java.io.Serializable;
@@ -34,6 +34,9 @@ public class BoardHistory {
   private final RouterSettings routerSettings;
   private final ReadWriteLock rwLock = new ReentrantReadWriteLock();
 
+  /** The entry of the board passed to the last {@link #add} call; null if it was not kept. */
+  private BoardHistoryEntry lastAdded;
+
   /** Constructs a BoardHistory with default maximum history size. */
   public BoardHistory(RouterSettings routerSettings) {
     this(routerSettings, MAX_HISTORY_SIZE);
@@ -59,14 +62,19 @@ public class BoardHistory {
 
   /** Adds a routing board to history if it improves overall score or space permits. */
   public synchronized void add(RoutingBoard board) {
-    add(board, new BoardStatistics(board).getRouterScore(routerSettings));
+    add(board, board.getStatistics().getRouterScore(routerSettings));
   }
 
   /** Same as {@link #add(RoutingBoard)} for a board whose router score is already known. */
   public synchronized void add(RoutingBoard board, float newScore) {
-    if (contains(board)) {
-      return;
+    String hash = board.getHash();
+    for (BoardHistoryEntry entry : boards) {
+      if (entry.hash.equals(hash)) {
+        lastAdded = entry;
+        return;
+      }
     }
+    lastAdded = null;
 
     if (boards.size() >= maxHistorySize) {
 
@@ -91,7 +99,16 @@ public class BoardHistory {
       boards.remove(worstIndex);
     }
 
-    boards.add(new BoardHistoryEntry(board, newScore));
+    lastAdded = new BoardHistoryEntry(board, newScore);
+    boards.add(lastAdded);
+  }
+
+  /**
+   * Returns a copy of the board passed to the last {@link #add} call, or null if the history did
+   * not keep it (it was full and the board scored no better than its worst entry).
+   */
+  public synchronized RoutingBoard restoreLastAdded() {
+    return lastAdded == null ? null : lastAdded.restore();
   }
 
   private static RouterSettings createLegacyRouterSettings(RoutingCostSettings scoringSettings) {
@@ -103,6 +120,7 @@ public class BoardHistory {
   /** Clears all boards from history. */
   public synchronized void clear() {
     boards.clear();
+    lastAdded = null;
   }
 
   /** Returns true if the board snapshot is already present in history. */
@@ -149,12 +167,13 @@ public class BoardHistory {
   }
 
   /**
-   * Returns the best board in the history that has a restore count less than or equal to
-   * maxAllowedRestoreCount. Returns null if no such board exists.
+   * Returns a copy of the best board in the history that was restored fewer than maxRestores times
+   * (no limit if maxRestores is 0 or less), and counts the restore. Returns null if no such board
+   * exists.
    */
-  public synchronized RoutingBoard restoreBoard(int maxAllowedRestoreCount) {
-    if (maxAllowedRestoreCount <= 0) {
-      maxAllowedRestoreCount = Integer.MAX_VALUE;
+  public synchronized RoutingBoard restoreBoard(int maxRestores) {
+    if (maxRestores <= 0) {
+      maxRestores = Integer.MAX_VALUE;
     }
 
     rwLock.readLock().lock();
@@ -164,9 +183,9 @@ public class BoardHistory {
       boards.sort((o1, o2) -> Float.compare(o2.score, o1.score));
 
       for (BoardHistoryEntry entry : boards) {
-        if (entry.restoreCount <= maxAllowedRestoreCount) {
+        if (entry.restoreCount < maxRestores) {
           entry.restoreCount++;
-          return (RoutingBoard) BasicBoard.deserialize(entry.board);
+          return entry.restore();
         }
       }
       return null;
@@ -190,22 +209,6 @@ public class BoardHistory {
     }
   }
 
-  /** Returns the rank (1-indexed) of the specified board, or -1 if not found. */
-  public int getRank(RoutingBoard board) {
-    String hash = board.getHash();
-    rwLock.readLock().lock();
-    try {
-      for (int i = 0; i < boards.size(); i++) {
-        if (boards.get(i).hash.equals(hash)) {
-          return i + 1;
-        }
-      }
-      return -1;
-    } finally {
-      rwLock.readLock().unlock();
-    }
-  }
-
   private static class BoardHistoryEntry implements Serializable {
 
     public final byte[] board;
@@ -213,11 +216,27 @@ public class BoardHistory {
     public final float score;
     public int restoreCount;
 
+    /**
+     * The board's baseline of pre-existing clearance violations. It is transient on the board, so
+     * the bytes do not carry it; without it a restored board counts every pre-existing violation as
+     * new. It is immutable and shared.
+     */
+    private final transient ClearanceBaseline clearanceBaseline;
+
     public BoardHistoryEntry(RoutingBoard board, float score) {
       this.board = board.serialize(false);
       this.hash = board.getHash();
       this.score = score;
       this.restoreCount = 0;
+      this.clearanceBaseline = board.clearanceBaseline;
+    }
+
+    RoutingBoard restore() {
+      RoutingBoard result = (RoutingBoard) BasicBoard.deserialize(this.board);
+      if (result != null) {
+        result.clearanceBaseline = this.clearanceBaseline;
+      }
+      return result;
     }
   }
 }

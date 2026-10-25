@@ -1,0 +1,9 @@
+control jars/e16.jar
+head-unpatched head
+net_id jars/e16.jar -Dfreerouting.exp.route_order=net_id
+short_first jars/e16.jar -Dfreerouting.exp.route_order=short_first
+long_first jars/e16.jar -Dfreerouting.exp.route_order=long_first
+constrained_first jars/e16.jar -Dfreerouting.exp.route_order=constrained_first
+fine_pitch_first jars/e16.jar -Dfreerouting.exp.route_order=fine_pitch_first
+failed_first jars/e16.jar -Dfreerouting.exp.route_order=failed_first
+learned jars/e16.jar -Dfreerouting.exp.route_order=learned

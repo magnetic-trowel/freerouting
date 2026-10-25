@@ -6,6 +6,7 @@ import app.freerouting.core.events.RoutingJobLogEntryAddedEventListener;
 import app.freerouting.core.events.RoutingJobUpdatedEvent;
 import app.freerouting.core.events.RoutingJobUpdatedEventListener;
 import app.freerouting.core.results.RoutingResultManifest;
+import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.io.FileFormat;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.logger.LogEntry;
@@ -141,6 +142,24 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   public transient StoppableThread thread;
   public transient volatile RoutingBoard board;
 
+  /**
+   * Statistics of the final board, captured by the routing thread after its last change to the
+   * board and before the job turned terminal. They stay available after the scheduler released
+   * {@link #board}. Null until then, which includes a job that the job monitor marked as timed out
+   * while its routing thread, which did not stop within the grace period, still runs.
+   */
+  public transient volatile BoardStatistics finalStatistics;
+
+  /**
+   * Keeps {@link #board} on the job after it finished. A caller that waits for the job and then
+   * reads the final board itself (the CLI, the synchronous autoroute endpoint) sets it before the
+   * job starts and clears it once it has read the board; until then the scheduler does not release
+   * the board.
+   */
+  public transient volatile boolean keepBoardWhenFinished;
+
+  private transient volatile boolean boardReleased;
+
   /** Per-stage before/after metrics retained for the result manifest. */
   public transient RoutingResultManifest.PhaseMetrics resultPhaseMetrics =
       new RoutingResultManifest.PhaseMetrics();
@@ -156,6 +175,46 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   /** Sets whether the user cancelled this job. */
   public void setCancelledByUser(boolean cancelledByUser) {
     isCancelledByUser = cancelledByUser;
+  }
+
+  /**
+   * Returns whether a stop of this job is a timeout: {@link #timeoutAt} has passed and the user did
+   * not cancel the job. The scheduler asks the job thread to stop when {@code timeoutAt} passes and
+   * sets {@link RoutingJobState#TIMED_OUT} only when the pipeline returns, so code that sees the
+   * stop request uses this to tell a timeout from a cancel.
+   */
+  public boolean isTimedOut() {
+    return !isCancelledByUser && timeoutAt != null && !Instant.now().isBefore(timeoutAt);
+  }
+
+  /**
+   * Returns whether the routing thread of this job is not running (it ended, never started, or the
+   * job has none), so that nothing changes {@link #board} any more.
+   */
+  public boolean isRoutingThreadEnded() {
+    Thread routingThread = thread;
+    return routingThread == null || !routingThread.isAlive();
+  }
+
+  /**
+   * Drops the board of a finished job so that its memory can be reclaimed. The output, the input,
+   * the settings and {@link #finalStatistics} stay on the job. Only the scheduler calls this, for
+   * finished jobs whose routing thread has ended.
+   */
+  public void releaseBoard() {
+    if (this.board != null) {
+      this.board = null;
+      this.boardReleased = true;
+    }
+  }
+
+  /**
+   * Returns whether the scheduler released the board of this finished job and no board has been set
+   * since. Its routed board can no longer be inspected; the board loaded from the input would be
+   * the unrouted design.
+   */
+  public boolean isBoardReleased() {
+    return boardReleased && board == null;
   }
 
   @SerializedName("current_pass")
@@ -477,9 +536,13 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
     return new BoardFileDetails(this.output.getFile()).toString();
   }
 
+  /**
+   * Orders jobs for scheduling: a higher priority comes first. The scheduler sorts its queue with
+   * this order (a stable sort), so jobs of the same priority keep their queue order.
+   */
   @Override
   public int compareTo(RoutingJob o) {
-    return Integer.compare(effectivePriority().ordinal(), o.effectivePriority().ordinal());
+    return Integer.compare(o.effectivePriority().ordinal(), effectivePriority().ordinal());
   }
 
   /**
@@ -596,9 +659,8 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   /** Notifies listeners that a log entry was added. */
   public void fireLogEntryAddedEvent(LogEntry logEntry) {
     RoutingJobLogEntryAddedEvent event = new RoutingJobLogEntryAddedEvent(this, this, logEntry);
-    for (RoutingJobLogEntryAddedEventListener listener : logEntryAddedEventListeners) {
-      listener.onLogEntryAdded(event);
-    }
+    FRLogger.notifyListeners(
+        logEntryAddedEventListeners, listener -> listener.onLogEntryAdded(event));
   }
 
   /** Adds an informational log entry for this job. */
@@ -634,11 +696,12 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
           ? hostCad + "/" + hostVersion
           : hostCad;
     }
-    if (board != null
-        && board.communication != null
-        && board.communication.specctraParserInfo != null) {
-      String cad = board.communication.specctraParserInfo.hostCad;
-      String ver = board.communication.specctraParserInfo.hostVersion;
+    RoutingBoard currentBoard = board;
+    if (currentBoard != null
+        && currentBoard.communication != null
+        && currentBoard.communication.specctraParserInfo != null) {
+      String cad = currentBoard.communication.specctraParserInfo.hostCad;
+      String ver = currentBoard.communication.specctraParserInfo.hostVersion;
       if (cad != null && !cad.isBlank()) {
         return (ver != null && !ver.isBlank()) ? cad + "/" + ver : cad;
       }
@@ -675,25 +738,25 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
       json.addProperty("duration_seconds", duration.toMillis() / 1000.0);
     }
 
-    if (board != null) {
-      var stats = board.getStatistics();
-      if (stats != null) {
-        com.google.gson.JsonObject statsObj = new com.google.gson.JsonObject();
-        if (stats.nets != null) {
-          statsObj.addProperty("total_nets", stats.nets.totalCount);
-        }
-        if (stats.connections != null) {
-          statsObj.addProperty("unrouted_connections", stats.connections.incompleteCount);
-        }
-        if (stats.clearanceViolations != null) {
-          statsObj.addProperty("clearance_violations", stats.clearanceViolations.totalCount);
-        }
-        if (routerSettings != null && routerSettings.scoring != null) {
-          float score = stats.getRouterScore(routerSettings);
-          statsObj.addProperty("normalized_score", score);
-        }
-        json.add("statistics", statsObj);
+    // Read the board once: the scheduler may release it while this runs.
+    RoutingBoard currentBoard = board;
+    BoardStatistics stats = currentBoard != null ? currentBoard.getStatistics() : finalStatistics;
+    if (stats != null) {
+      com.google.gson.JsonObject statsObj = new com.google.gson.JsonObject();
+      if (stats.nets != null) {
+        statsObj.addProperty("total_nets", stats.nets.totalCount);
       }
+      if (stats.connections != null) {
+        statsObj.addProperty("unrouted_connections", stats.connections.incompleteCount);
+      }
+      if (stats.clearanceViolations != null) {
+        statsObj.addProperty("clearance_violations", stats.clearanceViolations.totalCount);
+      }
+      if (routerSettings != null && routerSettings.scoring != null) {
+        float score = stats.getRouterScore(routerSettings);
+        statsObj.addProperty("normalized_score", score);
+      }
+      json.add("statistics", statsObj);
     }
 
     if (resourceUsage != null) {

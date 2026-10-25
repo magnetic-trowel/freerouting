@@ -76,6 +76,11 @@ public class Plane extends ScopeKeyword {
       FRLogger.error("Plane.read_scope: IO error scanning file", e);
       return false;
     }
+    if (conductionArea == null) {
+      // Shape.readAreaScope already reported why the plane could not be read; skip it like an
+      // unreadable keepout.
+      return true;
+    }
     ReadScopeParameter.PlaneInfo planeInfo =
         new ReadScopeParameter.PlaneInfo(conductionArea, netName);
     scopeParameter.planeList.add(planeInfo);

@@ -25,10 +25,8 @@ final class PolylineTraceNormalization {
       PolylineTrace trace, IntOctagon clipShape, int normalizationDepth) {
     if (normalizationDepth > MAX_NORMALIZATION_DEPTH) {
       // Return false (no further change at this depth level) rather than throwing an exception.
-      // The outer normalizeTraces() loop treats a false return as "nothing changed" for this
-      // trace, which is safe: the trace geometry may be slightly sub-optimal (extra corners), but
-      // it remains structurally valid, its endpoint contacts are preserved and removeTails() will
-      // not touch it.
+      // The trace is the result of the combine() that led here and is left unsplit: a split at
+      // this depth means a split and a combine keep undoing each other, which is a bug.
       FRLogger.debug(
           "PolylineTrace.normalize: max normalization depth ("
               + MAX_NORMALIZATION_DEPTH
@@ -39,12 +37,6 @@ final class PolylineTraceNormalization {
               + " — stopping recursion, trace kept as-is.");
       return false;
     }
-
-    boolean debugNet49 =
-        trace.netNumbers != null
-            && trace.netNumbers.length > 0
-            && trace.netNumbers[0] == 49
-            && normalizationDepth == 0;
 
     boolean observersActivated = false;
     BasicBoard routingBoard = trace.board;
@@ -57,48 +49,9 @@ final class PolylineTraceNormalization {
     }
     Collection<PolylineTrace> splitPieces = trace.split(clipShape);
     boolean result = splitPieces.size() != 1;
-    if (debugNet49) {
-      FRLogger.trace(
-          "compare_trace_normalize_net49 depth="
-              + normalizationDepth
-              + ", thisId="
-              + trace.getId()
-              + ", thisOnBoard="
-              + trace.isOnTheBoard()
-              + ", thisFirst="
-              + trace.firstCorner()
-              + ", thisLast="
-              + trace.lastCorner()
-              + ", splitPieces="
-              + splitPieces.size());
-      for (PolylineTrace piece : splitPieces) {
-        FRLogger.trace(
-            "compare_trace_normalize_net49  piece id="
-                + piece.getId()
-                + ", onBoard="
-                + piece.isOnTheBoard()
-                + ", first="
-                + piece.firstCorner()
-                + ", last="
-                + piece.lastCorner());
-      }
-    }
     for (PolylineTrace currentSplitTrace : splitPieces) {
       if (currentSplitTrace.isOnTheBoard()) {
         boolean traceCombined = currentSplitTrace.combine();
-        if (debugNet49) {
-          FRLogger.trace(
-              "compare_trace_normalize_net49  after_combine id="
-                  + currentSplitTrace.getId()
-                  + ", onBoard="
-                  + currentSplitTrace.isOnTheBoard()
-                  + ", combined="
-                  + traceCombined
-                  + ", first="
-                  + (currentSplitTrace.isOnTheBoard() ? currentSplitTrace.firstCorner() : "N/A")
-                  + ", last="
-                  + (currentSplitTrace.isOnTheBoard() ? currentSplitTrace.lastCorner() : "N/A"));
-        }
         if (currentSplitTrace.cornerCount() == 2
             && currentSplitTrace.firstCorner().equals(currentSplitTrace.lastCorner())) {
           // remove trace with only 1 corner — only if deletion is allowed.

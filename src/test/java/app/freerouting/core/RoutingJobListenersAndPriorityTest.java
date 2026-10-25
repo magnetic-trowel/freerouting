@@ -48,11 +48,36 @@ class RoutingJobListenersAndPriorityTest {
         }) {
       RoutingJob fromClient = GsonProvider.GSON.fromJson(body, RoutingJob.class);
       RoutingJob high = new RoutingJob();
-      high.priority = RoutingJobPriority.values()[0];
+      high.priority = RoutingJobPriority.HIGHEST;
       List<RoutingJob> jobs = new ArrayList<>(List.of(fromClient, new RoutingJob(), high));
 
       assertDoesNotThrow(() -> Collections.sort(jobs));
       assertEquals(0, fromClient.compareTo(new RoutingJob()), "treated as NORMAL priority");
     }
+  }
+
+  /**
+   * The scheduler starts queued jobs in the order of this sort. It ordered by ascending enum
+   * ordinal, so a LOWEST job started before a HIGHEST one.
+   */
+  @Test
+  void higherPriorityJobsSortFirstAndEqualPrioritiesKeepTheirQueueOrder() {
+    RoutingJob lowest = jobWithPriority(RoutingJobPriority.LOWEST);
+    RoutingJob firstNormal = jobWithPriority(RoutingJobPriority.NORMAL);
+    RoutingJob highest = jobWithPriority(RoutingJobPriority.HIGHEST);
+    RoutingJob secondNormal = jobWithPriority(RoutingJobPriority.NORMAL);
+    RoutingJob high = jobWithPriority(RoutingJobPriority.HIGH);
+    List<RoutingJob> jobs =
+        new ArrayList<>(List.of(lowest, firstNormal, highest, secondNormal, high));
+
+    Collections.sort(jobs);
+
+    assertEquals(List.of(highest, high, firstNormal, secondNormal, lowest), jobs);
+  }
+
+  private static RoutingJob jobWithPriority(RoutingJobPriority priority) {
+    RoutingJob job = new RoutingJob();
+    job.priority = priority;
+    return job;
   }
 }

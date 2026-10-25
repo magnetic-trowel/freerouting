@@ -35,6 +35,7 @@ class McpRateLimitFilterTest {
   @BeforeEach
   void setUp() throws Exception {
     McpApiKeyValidationService.resetForTesting();
+    RequestThrottle.resetForTesting();
     Freerouting.globalSettings = new GlobalSettings();
 
     McpServerSettings mcpSettings = new McpServerSettings();

@@ -60,26 +60,10 @@ public class CompositeBoardInput {
     return this;
   }
 
-  /** Sets the primary design file from a local file. */
-  public CompositeBoardInput setDesign(File file) throws Exception {
-    if (file != null && file.exists()) {
-      setDesign(Files.readAllBytes(file.toPath()), file.getName());
-    }
-    return this;
-  }
-
   /** Sets the rules file content and filename. */
   public CompositeBoardInput setRules(byte[] data, String filename) {
     this.rulesData = data;
     this.rulesFilename = filename;
-    return this;
-  }
-
-  /** Sets the rules file from a local file. */
-  public CompositeBoardInput setRules(File file) throws Exception {
-    if (file != null && file.exists()) {
-      setRules(Files.readAllBytes(file.toPath()), file.getName());
-    }
     return this;
   }
 
@@ -92,14 +76,6 @@ public class CompositeBoardInput {
       if (this.sessionFormat == FileFormat.UNKNOWN && filename != null) {
         this.sessionFormat = RoutingJob.getFileFormat(Path.of(filename));
       }
-    }
-    return this;
-  }
-
-  /** Sets the session file from a local file. */
-  public CompositeBoardInput setSession(File file) throws Exception {
-    if (file != null && file.exists()) {
-      setSession(Files.readAllBytes(file.toPath()), file.getName());
     }
     return this;
   }
@@ -137,10 +113,55 @@ public class CompositeBoardInput {
   }
 
   /**
+   * The rules file a DSN input brings along: {@code <name>.rules} in the directory of the DSN file,
+   * or null if there is none. Routing and the design rules check both read it when no rules file is
+   * given explicitly, so both judge the board by the same rules.
+   */
+  public static File adjacentRulesFile(BoardFileDetails input) {
+    if (input == null
+        || input.format != FileFormat.DSN
+        || input.getDirectoryPath() == null
+        || input.getDirectoryPath().isBlank()) {
+      return null;
+    }
+    String baseName = input.getFilename();
+    if (baseName.lastIndexOf('.') > 0) {
+      baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+    }
+    File rulesFile = new File(input.getDirectoryPath(), baseName + ".rules");
+    return rulesFile.exists() ? rulesFile : null;
+  }
+
+  /**
+   * Applies a RULES file onto {@code board} and returns the router settings of its {@code
+   * (autoroute_settings ...)} scope as the RULES-file settings source. The settings are read with
+   * the board's layer structure and merged at RULES-file priority, below the environment, the
+   * command line, the GUI and the API caller, instead of being applied on top of the merged result.
+   *
+   * @param rulesData the RULES file content
+   * @param rulesFilename the RULES file name (for logging)
+   * @param designName the design name the RULES file is expected to name
+   * @param board the board that receives the design rules, or {@code null}
+   * @return the RULES-file settings source
+   */
+  public static RulesFileSettings readRulesOntoBoard(
+      byte[] rulesData, String rulesFilename, String designName, RoutingBoard board) {
+    if (board == null) {
+      return new RulesFileSettings(new ByteArrayInputStream(rulesData), rulesFilename);
+    }
+    RouterSettings rulesSettings = new RouterSettings();
+    try {
+      RulesReader.read(new ByteArrayInputStream(rulesData), designName, board, rulesSettings);
+    } catch (Exception e) {
+      FRLogger.error("Failed to apply rules from rules file onto board", e);
+    }
+    return new RulesFileSettings(rulesSettings, rulesFilename);
+  }
+
+  /**
    * Assembles the composite inputs into the provided routing job: 1. Loads design data into
-   * job.board. 2. Merges settings layers (Default -> DSN -> Rules -> API overrides). 3. Applies
-   * design rules onto board and router settings. 4. Imports initial session (SES or KiCad JSON) if
-   * present.
+   * job.board and applies the design rules onto it. 2. Merges settings layers (Default -> DSN ->
+   * Rules -> API overrides). 3. Imports initial session (SES or KiCad JSON) if present.
    *
    * @param job Target routing job
    * @throws Exception If design loading or parsing fails
@@ -208,23 +229,14 @@ public class CompositeBoardInput {
     if (effectiveRulesData == null && job.rules != null && job.rules.getData() != null) {
       effectiveRulesData = job.rules.getData().readAllBytes();
       effectiveRulesFilename = job.rules.getFilename();
-    } else if (effectiveRulesData == null
-        && isDsn
-        && job.input.getDirectoryPath() != null
-        && !job.input.getDirectoryPath().isBlank()) {
-      String baseName = job.input.getFilename();
-      if (baseName.lastIndexOf('.') > 0) {
-        baseName = baseName.substring(0, baseName.lastIndexOf('.'));
-      }
-      File autoRules = new File(job.input.getDirectoryPath(), baseName + ".rules");
-      if (autoRules.exists()) {
-        try {
-          effectiveRulesData = Files.readAllBytes(autoRules.toPath());
-          effectiveRulesFilename = autoRules.getName();
-        } catch (Exception e) {
-          FRLogger.warn(
-              "Failed to read adjacent rules file: " + autoRules.getPath() + ": " + e.getMessage());
-        }
+    } else if (effectiveRulesData == null && adjacentRulesFile(job.input) != null) {
+      File autoRules = adjacentRulesFile(job.input);
+      try {
+        effectiveRulesData = Files.readAllBytes(autoRules.toPath());
+        effectiveRulesFilename = autoRules.getName();
+      } catch (Exception e) {
+        FRLogger.warn(
+            "Failed to read adjacent rules file: " + autoRules.getPath() + ": " + e.getMessage());
       }
     }
 
@@ -234,8 +246,11 @@ public class CompositeBoardInput {
         job.rules.setFilename(effectiveRulesFilename);
       }
       settingsMerger.addOrReplaceSources(
-          new RulesFileSettings(
-              new ByteArrayInputStream(effectiveRulesData), effectiveRulesFilename));
+          readRulesOntoBoard(
+              effectiveRulesData,
+              effectiveRulesFilename,
+              job.name != null ? job.name : "board",
+              job.board));
     }
 
     // API settings (from caller / job settings overrides)
@@ -244,20 +259,6 @@ public class CompositeBoardInput {
     }
 
     job.routerSettings = settingsMerger.merge();
-
-    // Apply rules onto the board and routerSettings
-    if (effectiveRulesData != null && job.board != null) {
-      try {
-        String designNameStr = job.name != null ? job.name : "board";
-        RulesReader.read(
-            new ByteArrayInputStream(effectiveRulesData),
-            designNameStr,
-            job.board,
-            job.routerSettings);
-      } catch (Exception e) {
-        FRLogger.error("Failed to apply rules from rules file onto board", e);
-      }
-    }
 
     job.routerSettings.applyBoardSpecificOptimizations(job.board);
     job.routerSettings.applyNetClassExclusions(job.board);
@@ -304,7 +305,10 @@ public class CompositeBoardInput {
           }
         } else {
           FRLogger.info("Importing Specctra SES session data onto board");
-          SesReader.read(new ByteArrayInputStream(effectiveSessionData), job.board);
+          SesReader.read(
+              new ByteArrayInputStream(effectiveSessionData),
+              job.board,
+              job.routerSettings.getReworkImportedRouting());
         }
       } catch (Exception e) {
         FRLogger.error("Failed to import session data onto board", e);

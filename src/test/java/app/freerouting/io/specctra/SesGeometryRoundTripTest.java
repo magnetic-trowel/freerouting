@@ -282,6 +282,119 @@ class SesGeometryRoundTripTest {
     assertEquals(3.0, imported.getFirst().lastCorner().toFloat().y, 1e-9);
   }
 
+  /**
+   * A trace that ends where a diagonal crosses a steep line (a T-junction split) has a corner with
+   * a composite denominator. The short basis vectors of its line lattice are multiples of
+   * directions without an integer point, so the reader found only the diagonal and dropped the wire
+   * (Issue209-split05: 38 of 354 wires).
+   */
+  @ParameterizedTest
+  @CsvSource({"3522,false", "3522,true", "30030,false", "30030,true"})
+  void endpointWithCompositeDenominatorOnDiagonalRoundTrips(int denominator, boolean reversed)
+      throws Exception {
+    BasicBoard source = board(Unit.UM, 10, 10);
+    // the steep line through (0, 5) with direction (1, denominator + 1) meets y = x at
+    // (-5 / denominator, -5 / denominator)
+    Line steep = new Line(0, 5, 1, denominator + 6);
+    Line diagonal = new Line(0, 0, 1, 1);
+    Line vertical = new Line(100, 0, 100, 1);
+    Line[] lines =
+        reversed ? new Line[] {vertical, diagonal, steep} : new Line[] {steep, diagonal, vertical};
+    final PolylineTrace original = insert(source, new Polyline(lines));
+    BasicBoard target = board(Unit.UM, 10, 10);
+    SesImportSummary summary = SesReader.read(new ByteArrayInputStream(write(source)), target);
+    assertEquals(0, summary.errorsEncountered());
+    assertEquals(1, summary.wiresImported());
+    PolylineTrace imported = traces(target).getFirst();
+    assertEquals(List.of(original.polyline().corners()), List.of(imported.polyline().corners()));
+  }
+
+  /**
+   * Two any-angle lines cross at a corner whose denominator (45992834) is far beyond what a
+   * 17-digit coordinate identifies. Inside a wire the corner is the intersection of its two segment
+   * lines; where the router split the trace there, each piece ends on the other piece's line. Both
+   * must come back exactly (Issue157-TeamAdapt and Issue297-myboard dropped such wires).
+   */
+  @ParameterizedTest
+  @CsvSource({"false", "true"})
+  void cornerOfTwoLongLinesRoundTripsInsideWireAndWhereSplit(boolean split) throws Exception {
+    BasicBoard source = board(Unit.UM, 10, 10);
+    Line first = new Line(1000000, -1000000, 1000000 + 10007, -1000000 + 2003);
+    Line second = new Line(1050000, -980000, 1050000 + 7919, -980000 - 3011);
+    Line start = new Line(1000000, -1000000, 1000000 - 2003, -1000000 + 10007);
+    Line end =
+        new Line(
+            1050000 + 3 * 7919,
+            -980000 - 3 * 3011,
+            1050000 + 3 * 7919 + 3011,
+            -980000 - 3 * 3011 + 7919);
+    List<Polyline> wires =
+        split
+            ? List.of(
+                new Polyline(new Line[] {start, first, second}),
+                new Polyline(new Line[] {first, second, end}))
+            : List.of(new Polyline(new Line[] {start, first, second, end}));
+    for (Polyline wire : wires) {
+      insert(source, wire);
+    }
+    BasicBoard target = board(Unit.UM, 10, 10);
+    SesImportSummary summary = SesReader.read(new ByteArrayInputStream(write(source)), target);
+    assertEquals(0, summary.errorsEncountered());
+    assertEquals(wires.size(), summary.wiresImported());
+    assertEquals(cornerLists(traces(source)), cornerLists(traces(target)));
+  }
+
+  /** A path with one corner is point copper, as v2.5.0 wrote it. */
+  @Test
+  void pathWithOneCornerIsPointCopper() throws Exception {
+    BasicBoard target = board(Unit.UM, 10, 10);
+    String session =
+        "(session point (routes (resolution um 10) (network_out (net TEST (wire (path F.Cu 20"
+            + " 100 100))))))";
+    SesImportSummary summary =
+        SesReader.read(new ByteArrayInputStream(session.getBytes(StandardCharsets.UTF_8)), target);
+    assertEquals(0, summary.errorsEncountered());
+    assertEquals(1, summary.wiresImported());
+    PolylineTrace imported = traces(target).getFirst();
+    assertEquals(imported.firstCorner(), imported.lastCorner());
+    assertEquals(100, imported.firstCorner().toFloat().x);
+    assertEquals(10, imported.getHalfWidth());
+  }
+
+  /** Only a reworkable import keeps the state each wire was written with; else all are fixed. */
+  @Test
+  void onlyAReworkableImportKeepsTheFixedStateTheSessionWrote() throws Exception {
+    BasicBoard source = board(Unit.UM, 1000, 1000);
+    insert(source, new Polyline(Point.getInstance(0, 0), Point.getInstance(100, 0)))
+        .setFixedState(FixedState.UNFIXED);
+    insert(source, new Polyline(Point.getInstance(0, 50), Point.getInstance(100, 50)));
+    byte[] session = write(source);
+
+    BasicBoard fixedTarget = board(Unit.UM, 1000, 1000);
+    SesReader.read(new ByteArrayInputStream(session), fixedTarget);
+    assertEquals(
+        List.of(FixedState.USER_FIXED, FixedState.USER_FIXED), fixedStatesByY(fixedTarget));
+
+    BasicBoard reworkableTarget = board(Unit.UM, 1000, 1000);
+    SesReader.read(new ByteArrayInputStream(session), reworkableTarget, true);
+    assertEquals(
+        List.of(FixedState.UNFIXED, FixedState.USER_FIXED), fixedStatesByY(reworkableTarget));
+  }
+
+  private static List<FixedState> fixedStatesByY(BasicBoard board) {
+    return traces(board).stream()
+        .sorted(java.util.Comparator.comparingDouble(trace -> trace.firstCorner().toFloat().y))
+        .map(PolylineTrace::getFixedState)
+        .toList();
+  }
+
+  private static List<List<Point>> cornerLists(List<PolylineTrace> traces) {
+    return traces.stream()
+        .sorted(java.util.Comparator.comparingDouble(trace -> trace.firstCorner().toFloat().x))
+        .map(trace -> List.of(trace.polyline().corners()))
+        .toList();
+  }
+
   private static byte[] write(BasicBoard board) throws Exception {
     try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
       SesWriter.write(board, output, "geometry.dsn");

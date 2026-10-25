@@ -10,12 +10,18 @@ import java.util.List;
 import java.util.concurrent.locks.Lock;
 
 /**
- * Binary search tree for shapes in the plane. The shapes are stored in the leaves of the tree. The
- * algorithm for storing a new shape is as following. Starting from the root go to the child, so
- * that the increase of the bounding shape of that child is minimal after adding the new shape,
- * until you reach a leaf. The use of ShapeDirections to calculate the bounding shape is for
- * historical reasons (coming from a Kd-Tree). Instead, any algorithm to calculate a bounding shape
- * of two input shapes can be used. The algorithm would of course also work for higher dimensions.
+ * Binary search tree for shapes in the plane. The shapes are stored in the leaves of the tree. A
+ * new shape is paired with a leaf found by going down from the root to the child whose bounding
+ * shape grows least. After every insertion and removal the nodes above the change are rebalanced by
+ * rotations, as in an AVL tree, so the depth is logarithmic in the number of shapes for any input,
+ * also for many equal or nested shapes.
+ *
+ * <p>The structure changes never reorder leaves: an inserted leaf directly follows the leaf it is
+ * paired with, a removal leaves the others in place, and the rotations keep the leaf order.
+ *
+ * <p>The use of ShapeDirections to calculate the bounding shape is for historical reasons (coming
+ * from a Kd-Tree). Instead, any algorithm to calculate a bounding shape of two input shapes can be
+ * used.
  */
 public class MinAreaTree extends ShapeTree {
 
@@ -136,75 +142,54 @@ public class MinAreaTree extends ShapeTree {
   /** Inserts a leaf while the write lock is already held. */
   private void insertUnlocked(Leaf leaf) {
     ++this.leafCount;
-
-    // Tree is empty - just insert the new leaf
     if (root == null) {
       root = leaf;
       return;
     }
-
-    // Non-empty tree - do a recursive location for leaf replacement
-    Leaf leafToReplace = positionLocate(root, leaf);
-
-    // Construct a new node - whenever a leaf is added so is a new node
-    RegularTileShape newBounds = leaf.boundingShape.union(leafToReplace.boundingShape);
-    InnerNode currentParent = leafToReplace.parent;
-    InnerNode newNode = new InnerNode(newBounds, currentParent);
-    newNode.layerMask = leaf.layerMask | leafToReplace.layerMask;
-
-    if (leafToReplace.parent != null) {
-      // Replace the pointer from the parent to the leaf with our new node
-      if (leafToReplace == currentParent.firstChild) {
-        currentParent.firstChild = newNode;
-      } else {
-        currentParent.secondChild = newNode;
-      }
-    }
-    // Update the parent pointers of the old leaf and new leaf to point to new node
-    leafToReplace.parent = newNode;
-    leaf.parent = newNode;
-
-    // Insert the children in any order.
-    newNode.firstChild = leafToReplace;
-    newNode.secondChild = leaf;
-
-    if (root == leafToReplace) {
+    // The new leaf and its sibling get a new parent, which takes the sibling's place. The new leaf
+    // is the second child, so it follows the sibling's leaves and the order of the others stays.
+    Leaf sibling = findSibling(leaf.boundingShape);
+    InnerNode oldParent = sibling.parent;
+    InnerNode newNode = new InnerNode(null, oldParent);
+    if (oldParent == null) {
       root = newNode;
+    } else if (oldParent.firstChild == sibling) {
+      oldParent.firstChild = newNode;
+    } else {
+      oldParent.secondChild = newNode;
     }
+    newNode.firstChild = sibling;
+    newNode.secondChild = leaf;
+    sibling.parent = newNode;
+    leaf.parent = newNode;
+    refitUpwards(newNode);
+  }
+
+  /**
+   * The leaf the new leaf with shape {@code added} is paired with: going down from the root, take
+   * the child whose bounding shape grows least, the first child on a tie.
+   */
+  private Leaf findSibling(RegularTileShape added) {
+    TreeNode node = root;
+    while (node instanceof InnerNode inner) {
+      double firstIncrease = areaIncrease(added, inner.firstChild.boundingShape);
+      double secondIncrease = areaIncrease(added, inner.secondChild.boundingShape);
+      node = firstIncrease <= secondIncrease ? inner.firstChild : inner.secondChild;
+    }
+    return (Leaf) node;
   }
 
   /** Area growth of childShape when added is merged into it; octagons skip the union object. */
   private static double areaIncrease(RegularTileShape added, RegularTileShape childShape) {
-    if (added instanceof IntOctagon addedOctagon && childShape instanceof IntOctagon childOctagon) {
-      return IntOctagon.unionArea(addedOctagon, childOctagon) - childOctagon.area();
-    }
-    return added.union(childShape).area() - childShape.area();
+    return unionArea(added, childShape) - childShape.area();
   }
 
-  private Leaf positionLocate(TreeNode currentNode, Leaf leafToInsert) {
-    TreeNode node = currentNode;
-
-    while (!(node instanceof Leaf)) {
-      InnerNode currentInnerNode = (InnerNode) node;
-      currentInnerNode.boundingShape =
-          leafToInsert.boundingShape.union(currentInnerNode.boundingShape);
-      currentInnerNode.layerMask |= leafToInsert.layerMask;
-
-      // Choose the child, so that the area increase of that child after taking the union
-      // with the shape of leafToInsert is minimal.
-
-      double firstAreaIncrease =
-          areaIncrease(leafToInsert.boundingShape, currentInnerNode.firstChild.boundingShape);
-      double secondAreaIncrease =
-          areaIncrease(leafToInsert.boundingShape, currentInnerNode.secondChild.boundingShape);
-
-      if (firstAreaIncrease <= secondAreaIncrease) {
-        node = currentInnerNode.firstChild;
-      } else {
-        node = currentInnerNode.secondChild;
-      }
+  /** Area of the union of two shapes; octagons skip the union object. */
+  private static double unionArea(RegularTileShape first, RegularTileShape second) {
+    if (first instanceof IntOctagon firstOctagon && second instanceof IntOctagon secondOctagon) {
+      return IntOctagon.unionArea(firstOctagon, secondOctagon);
     }
-    return (Leaf) node;
+    return first.union(second).area();
   }
 
   /** Removes an entry from this tree. */
@@ -267,20 +252,79 @@ public class MinAreaTree extends ShapeTree {
     parent.firstChild = null;
     parent.secondChild = null;
     parent.boundingShape = null;
+    refitUpwards(grandParent);
+  }
 
-    // recalculate the bounding shapes of the ancestors
-    // as long as it gets smaller after removing leaf
-    InnerNode nodeToRecalculate = grandParent;
-    while (nodeToRecalculate != null) {
-      RegularTileShape newBounds =
-          nodeToRecalculate.secondChild.boundingShape.union(
-              nodeToRecalculate.firstChild.boundingShape);
-      if (newBounds.contains(nodeToRecalculate.boundingShape)) {
-        // the new bounds are not smaller, no further recalculate necessary
-        break;
+  /**
+   * Recomputes bounds, layer masks and heights from {@code node} up to the root, and keeps every
+   * node height-balanced (children differ in height by at most one, as in an AVL tree), so the
+   * depth stays logarithmic for any input, also for many equal or nested shapes.
+   */
+  private void refitUpwards(InnerNode node) {
+    for (InnerNode current = node; current != null; current = current.parent) {
+      int balance = height(current.firstChild) - height(current.secondChild);
+      if (balance > 1) {
+        InnerNode first = (InnerNode) current.firstChild;
+        if (height(first.secondChild) > height(first.firstChild)) {
+          rotateLeft(first);
+        }
+        rotateRight(current);
+      } else if (balance < -1) {
+        InnerNode second = (InnerNode) current.secondChild;
+        if (height(second.firstChild) > height(second.secondChild)) {
+          rotateRight(second);
+        }
+        rotateLeft(current);
+      } else {
+        refit(current);
       }
-      nodeToRecalculate.boundingShape = newBounds;
-      nodeToRecalculate = nodeToRecalculate.parent;
     }
+  }
+
+  /**
+   * Turns {@code node = (a, (b, c))} into {@code node = ((a, b), c)}. Like every change of the tree
+   * structure, a rotation keeps the order of the leaves, which is the order in which traversals
+   * meet them, so results that depend on that order only change where leaves come and go.
+   */
+  private static void rotateLeft(InnerNode node) {
+    InnerNode pivot = (InnerNode) node.secondChild;
+    TreeNode a = node.firstChild;
+    final TreeNode c = pivot.secondChild;
+    pivot.secondChild = pivot.firstChild;
+    pivot.firstChild = a;
+    a.parent = pivot;
+    node.firstChild = pivot;
+    node.secondChild = c;
+    c.parent = node;
+    refit(pivot);
+    refit(node);
+  }
+
+  /** Turns {@code node = ((a, b), c)} into {@code node = (a, (b, c))}, keeping the leaf order. */
+  private static void rotateRight(InnerNode node) {
+    InnerNode pivot = (InnerNode) node.firstChild;
+    final TreeNode a = pivot.firstChild;
+    TreeNode c = node.secondChild;
+    pivot.firstChild = pivot.secondChild;
+    pivot.secondChild = c;
+    c.parent = pivot;
+    node.secondChild = pivot;
+    node.firstChild = a;
+    a.parent = node;
+    refit(pivot);
+    refit(node);
+  }
+
+  /** Recomputes the bounds, layer mask and height of node from its children. */
+  private static void refit(InnerNode node) {
+    TreeNode first = node.firstChild;
+    TreeNode second = node.secondChild;
+    node.boundingShape = first.boundingShape.union(second.boundingShape);
+    node.layerMask = first.layerMask | second.layerMask;
+    node.height = 1 + Math.max(height(first), height(second));
+  }
+
+  private static int height(TreeNode node) {
+    return node instanceof InnerNode inner ? inner.height : 0;
   }
 }

@@ -89,7 +89,45 @@ public final class RoutingPipeline {
     }
     runRoutingStage();
     runOptimizationStage();
+    connectPlaneFillCutOffs();
+    reportPlaneFillCutOffs();
     this.job.stage = RoutingStage.IDLE;
+  }
+
+  /**
+   * Routes the copper that foreign tracks cut off from the fill of its pour to the rest of its net,
+   * after the router and the optimizer, whose connectivity follows pour polygons and so sees none
+   * of it ({@link BatchAutorouter#connectPourCutOffs}).
+   */
+  private void connectPlaneFillCutOffs() {
+    if (this.job.board == null
+        || this.job.thread.isStopRequested()
+        || !this.job.routerSettings.getRunRouter()) {
+      return;
+    }
+    this.autorouter.board = this.job.board;
+    int connected = this.autorouter.connectPourCutOffs();
+    if (connected > 0) {
+      this.job.logInfo(
+          "Connected "
+              + connected
+              + " group(s) of copper that foreign tracks had cut off from the fill of their pour.");
+    }
+  }
+
+  /**
+   * Warns about pads and vias that the final board connects only through a pour polygon, while
+   * foreign tracks cut them off from the pour's fill. The board's connectivity cannot see them (it
+   * follows pour polygons, not fills), so this is the only report of them besides the DRC.
+   */
+  private void reportPlaneFillCutOffs() {
+    if (this.job.board == null || this.job.thread.isStopRequested()) {
+      return;
+    }
+    String report = AutorouteUnroutedReport.planeFillCutOffs(this.job.board);
+    if (report != null) {
+      this.job.logWarning(report);
+    }
   }
 
   private void runRoutingStage() {
@@ -130,6 +168,7 @@ public final class RoutingPipeline {
       if (RoutingSupervisor.explores(this.job.routerSettings)) {
         this.autorouter = fallback.explore(this.job, this.autorouter);
       }
+      this.job.resultPhaseMetrics.fallback = fallback.detail();
     } else if (this.job.routerSettings.isFanoutEnabled()
         && !this.job.thread.isStopAutoRouterRequested()) {
       Integer originalMaxPasses = this.job.routerSettings.autorouter.maxPasses;
@@ -141,6 +180,9 @@ public final class RoutingPipeline {
       }
     }
 
+    // The kept router's stages, not those of the last fallback attempt.
+    this.job.resultPhaseMetrics.fanout = this.autorouter.phaseMetrics.fanout;
+    this.job.resultPhaseMetrics.autorouter = this.autorouter.phaseMetrics.autorouter;
     this.job.board.finishAutoroute();
     for (StageListener listener : this.stageListeners) {
       listener.afterRouting(this.autorouter);

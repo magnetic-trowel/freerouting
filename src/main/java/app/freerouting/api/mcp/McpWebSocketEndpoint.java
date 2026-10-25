@@ -1,5 +1,8 @@
 package app.freerouting.api.mcp;
 
+import app.freerouting.api.ApiUsageFilter;
+import app.freerouting.api.security.ApiKeyPrincipal;
+import app.freerouting.api.security.ProfileMismatchException;
 import com.google.gson.JsonObject;
 import jakarta.websocket.CloseReason;
 import jakarta.websocket.EndpointConfig;
@@ -12,6 +15,7 @@ import jakarta.websocket.server.ServerEndpoint;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 /** Lightweight WebSocket endpoint that mirrors MCP activity as push events. */
 @ServerEndpoint(value = "/v1/mcp/ws", configurator = McpWebSocketConfigurator.class)
@@ -19,7 +23,6 @@ public class McpWebSocketEndpoint {
 
   private static final String ENVIRONMENT_HOST_HEADER = "Freerouting-Environment-Host";
   private static final String PROFILE_ID_HEADER = "Freerouting-Profile-ID";
-  private static final String PROFILE_EMAIL_HEADER = "Freerouting-Profile-Email";
   private static final String AUTHORIZATION_HEADER = "authorization";
   private static final String BEARER_PREFIX = "bearer ";
 
@@ -28,12 +31,21 @@ public class McpWebSocketEndpoint {
   public void onOpen(Session session, EndpointConfig config) {
     Map<String, List<String>> headers = McpWebSocketConfigurator.getHeaders(config);
 
-    if (!isAuthorized(headers)) {
+    ApiKeyPrincipal caller = authenticate(headers);
+    if (caller == null) {
       close(session, CloseReason.CloseCodes.VIOLATED_POLICY, "Unauthorized");
       return;
     }
 
-    if (!hasProfile(headers)) {
+    UUID profileId;
+    try {
+      profileId = caller.resolveProfile(firstHeader(headers, PROFILE_ID_HEADER));
+    } catch (ProfileMismatchException e) {
+      close(session, CloseReason.CloseCodes.VIOLATED_POLICY, "Profile does not match the API key");
+      return;
+    }
+    if (profileId == null) {
+      // Events are pushed to the subscribers of their caller, so the caller needs a profile UUID.
       close(session, CloseReason.CloseCodes.VIOLATED_POLICY, "Missing Freerouting profile header");
       return;
     }
@@ -45,11 +57,12 @@ public class McpWebSocketEndpoint {
       return;
     }
 
-    McpRealtimeBridge.registerWsClient(session);
+    String owner = McpRealtimeBridge.owner(profileId, apiKeyHash(headers));
+    McpRealtimeBridge.registerWsClient(session, owner);
 
     JsonObject hello = new JsonObject();
     hello.addProperty("message", "MCP websocket stream connected");
-    McpRealtimeBridge.broadcast("mcp.websocket.connected", hello);
+    McpRealtimeBridge.broadcast(owner, "mcp.websocket.connected", hello);
   }
 
   /** Called when a WebSocket connection closes. */
@@ -73,31 +86,33 @@ public class McpWebSocketEndpoint {
     session.getAsyncRemote().sendText(payload.toString());
   }
 
-  private boolean isAuthorized(Map<String, List<String>> headers) {
+  /** The caller, as the JSON-RPC endpoint sees it; {@code null} when the key is refused. */
+  private static ApiKeyPrincipal authenticate(Map<String, List<String>> headers) {
     McpApiKeyValidationService validationService = McpApiKeyValidationService.getInstance();
     if (!validationService.isAuthenticationEnabled()) {
-      return true;
+      return new ApiKeyPrincipal(null, null);
     }
-
-    String authorization = firstHeader(headers, AUTHORIZATION_HEADER);
-    if (authorization == null) {
-      return false;
-    }
-
-    String normalized = authorization.toLowerCase(Locale.ROOT);
-    if (!normalized.startsWith(BEARER_PREFIX)) {
-      return false;
-    }
-
-    String apiKey = authorization.substring(7).trim();
-    return !apiKey.isBlank() && validationService.validateApiKey(apiKey);
+    String apiKey = bearerToken(headers);
+    return apiKey != null ? validationService.authenticate(apiKey) : null;
   }
 
-  private boolean hasProfile(Map<String, List<String>> headers) {
-    String profileId = firstHeader(headers, PROFILE_ID_HEADER);
-    String profileEmail = firstHeader(headers, PROFILE_EMAIL_HEADER);
-    return (profileId != null && !profileId.isBlank())
-        || (profileEmail != null && !profileEmail.isBlank());
+  private static String bearerToken(Map<String, List<String>> headers) {
+    String authorization = firstHeader(headers, AUTHORIZATION_HEADER);
+    if (authorization == null
+        || !authorization.toLowerCase(Locale.ROOT).startsWith(BEARER_PREFIX)) {
+      return null;
+    }
+    String apiKey = authorization.substring(BEARER_PREFIX.length()).trim();
+    return apiKey.isBlank() ? null : apiKey;
+  }
+
+  /** The key hash of the owner, as the JSON-RPC endpoint sees it: only with authentication. */
+  private static String apiKeyHash(Map<String, List<String>> headers) {
+    if (!McpApiKeyValidationService.getInstance().isAuthenticationEnabled()) {
+      return null;
+    }
+    String apiKey = bearerToken(headers);
+    return apiKey != null ? ApiUsageFilter.sha256Hex(apiKey) : null;
   }
 
   private boolean isValidEnvironmentHost(String host) {

@@ -360,4 +360,75 @@ public class RoutingJobSchedulerTest {
         "Deleting saved job files and directories must succeed without open handle locks");
     assertFalse(Files.exists(dataDir), "Data directory should be deleted");
   }
+
+  /**
+   * Saved jobs write their input and output under the session folder by file name. A client-chosen
+   * name with a directory or an absolute path made the save write or delete a file elsewhere.
+   */
+  @Test
+  void savedJobFilesStayInsideTheSessionFolder() {
+    Path folder = tempDir.resolve("session");
+
+    assertEquals(
+        folder.resolve("board.dsn"), RoutingJobScheduler.resolveInFolder(folder, "board.dsn"));
+    for (String name :
+        new String[] {
+          tempDir.resolve("victim.txt").toAbsolutePath().toString(),
+          "../victim.txt",
+          "sub/board.dsn",
+          "..",
+          ".",
+          "",
+          " ",
+          null
+        }) {
+      assertNull(RoutingJobScheduler.resolveInFolder(folder, name), String.valueOf(name));
+    }
+  }
+
+  /**
+   * An Error while a job is set up (an OutOfMemoryError while its board loads) fails that job only:
+   * the scheduler thread survives and keeps starting jobs.
+   */
+  @Test
+  @app.freerouting.logger.AllowErrorLogs("The failing set-up is logged")
+  void anErrorDuringSetUpFailsTheJobAndTheSchedulerKeepsRunning() throws InterruptedException {
+    RoutingJob failing = new RoutingJob();
+    failing.input =
+        new app.freerouting.core.BoardFileDetails() {
+          private int reads;
+
+          @Override
+          public java.io.ByteArrayInputStream getData() {
+            // The first read is the scheduler's null check, the second one is the board load.
+            if (++reads > 1) {
+              throw new OutOfMemoryError("simulated");
+            }
+            return new java.io.ByteArrayInputStream(new byte[] {1});
+          }
+        };
+    failing.input.format = app.freerouting.io.FileFormat.DSN;
+    failing.state = RoutingJobState.READY_TO_START;
+    RoutingJob next = new RoutingJob();
+    next.state = RoutingJobState.READY_TO_START;
+    synchronized (scheduler.jobs) {
+      scheduler.jobs.add(failing);
+    }
+
+    long deadline = System.currentTimeMillis() + 10_000;
+    while (failing.state == RoutingJobState.READY_TO_START
+        && System.currentTimeMillis() < deadline) {
+      Thread.sleep(20);
+    }
+    assertEquals(RoutingJobState.TERMINATED, failing.state);
+
+    // A job without input is marked invalid by the next pass of the same thread.
+    synchronized (scheduler.jobs) {
+      scheduler.jobs.add(next);
+    }
+    while (next.state == RoutingJobState.READY_TO_START && System.currentTimeMillis() < deadline) {
+      Thread.sleep(20);
+    }
+    assertEquals(RoutingJobState.INVALID, next.state);
+  }
 }

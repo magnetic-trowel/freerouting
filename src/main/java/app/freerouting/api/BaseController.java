@@ -1,7 +1,15 @@
 package app.freerouting.api;
 
+import app.freerouting.api.security.ApiKeyPrincipal;
+import app.freerouting.api.security.ProfileMismatchException;
+import app.freerouting.core.RoutingJob;
+import app.freerouting.core.Session;
+import app.freerouting.management.jobs.RoutingJobScheduler;
+import app.freerouting.management.sessions.SessionManager;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import java.util.UUID;
 
 /**
@@ -24,6 +32,18 @@ import java.util.UUID;
  */
 public class BaseController {
 
+  /**
+   * Thrown by {@link #authenticateUser()} when the caller's profile headers are missing or cannot
+   * be resolved. It is a client error: {@link ApiExceptionMapper} answers it with 400 Bad Request.
+   */
+  public static final class MissingProfileException extends IllegalArgumentException {
+    private static final long serialVersionUID = 1L;
+
+    MissingProfileException(String message) {
+      super(message);
+    }
+  }
+
   @Context private HttpHeaders httpHeaders;
   @Context private jakarta.ws.rs.core.SecurityContext securityContext;
   private UUID userIdOverride;
@@ -39,6 +59,11 @@ public class BaseController {
   /** Sets the HTTP headers (for testing). */
   public void setHttpHeaders(HttpHeaders httpHeaders) {
     this.httpHeaders = httpHeaders;
+  }
+
+  /** Sets the security context (for testing). */
+  public void setSecurityContext(jakarta.ws.rs.core.SecurityContext securityContext) {
+    this.securityContext = securityContext;
   }
 
   /**
@@ -58,14 +83,19 @@ public class BaseController {
    *
    * <ol>
    *   <li>Use {@code userIdOverride} if set (e.g. in unit tests).
+   *   <li>When the API key is issued to a profile, use that profile; a {@code
+   *       Freerouting-Profile-ID} header that names another profile is refused with {@link
+   *       ProfileMismatchException} (403). The email header cannot be checked and is ignored then.
    *   <li>Parse {@code Freerouting-Profile-ID} header as a UUID.
    *   <li>If that header is absent or unparsable, fall back to {@code Freerouting-Profile-Email}
    *       (email-to-UUID look-up is not yet implemented).
    * </ol>
    *
    * @return the caller's UUID — never {@code null}.
-   * @throws IllegalArgumentException if both headers are missing/empty, or if neither yields a
-   *     resolvable UUID.
+   * @throws MissingProfileException if both headers are missing/empty, or if neither yields a
+   *     resolvable UUID, and the API key is not issued to a profile.
+   * @throws ProfileMismatchException if the API key is issued to another profile than the header
+   *     names.
    */
   protected UUID authenticateUser() {
     if (userIdOverride != null) {
@@ -77,9 +107,14 @@ public class BaseController {
     String userEmailString =
         httpHeaders != null ? httpHeaders.getHeaderString("Freerouting-Profile-Email") : null;
 
+    // A key issued to a profile acts only as that profile (see ApiKeyPrincipal).
+    if (getAuthenticatedPrincipal() instanceof ApiKeyPrincipal key && key.profileId() != null) {
+      return key.resolveProfile(userIdString);
+    }
+
     if (((userIdString == null) || (userIdString.isEmpty()))
         && ((userEmailString == null) || (userEmailString.isEmpty()))) {
-      throw new IllegalArgumentException(
+      throw new MissingProfileException(
           "Freerouting-Profile-ID or Freerouting-Profile-Email HTTP request header must be set in"
               + " order to get authenticated.");
     }
@@ -100,7 +135,7 @@ public class BaseController {
     }
 
     if (userId == null) {
-      throw new IllegalArgumentException(
+      throw new MissingProfileException(
           "The user couldn't be authenticated based on the Freerouting-Profile-ID or"
               + " Freerouting-Profile-Email HTTP request header values.");
     }
@@ -108,5 +143,44 @@ public class BaseController {
     // TODO: authenticate the user by calling the auth endpoint
 
     return userId;
+  }
+
+  /**
+   * Returns the SHA-256 hash of the caller's validated API key, or {@code null} when the request is
+   * not authenticated (authentication disabled). Sessions are bound to the key that created them,
+   * so a valid key cannot reach another key's sessions by sending their profile id.
+   */
+  protected String callerApiKeyHash() {
+    java.security.Principal principal = getAuthenticatedPrincipal();
+    return principal != null ? ApiUsageFilter.sha256Hex(principal.getName()) : null;
+  }
+
+  /**
+   * Returns the session when it exists and belongs to the caller, or {@code null}. Another caller's
+   * session is answered like an absent one.
+   */
+  protected Session findOwnedSession(String sessionId, UUID userId) {
+    return SessionManager.getInstance().getSession(sessionId, userId, callerApiKeyHash());
+  }
+
+  /**
+   * Returns the job when it exists and belongs to the caller, or {@code null}. Another caller's job
+   * is answered like an absent one ({@link #jobNotFound()}), so a response neither shows a foreign
+   * session id nor tells whether a job id exists.
+   */
+  protected RoutingJob findOwnedJob(String jobId, UUID userId) {
+    RoutingJob job = RoutingJobScheduler.getInstance().getJob(jobId);
+    if (job == null || job.sessionId == null) {
+      return null;
+    }
+    return findOwnedSession(job.sessionId.toString(), userId) != null ? job : null;
+  }
+
+  /** The response for a job that does not exist or belongs to another caller. */
+  protected static Response jobNotFound() {
+    return Response.status(Response.Status.NOT_FOUND)
+        .entity("{\"error\":\"Job not found.\"}")
+        .type(MediaType.APPLICATION_JSON)
+        .build();
   }
 }

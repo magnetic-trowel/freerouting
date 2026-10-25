@@ -5,6 +5,7 @@ import static app.freerouting.util.gson.GsonProvider.GSON;
 import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.api.ApiUsageFilter;
 import app.freerouting.api.BaseController;
+import app.freerouting.api.LocalFileAccess;
 import app.freerouting.api.dto.AutorouteRequest;
 import app.freerouting.api.dto.AutorouteResponse;
 import app.freerouting.core.RoutingJob;
@@ -34,7 +35,6 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -140,15 +140,15 @@ public class AutorouteControllerV1 extends BaseController {
           .build();
     }
 
-    // 2. Prepare composite input
+    // 2. Prepare composite input; local paths follow api_server.local_file_root (LocalFileAccess)
     CompositeBoardInput inputAssembler = new CompositeBoardInput();
+    LocalFileAccess files = LocalFileAccess.forApiServer();
     try {
       if (request.fileContent != null && !request.fileContent.isBlank()) {
         inputAssembler.setDesign(
             request.fileContent.getBytes(StandardCharsets.UTF_8), "design.dsn");
       } else if (request.filePath != null && !request.filePath.isBlank()) {
-        File f = validateAndResolveFile(request.filePath);
-        inputAssembler.setDesign(f);
+        inputAssembler.setDesign(files.read(request.filePath), fileName(request.filePath));
       } else {
         return Response.status(Response.Status.BAD_REQUEST)
             .entity(
@@ -160,21 +160,20 @@ public class AutorouteControllerV1 extends BaseController {
         inputAssembler.setRules(
             request.rulesContent.getBytes(StandardCharsets.UTF_8), "design.rules");
       } else if (request.rulesPath != null && !request.rulesPath.isBlank()) {
-        File rf = validateAndResolveFile(request.rulesPath);
-        inputAssembler.setRules(rf);
+        inputAssembler.setRules(files.read(request.rulesPath), fileName(request.rulesPath));
       }
 
       if (request.sessionContent != null && !request.sessionContent.isBlank()) {
         inputAssembler.setSession(
             request.sessionContent.getBytes(StandardCharsets.UTF_8), "design.ses");
       } else if (request.sessionPath != null && !request.sessionPath.isBlank()) {
-        File sf = validateAndResolveFile(request.sessionPath);
-        inputAssembler.setSession(sf);
+        inputAssembler.setSession(files.read(request.sessionPath), fileName(request.sessionPath));
       }
     } catch (Exception ex) {
-      FRLogger.error("Failed to process autoroute input files", ex);
+      FRLogger.warn("Failed to read the autoroute input files: " + ex.getMessage());
       return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"Failed to read input files: " + ex.getMessage() + "\"}")
+          // The message names a client path, which may hold quotes or backslashes.
+          .entity(GSON.toJson(Map.of("error", "Failed to read input files: " + ex.getMessage())))
           .build();
     }
 
@@ -211,12 +210,25 @@ public class AutorouteControllerV1 extends BaseController {
       job.routerSettings.jobTimeoutString = Integer.toString(timeoutSec);
     }
 
+    // The outputs and statistics of the response are read from the final board.
+    job.keepBoardWhenFinished = true;
+    try {
+      return runAndRespond(request, userId, session, job, timeoutSec);
+    } finally {
+      // From now on the scheduler's retention limits decide when the board is released.
+      job.keepBoardWhenFinished = false;
+    }
+  }
+
+  /** Enqueues the job, waits for it within the time budget and builds the response. */
+  private Response runAndRespond(
+      AutorouteRequest request, UUID userId, Session session, RoutingJob job, int timeoutSec) {
     session.addJob(job);
     job.state = RoutingJobState.READY_TO_START;
 
     // 4. Synchronous wait for completion or timeout
     Instant waitStart = Instant.now();
-    while (!isTerminalState(job.state) || isThreadAlive(job)) {
+    while (!isTerminalState(job.state) || !job.isRoutingThreadEnded()) {
       // The job clock starts when the scheduler starts the job, after it has loaded the board.
       Instant clockStart =
           job.startedAt != null && job.startedAt.isAfter(waitStart) ? job.startedAt : waitStart;
@@ -236,7 +248,7 @@ public class AutorouteControllerV1 extends BaseController {
 
     double elapsedSeconds = Duration.between(waitStart, Instant.now()).toMillis() / 1000.0;
 
-    if (!isTerminalState(job.state) || isThreadAlive(job)) {
+    if (!isTerminalState(job.state) || !job.isRoutingThreadEnded()) {
       // The router has not stopped (or not started); reading its board now would race with it.
       if (job.thread != null) {
         job.thread.requestStop();
@@ -293,17 +305,16 @@ public class AutorouteControllerV1 extends BaseController {
     responsePayload.status = job.state;
     responsePayload.durationSeconds = elapsedSeconds;
 
-    if (job.board != null) {
-      var stats = job.board.getStatistics();
-      if (stats != null) {
-        responsePayload.unroutedConnections =
-            stats.connections != null ? stats.connections.incompleteCount : 0;
-        responsePayload.clearanceViolations =
-            stats.clearanceViolations != null ? stats.clearanceViolations.totalCount : 0;
-        if (job.routerSettings != null && job.routerSettings.scoring != null) {
-          responsePayload.normalizedScore = stats.getRouterScore(job.routerSettings);
-          responsePayload.optimizerScore = stats.getOptimizerScore(job.routerSettings);
-        }
+    // The routing thread took them of the final board; measuring the board again would repeat it.
+    var stats = job.finalStatistics;
+    if (stats != null) {
+      responsePayload.unroutedConnections =
+          stats.connections != null ? stats.connections.incompleteCount : 0;
+      responsePayload.clearanceViolations =
+          stats.clearanceViolations != null ? stats.clearanceViolations.totalCount : 0;
+      if (job.routerSettings != null && job.routerSettings.scoring != null) {
+        responsePayload.normalizedScore = stats.getRouterScore(job.routerSettings);
+        responsePayload.optimizerScore = stats.getOptimizerScore(job.routerSettings);
       }
     }
 
@@ -334,10 +345,6 @@ public class AutorouteControllerV1 extends BaseController {
     return Response.ok(responseJson).build();
   }
 
-  private static boolean isThreadAlive(RoutingJob job) {
-    return job.thread != null && job.thread.isAlive();
-  }
-
   private static boolean isTerminalState(RoutingJobState state) {
     return state == RoutingJobState.COMPLETED
         || state == RoutingJobState.TIMED_OUT
@@ -346,24 +353,8 @@ public class AutorouteControllerV1 extends BaseController {
         || state == RoutingJobState.INVALID;
   }
 
-  private static File validateAndResolveFile(String filePath) {
-    if (filePath == null || filePath.isBlank()) {
-      throw new IllegalArgumentException("File path must not be null or empty.");
-    }
-    java.nio.file.Path path = java.nio.file.Path.of(filePath).toAbsolutePath().normalize();
-    String pathStr = path.toString().toLowerCase(Locale.ROOT);
-    if (pathStr.startsWith("/etc")
-        || pathStr.startsWith("/proc")
-        || pathStr.startsWith("/sys")
-        || pathStr.startsWith("/root")
-        || pathStr.startsWith("c:\\windows")
-        || pathStr.startsWith("c:\\winnt")) {
-      throw new IllegalArgumentException("Access to system directory is forbidden: " + filePath);
-    }
-    File f = path.toFile();
-    if (!f.exists()) {
-      throw new IllegalArgumentException("File not found: " + filePath);
-    }
-    return f;
+  private static String fileName(String clientPath) {
+    java.nio.file.Path name = java.nio.file.Path.of(clientPath).getFileName();
+    return name != null ? name.toString() : clientPath;
   }
 }

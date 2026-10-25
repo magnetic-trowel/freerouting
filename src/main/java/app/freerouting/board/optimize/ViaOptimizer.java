@@ -334,6 +334,10 @@ public final class ViaOptimizer {
       newFloatToLocation = floatFromLocation.changeLength(floatToLocation, okLength);
     }
     Point newToLocation = newFloatToLocation.round();
+    if (newToLocation.equals(fromLocation)) {
+      // The free length rounds away: the via cannot move, and a shorter step cannot help.
+      return null;
+    }
     Vector delta = newToLocation.differenceBy(fromLocation);
     boolean checkOk = DrillItemMover.check(via, delta, 0, 0, null, board, null);
 

@@ -33,6 +33,21 @@ public class RouterSettings implements Serializable, Cloneable {
   public Double holeClearanceUm;
 
   /**
+   * Copper diameter, in micrometres, of the through via that net classes get when the design gives
+   * them no usable via (KiCad writes a via of size -0.001 for a net class whose via size is unset).
+   * Unset means no fallback via. Used together with {@link #fallbackViaDrillUm}.
+   */
+  @SerializedName("fallback_via_diameter_um")
+  public Double fallbackViaDiameterUm;
+
+  /**
+   * Drill diameter, in micrometres, of the fallback via. Freerouting does not route with it; it
+   * only goes into the via's name, from which KiCad reads the drill when it imports the session.
+   */
+  @SerializedName("fallback_via_drill_um")
+  public Double fallbackViaDrillUm;
+
+  /**
    * Clearance violation shortfall tolerance in micrometers. Clearance shortfalls (expected -
    * actual) less than or equal to this threshold are treated as floating-point
    * rounding/discretization noise rather than electrical clearance violations.
@@ -672,6 +687,8 @@ public class RouterSettings implements Serializable, Cloneable {
     }
     result.copperToEdgeClearanceUm = this.copperToEdgeClearanceUm;
     result.holeClearanceUm = this.holeClearanceUm;
+    result.fallbackViaDiameterUm = this.fallbackViaDiameterUm;
+    result.fallbackViaDrillUm = this.fallbackViaDrillUm;
     result.clearanceToleranceUm = this.clearanceToleranceUm;
     result.meanderMinAmplitudeMm = this.meanderMinAmplitudeMm;
     result.meanderMaxAmplitudeMm = this.meanderMaxAmplitudeMm;
@@ -828,6 +845,11 @@ public class RouterSettings implements Serializable, Cloneable {
       scoring = new RoutingCostSettings();
     }
     scoring.planeViaCosts = Math.max(value, 1);
+  }
+
+  /** Returns whether the routing of a loaded session file may be rerouted. */
+  public boolean getReworkImportedRouting() {
+    return optimizer != null && Boolean.TRUE.equals(optimizer.reworkImportedRouting);
   }
 
   /** Returns the explicit list of power-plane net names, or empty array if none configured. */
@@ -1213,17 +1235,19 @@ public class RouterSettings implements Serializable, Cloneable {
   public void validateAgainstBoard(RoutingBoard board) {
     this.validationWarnings = new ArrayList<>();
 
-    // Validate maxPasses (0 means no limit)
+    // Validate maxPasses (0 means no limit, at most 9999 passes otherwise)
     if (this.autorouter != null && this.autorouter.maxPasses != null) {
-      if (this.autorouter.maxPasses < 0
-          || (this.autorouter.maxPasses > 9999 && this.autorouter.maxPasses != Integer.MAX_VALUE)) {
+      int maxPasses = this.autorouter.maxPasses;
+      if (maxPasses < 0 || (maxPasses > 9999 && maxPasses != Integer.MAX_VALUE)) {
+        int corrected = maxPasses < 0 ? 0 : 9999;
         String warning =
             "Invalid maxPasses value: "
-                + this.autorouter.maxPasses
-                + ", using default 0 (no limit)";
+                + maxPasses
+                + ", using "
+                + (corrected == 0 ? "0 (no limit)" : "the maximum " + corrected);
         FRLogger.warn(warning);
         this.validationWarnings.add(warning);
-        this.autorouter.maxPasses = 0;
+        this.autorouter.maxPasses = corrected;
       }
     }
 

@@ -2,9 +2,15 @@ package app.freerouting.management.sessions;
 
 import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.core.Session;
+import app.freerouting.logger.FRLogger;
+import app.freerouting.management.jobs.RoutingJobScheduler;
 import app.freerouting.settings.GlobalSettings;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,11 +23,20 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class SessionManager {
 
   private static final int MAX_SESSIONS = 5_000;
-  private static final SessionManager instance = new SessionManager();
-  private static final Map<String, Session> sessions = new ConcurrentHashMap<>();
+  private static final SessionManager instance = new SessionManager(MAX_SESSIONS);
+  private final Map<String, Session> sessions = new ConcurrentHashMap<>();
+  private final Object registrationLock = new Object();
+  private final int maxSessions;
   private volatile UUID monitoredSessionId;
 
-  private SessionManager() {}
+  /**
+   * Creates a session registry.
+   *
+   * @param maxSessions the number of sessions above which the oldest idle session is removed
+   */
+  SessionManager(int maxSessions) {
+    this.maxSessions = maxSessions;
+  }
 
   /** Returns the process-wide session manager. */
   public static SessionManager getInstance() {
@@ -53,24 +68,16 @@ public final class SessionManager {
   }
 
   /**
-   * Returns a session when it belongs to the specified user.
+   * Returns a session when it belongs to the caller (see {@link Session#isOwnedBy}).
    *
    * @param sessionId the session identifier
-   * @param userId the expected user identifier
-   * @return the matching session, or {@code null} when it is absent or owned by another user
+   * @param userId the caller's profile id
+   * @param apiKeyHash the hash of the caller's validated API key, or {@code null}
+   * @return the matching session, or {@code null} when it is absent or owned by another caller
    */
-  public Session getSession(String sessionId, UUID userId) {
+  public Session getSession(String sessionId, UUID userId, String apiKeyHash) {
     Session session = getSession(sessionId);
-
-    if (session == null) {
-      return null;
-    }
-
-    if (!session.userId.equals(userId)) {
-      return null;
-    }
-
-    return session;
+    return session != null && session.isOwnedBy(userId, apiKeyHash) ? session : null;
   }
 
   /**
@@ -94,14 +101,32 @@ public final class SessionManager {
    */
   public Session createSession(UUID userId, String host, String apiKeyHash) {
     Session session = new Session(userId, host, apiKeyHash);
-    if (sessions.size() >= MAX_SESSIONS) {
-      var iterator = sessions.keySet().iterator();
-      if (iterator.hasNext()) {
-        iterator.next();
-        iterator.remove();
+    List<Session> evicted = new ArrayList<>();
+    synchronized (registrationLock) {
+      if (sessions.size() >= maxSessions) {
+        Set<UUID> active = RoutingJobScheduler.getInstance().sessionIdsWithActiveJobs();
+        // More than one when the registry had to grow while all sessions were active.
+        while (sessions.size() >= maxSessions) {
+          Session oldest = selectSessionToEvict(sessions.values(), active);
+          if (oldest == null) {
+            FRLogger.warn(
+                "All "
+                    + sessions.size()
+                    + " sessions are primary or have queued or running jobs; the session limit of "
+                    + maxSessions
+                    + " is exceeded until some of them become idle.");
+            break;
+          }
+          sessions.remove(oldest.id.toString());
+          evicted.add(oldest);
+        }
       }
+      sessions.put(session.id.toString(), session);
     }
-    sessions.put(session.id.toString(), session);
+    for (Session removed : evicted) {
+      // Every endpoint checks the job's session, so its finished jobs are unreachable now.
+      RoutingJobScheduler.getInstance().removeFinishedJobs(removed.id);
+    }
     GlobalSettings settings = GlobalSettings.current();
     if (settings != null && settings.statistics != null) {
       settings.statistics.incrementSessionsTotal();
@@ -115,6 +140,33 @@ public final class SessionManager {
         userId,
         apiKeyHash);
     return session;
+  }
+
+  /**
+   * Chooses the session to remove when the registry is full: the oldest session that is not the
+   * primary (GUI) session and has no queued or running job.
+   *
+   * <p>When every session is primary or active, none is chosen and the registry grows past its
+   * limit instead of refusing the new session. That growth is bounded: each active session holds at
+   * least one of the scheduler's at most 5,000 jobs, and new sessions start idle, so they can be
+   * removed again.
+   *
+   * @param candidates the registered sessions
+   * @param sessionsWithActiveJobs the sessions that have a queued or running job
+   * @return the session to remove, or {@code null} when none may be removed
+   */
+  static Session selectSessionToEvict(
+      Collection<Session> candidates, Set<UUID> sessionsWithActiveJobs) {
+    Session oldest = null;
+    for (Session session : candidates) {
+      if (session.isPrimary || sessionsWithActiveJobs.contains(session.id)) {
+        continue;
+      }
+      if (oldest == null || session.creationSequence < oldest.creationSequence) {
+        oldest = session;
+      }
+    }
+    return oldest;
   }
 
   /**
@@ -139,13 +191,14 @@ public final class SessionManager {
   }
 
   /**
-   * Lists the identifiers of all sessions owned by a user.
+   * Lists the identifiers of all sessions owned by the caller (see {@link Session#isOwnedBy}).
    *
-   * @param userId the session owner's identifier
+   * @param userId the caller's profile id
+   * @param apiKeyHash the hash of the caller's validated API key, or {@code null}
    * @return the matching session identifiers
    */
-  public String[] listSessionIds(UUID userId) {
-    return Arrays.stream(getSessions(null, userId))
+  public String[] listSessionIds(UUID userId, String apiKeyHash) {
+    return Arrays.stream(getOwnedSessions(userId, apiKeyHash))
         .map(s -> s.id.toString())
         .toArray(String[]::new);
   }
@@ -201,20 +254,15 @@ public final class SessionManager {
   }
 
   /**
-   * Returns sessions visible to a user.
+   * Returns the sessions owned by the caller (see {@link Session#isOwnedBy}).
    *
-   * @param sessionId a specific session identifier, or {@code null} to list all of the user's
-   *     sessions
-   * @param userId the session owner's identifier
+   * @param userId the caller's profile id
+   * @param apiKeyHash the hash of the caller's validated API key, or {@code null}
    * @return the matching sessions
    */
-  public Session[] getSessions(String sessionId, UUID userId) {
-    if (sessionId == null) {
-      return sessions.values().stream()
-          .filter(s -> s.userId.equals(userId))
-          .toArray(Session[]::new);
-    } else {
-      return new Session[] {sessions.get(sessionId)};
-    }
+  public Session[] getOwnedSessions(UUID userId, String apiKeyHash) {
+    return sessions.values().stream()
+        .filter(s -> s.isOwnedBy(userId, apiKeyHash))
+        .toArray(Session[]::new);
   }
 }

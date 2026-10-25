@@ -245,7 +245,7 @@ public abstract class ShapeTree {
 
     /**
      * Superset of the layers of the leaves below this node (bit i = layer i; all bits when unknown
-     * or layer >= 64). Kept conservative: OR-ed on insert, never narrowed on removal.
+     * or layer >= 64), recomputed from the children whenever the subtree changes.
      */
     public long layerMask = -1L;
   }
@@ -257,6 +257,9 @@ public abstract class ShapeTree {
 
     public TreeNode firstChild;
     public TreeNode secondChild;
+
+    /** Length of the longest path from this node down to a leaf; leaves have height 0. */
+    int height;
 
     /** Creates an inner node with boundingShape and parent. */
     public InnerNode(RegularTileShape boundingShape, InnerNode parent) {

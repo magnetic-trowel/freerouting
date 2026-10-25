@@ -287,7 +287,8 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
                       boardStatistics.connections.incompleteCount,
                       boardStatistics.clearanceViolations.totalCount,
                       boardStatistics.items.viaCount,
-                      (double) boardStatistics.traces.totalLength,
+                      Unit.scale(
+                          boardStatistics.traces.totalLengthMm, Unit.MM, sessionPort.displayUnit()),
                       sessionPort.displayUnit(),
                       false,
                       true));
@@ -324,7 +325,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
   }
 
   private void handleRoutingStageFinished(BatchAutorouter autorouter) {
-    var boardStatistics = new BoardStatistics(routingJob.board);
+    var boardStatistics = routingJob.board.getStatistics();
     this.scoreBeforeOptimization = boardStatistics.getRouterScore(routingJob.routerSettings);
     this.autoroutingSecondsToComplete =
         FRLogger.traceExit("BatchAutorouterThread.thread_action()-autorouting");
@@ -398,7 +399,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
   }
 
   private void handleOptimizationStageFinished() {
-    var boardStatistics = new BoardStatistics(routingJob.board);
+    var boardStatistics = routingJob.board.getStatistics();
     var scoreAfterOptimization = boardStatistics.getRouterScore(routingJob.routerSettings);
     double percentageImprovement =
         ((scoreAfterOptimization / this.scoreBeforeOptimization) * 100.0) - 100.0;
@@ -575,7 +576,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
       }
       FRLogger.traceEntry("BatchAutorouterThread.thread_action()-autorouting");
 
-      globalSettings.statistics.incrementJobsCompleted();
+      globalSettings.statistics.incrementJobsStarted();
       FRAnalytics.autorouterStarted();
 
       String inputFormat =
@@ -660,9 +661,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
     }
 
     int incompleteCount =
-        routingJob.board == null
-            ? 0
-            : new BoardStatistics(routingJob.board).connections.incompleteCount;
+        routingJob.board == null ? 0 : routingJob.board.getStatistics().connections.incompleteCount;
     TextManager terminalText = new TextManager(ScreenMessages.class, sessionPort.locale());
     String terminalStatus =
         terminalText.getText(
@@ -698,7 +697,8 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
             : 0;
     double durationSec = durationMs / 1000.0;
 
-    var finalBoardStats = routingJob.board != null ? routingJob.board.getStatistics() : null;
+    var finalBoardStats =
+        routingJob.board != null ? BoardStatistics.ofResult(routingJob.board) : null;
     Integer netsTotal =
         finalBoardStats != null && finalBoardStats.nets != null
             ? finalBoardStats.nets.totalCount
@@ -778,8 +778,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
     if (routingJob.board == null) {
       return null;
     }
-    BoardStatistics stats =
-        new BoardStatistics(routingJob.board, sessionPort.displayUnit(), true, true);
+    BoardStatistics stats = BoardStatistics.ofResult(routingJob.board, sessionPort.displayUnit());
     double duration = this.autoroutingSecondsToComplete;
     if (routingJob.startedAt != null && routingJob.finishedAt != null) {
       duration =

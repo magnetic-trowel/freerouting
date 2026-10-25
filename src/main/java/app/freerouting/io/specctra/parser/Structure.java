@@ -3,6 +3,7 @@ package app.freerouting.io.specctra.parser;
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.ConductionArea;
+import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.ObstacleArea;
 import app.freerouting.board.model.items.ViaObstacleArea;
 import app.freerouting.board.model.structure.AngleRestriction;
@@ -38,6 +39,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
@@ -48,6 +50,14 @@ import java.util.Set;
   "checkstyle:VariableDeclarationUsageDistance"
 })
 public class Structure extends ScopeKeyword {
+
+  /**
+   * The widest board outline that is read, in millimetres. Outline strip pieces, search-tree
+   * sections and clearances are physical lengths, so a board many metres wide (a design in um
+   * declared as mm is 1000 times too large) would be cut into millions of tree shapes, a load that
+   * no job timeout can interrupt.
+   */
+  private static final double MAX_BOARD_SIZE_MM = 10_000;
 
   /** Creates a new instance of Structure. */
   public Structure() {
@@ -286,6 +296,13 @@ public class Structure extends ScopeKeyword {
       Object prevToken = null;
       for (; ; ) {
         Object nextToken = scanner.nextToken();
+        if (nextToken == null) {
+          FRLogger.warn(
+              "Structure.read_boundary_scope: unexpected end of file at '"
+                  + scanner.getScopeIdentifier()
+                  + "'");
+          return false;
+        }
         if (nextToken == Keyword.CLOSED_BRACKET) {
           break;
         }
@@ -352,6 +369,13 @@ public class Structure extends ScopeKeyword {
         nextToken = scanner.nextToken();
         if (nextToken == Keyword.TYPE) {
           nextToken = scanner.nextToken();
+          if (nextToken == null) {
+            FRLogger.warn(
+                "Structure.read_layer_scope: unexpected end of file at '"
+                    + scanner.getScopeIdentifier()
+                    + "'");
+            return false;
+          }
           if (nextToken == Keyword.POWER) {
             isSignal = false;
           } else if ((nextToken != Keyword.SIGNAL)
@@ -387,6 +411,13 @@ public class Structure extends ScopeKeyword {
           for (; ; ) {
             scanner.yybegin(SpecctraDsnStreamReader.NAME);
             nextToken = scanner.nextToken();
+            if (nextToken == null) {
+              FRLogger.warn(
+                  "Structure.read_layer_scope: unexpected end of file at '"
+                      + scanner.getScopeIdentifier()
+                      + "'");
+              return false;
+            }
             if (nextToken == Keyword.CLOSED_BRACKET) {
               break;
             }
@@ -874,8 +905,17 @@ public class Structure extends ScopeKeyword {
       ReadScopeParameter scopeParameter,
       KeepoutType keepoutType,
       FixedState fixedState) {
+    if (area == null) {
+      // Shape.readAreaScope already reported why the keepout could not be read. Skip it, as
+      // Package.readScope does for unreadable image keepouts.
+      return true;
+    }
     Area keepoutArea =
         Shape.transformAreaToBoard(area.shapeList, scopeParameter.coordinateTransform);
+    if (keepoutArea == null) {
+      // Shape.transformAreaToBoard already reported why the area cannot be used
+      return true;
+    }
     if (keepoutArea.dimension() < 2) {
       // A degenerate keepout (e.g. all polygon vertices identical, exported incorrectly by the EDA
       // tool) cannot be enforced as a routing constraint. The board remains valid — the keepout
@@ -898,12 +938,25 @@ public class Structure extends ScopeKeyword {
     if (currentLayer == Layer.SIGNAL) {
       for (int i = 0; i < board.getLayerCount(); i++) {
         if (scopeParameter.layerStructure.layers[i].isSignal) {
-          insertKeepout(board, keepoutArea, i, area.clearanceClassName, keepoutType, fixedState);
+          insertKeepout(
+              board,
+              keepoutArea,
+              i,
+              area.clearanceClassName,
+              keepoutType,
+              fixedState,
+              scopeParameter);
         }
       }
     } else if (currentLayer.no >= 0) {
       insertKeepout(
-          board, keepoutArea, currentLayer.no, area.clearanceClassName, keepoutType, fixedState);
+          board,
+          keepoutArea,
+          currentLayer.no,
+          area.clearanceClassName,
+          keepoutType,
+          fixedState,
+          scopeParameter);
     } else {
       FRLogger.warn(
           "Structure.insert_keepout: unknown layer name at '"
@@ -921,30 +974,66 @@ public class Structure extends ScopeKeyword {
       int layer,
       String clearanceClassName,
       KeepoutType keepoutType,
-      FixedState fixedState) {
-    int clearanceClassIndex;
-    if (clearanceClassName == null) {
-      clearanceClassIndex =
-          board
-              .rules
-              .getDefaultNetClass()
-              .defaultItemClearanceClasses
-              .get(DefaultItemClearanceClasses.ItemClass.AREA);
+      FixedState fixedState,
+      ReadScopeParameter scopeParameter) {
+    int defaultClass =
+        board
+            .rules
+            .getDefaultNetClass()
+            .defaultItemClearanceClasses
+            .get(DefaultItemClearanceClasses.ItemClass.AREA);
+    int clearanceClassIndex = clearanceClassOrDefault(board, clearanceClassName, defaultClass);
+    ObstacleArea keepout;
+    if (keepoutType == KeepoutType.via_keepout) {
+      keepout = board.insertViaObstacle(area, layer, clearanceClassIndex, fixedState);
+    } else if (keepoutType == KeepoutType.place_keepout) {
+      keepout = board.insertComponentObstacle(area, layer, clearanceClassIndex, fixedState);
     } else {
-      clearanceClassIndex = board.rules.clearanceMatrix.getNo(clearanceClassName);
-      if (clearanceClassIndex < 0) {
+      keepout = board.insertObstacle(area, layer, clearanceClassIndex, fixedState);
+    }
+    deferUnknownClearanceClass(keepout, clearanceClassName, scopeParameter);
+  }
+
+  /** The clearance class with the given name, or the default if there is no name or no class. */
+  private static int clearanceClassOrDefault(BasicBoard board, String name, int defaultClass) {
+    int result = name == null ? -1 : board.rules.clearanceMatrix.getNo(name);
+    return result < 0 ? defaultClass : result;
+  }
+
+  /**
+   * Records an item whose clearance class name is not known yet: it may name a class of the network
+   * scope, which is read after the structure. {@link #resolveDeferredClearanceClasses} assigns it
+   * then.
+   */
+  private static void deferUnknownClearanceClass(
+      Item item, String clearanceClassName, ReadScopeParameter scopeParameter) {
+    if (item != null
+        && clearanceClassName != null
+        && item.board.rules.clearanceMatrix.getNo(clearanceClassName) < 0) {
+      scopeParameter.pendingClearanceClasses.add(
+          new ReadScopeParameter.PendingClearanceClass(item, clearanceClassName));
+    }
+  }
+
+  /**
+   * Assigns the clearance classes that structure items name but that did not exist when the items
+   * were inserted. Called once the network scope has defined its classes. A name that is still
+   * unknown keeps the default class the item was inserted with.
+   */
+  static void resolveDeferredClearanceClasses(ReadScopeParameter scopeParameter) {
+    for (ReadScopeParameter.PendingClearanceClass pending :
+        scopeParameter.pendingClearanceClasses) {
+      int clearanceClassIndex = pending.item().board.rules.clearanceMatrix.getNo(pending.name());
+      if (clearanceClassIndex >= 0) {
+        pending.item().changeClearanceClassIndex(clearanceClassIndex);
+      } else {
         FRLogger.warn(
-            "Keepout.insert_keepout: clearance class not found at '" + clearanceClassName + "'");
-        clearanceClassIndex = BoardRules.clearanceClassNone();
+            "Structure: clearance class '"
+                + pending.name()
+                + "' not found, the default clearance applies");
       }
     }
-    if (keepoutType == KeepoutType.via_keepout) {
-      board.insertViaObstacle(area, layer, clearanceClassIndex, fixedState);
-    } else if (keepoutType == KeepoutType.place_keepout) {
-      board.insertComponentObstacle(area, layer, clearanceClassIndex, fixedState);
-    } else {
-      board.insertObstacle(area, layer, clearanceClassIndex, fixedState);
-    }
+    scopeParameter.pendingClearanceClasses.clear();
   }
 
   @Override
@@ -1100,33 +1189,25 @@ public class Structure extends ScopeKeyword {
           Shape.transformAreaToBoard(planeInfo.area.shapeList, scopeParameter.coordinateTransform);
       final Layer currentLayer = (planeInfo.area.shapeList.iterator().next()).layer;
       if (currentLayer.no >= 0) {
-        int clearanceClassIndex;
-        if (planeInfo.area.clearanceClassName != null) {
-          clearanceClassIndex =
-              board.rules.clearanceMatrix.getNo(planeInfo.area.clearanceClassName);
-          if (clearanceClassIndex < 0) {
-            FRLogger.warn(
-                "Structure.read_scope: clearance class not found at '"
-                    + scopeParameter.scanner.getScopeIdentifier()
-                    + "'");
-            clearanceClassIndex = BoardRules.clearanceClassNone();
-          }
-        } else {
-          clearanceClassIndex =
-              currentNet
-                  .getNetClass()
-                  .defaultItemClearanceClasses
-                  .get(DefaultItemClearanceClasses.ItemClass.AREA);
-        }
+        int clearanceClassIndex =
+            clearanceClassOrDefault(
+                board,
+                planeInfo.area.clearanceClassName,
+                currentNet
+                    .getNetClass()
+                    .defaultItemClearanceClasses
+                    .get(DefaultItemClearanceClasses.ItemClass.AREA));
         int[] netNumbers = new int[1];
         netNumbers[0] = currentNet.netNumber;
-        board.insertConductionArea(
-            planeArea,
-            currentLayer.no,
-            netNumbers,
-            clearanceClassIndex,
-            false,
-            FixedState.SYSTEM_FIXED);
+        Item plane =
+            board.insertConductionArea(
+                planeArea,
+                currentLayer.no,
+                netNumbers,
+                clearanceClassIndex,
+                false,
+                FixedState.SYSTEM_FIXED);
+        deferUnknownClearanceClass(plane, planeInfo.area.clearanceClassName, scopeParameter);
       } else {
         FRLogger.warn(
             "Plane.read_scope: unexpected layer name at '"
@@ -1231,11 +1312,21 @@ public class Structure extends ScopeKeyword {
         scopeParameter.boardOutlineOk = false;
         return false;
       }
-      Iterator<Shape> it = boardConstructionInfo.outlineShapes.iterator();
-
-      Rectangle boundingBox = it.next().boundingBox();
-      while (it.hasNext()) {
-        boundingBox = boundingBox.union(it.next().boundingBox());
+      Rectangle boundingBox = null;
+      for (Shape outlineShape : boardConstructionInfo.outlineShapes) {
+        // a polyline path has no bounding box
+        Rectangle shapeBox = outlineShape.boundingBox();
+        if (shapeBox != null) {
+          boundingBox = boundingBox == null ? shapeBox : boundingBox.union(shapeBox);
+        }
+      }
+      if (boundingBox == null) {
+        FRLogger.warn(
+            "Structure.create_board: outline missing at '"
+                + scopeParameter.scanner.getScopeIdentifier()
+                + "'");
+        scopeParameter.boardOutlineOk = false;
+        return false;
       }
       boardConstructionInfo.boundingShape = boundingBox;
     }
@@ -1272,6 +1363,27 @@ public class Structure extends ScopeKeyword {
       scopeParameter.boardOutlineOk = false;
       return false;
     }
+    if (!Double.isFinite(maxCoor)) {
+      // the scaling loop below would never end
+      return scopeParameter.parseError("the board outline coordinates are out of range");
+    }
+    double boardSizeMm =
+        app.freerouting.board.model.structure.Unit.scale(
+            Math.max(
+                boundingBox.coor[2] - boundingBox.coor[0],
+                boundingBox.coor[3] - boundingBox.coor[1]),
+            scopeParameter.unit,
+            app.freerouting.board.model.structure.Unit.MM);
+    if (boardSizeMm > MAX_BOARD_SIZE_MM) {
+      return scopeParameter.parseError(
+          String.format(
+              Locale.ROOT,
+              "the board outline is %.0f m wide in the unit %s of the (resolution ...) scope,"
+                  + " more than %.0f m; check that unit",
+              boardSizeMm / 1000,
+              scopeParameter.unit,
+              MAX_BOARD_SIZE_MM / 1000));
+    }
     // make scalefactor smaller, if there is a danger of integer overflow.
     while (5 * maxCoor >= Limits.CRIT_INT) {
       scaleFactor /= 10.0;
@@ -1294,18 +1406,29 @@ public class Structure extends ScopeKeyword {
           currentShape = new PolygonPath(currentPath.layer, 0, currentPath.coordinateArr);
         }
       }
-      PolylineShape currentBoardShape =
-          (PolylineShape) currentShape.transformToBoard(scopeParameter.coordinateTransform);
+      // A circle has no polygonal board shape and a polyline path no board shape at all.
+      app.freerouting.geometry.planar.Shape boardShape =
+          currentShape.transformToBoard(scopeParameter.coordinateTransform);
+      if (!(boardShape instanceof PolylineShape currentBoardShape)) {
+        FRLogger.warn(
+            "Structure.create_board: board outline shape ignored, a path, polygon or rectangle"
+                + " is expected at '"
+                + scopeParameter.scanner.getScopeIdentifier()
+                + "'");
+        continue;
+      }
       if (currentBoardShape.dimension() > 0) {
         boardOutlineShapes.add(currentBoardShape);
       }
     }
     if (boardOutlineShapes.isEmpty()) {
       // construct an outline from the boundingShape, if the outline is missing.
-      PolylineShape currentBoardShape =
-          (PolylineShape)
-              boardConstructionInfo.boundingShape.transformToBoard(
-                  scopeParameter.coordinateTransform);
+      app.freerouting.geometry.planar.Shape boundingBoardShape =
+          boardConstructionInfo.boundingShape.transformToBoard(scopeParameter.coordinateTransform);
+      if (!(boundingBoardShape instanceof PolylineShape currentBoardShape)) {
+        return scopeParameter.parseError(
+            "the board outline must be a path, polygon or rectangle, not a circle");
+      }
       boardOutlineShapes.add(currentBoardShape);
     }
     final Collection<PolylineShape> holeShapes = separateHoles(boardOutlineShapes);

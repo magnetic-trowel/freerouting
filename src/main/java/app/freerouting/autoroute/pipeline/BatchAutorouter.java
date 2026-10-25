@@ -2,7 +2,6 @@ package app.freerouting.autoroute.pipeline;
 
 import app.freerouting.autoroute.AutorouteAttemptResult;
 import app.freerouting.autoroute.AutorouteAttemptState;
-import app.freerouting.autoroute.BoardHistory;
 import app.freerouting.autoroute.maze.AutorouteControl;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.ConductionArea;
@@ -14,8 +13,10 @@ import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.StoppableThread;
+import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.UndoableObjects;
+import app.freerouting.drc.PlaneFillConnectivity;
 import app.freerouting.geometry.planar.FloatLine;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.logger.FRLogger;
@@ -34,11 +35,9 @@ import java.util.TreeSet;
 /** Handles the sequencing of the auto-router passes. */
 public final class BatchAutorouter extends NamedAlgorithm {
 
-  // The lowest rank of the board to be selected to go back to.
-  // Must not exceed BoardHistory.MAX_HISTORY_SIZE so the check can actually fire.
-  static final int BOARD_RANK_LIMIT = BoardHistory.MAX_HISTORY_SIZE;
-  // Maximum number of tries on the same board
-  static final int MAXIMUM_TRIES_ON_THE_SAME_BOARD = 3;
+  // How often the pass loop goes back to one history board at most: the budget it always had,
+  // when the limit was 3 and compared with <=.
+  static final int MAX_RESTORES_OF_A_BOARD = 4;
   static final int TIME_LIMIT_TO_PREVENT_ENDLESS_LOOP = 1000;
   // The minimum number of passes to complete the board, unless all items are
   // routed
@@ -111,9 +110,6 @@ public final class BatchAutorouter extends NamedAlgorithm {
   int profileRouteItemCount;
   int profilePlaneItemCount;
   BoardStatistics progressStatistics;
-  private BoardStatistics boardStatistics;
-  private RoutingBoard boardStatisticsBoard;
-  private long boardStatisticsStamp;
   int progressItemsSinceStatistics;
 
   /**
@@ -133,6 +129,15 @@ public final class BatchAutorouter extends NamedAlgorithm {
   /** Why the last pass loop stopped. Null until the loop records a reason. */
   public StopReason lastStopReason;
 
+  /**
+   * Fanout and autorouter stage metrics of this router's pass loop. The pipeline reports those of
+   * the router whose board it keeps, which after a routing fallback need not be the last one run.
+   */
+  final RoutingResultManifest.PhaseMetrics phaseMetrics = new RoutingResultManifest.PhaseMetrics();
+
+  /** The exception that aborted the last pass, or null if it ran to its end. */
+  public Exception lastPassFailure;
+
   /** Board hash after fanout, where the pass loop started. */
   public String passLoopStartHash;
 
@@ -146,7 +151,9 @@ public final class BatchAutorouter extends NamedAlgorithm {
     NO_IMPROVEMENT,
     TIMED_OUT,
     CANCELLED,
-    REPEATED
+    REPEATED,
+    /** A pass threw; the loop ended on the board from the start of that pass. */
+    ERROR
   }
 
   /**
@@ -565,6 +572,10 @@ public final class BatchAutorouter extends NamedAlgorithm {
     }
   }
 
+  void startPassLoop() {
+    this.passRunner.startPassLoop();
+  }
+
   @Override
   public String getId() {
     return "freerouting-router";
@@ -618,12 +629,12 @@ public final class BatchAutorouter extends NamedAlgorithm {
   }
 
   /**
-   * Autoroutes ripup passes until the board is completed or the autorouter is stopped by the user.
-   * Returns true if the board is completed.
+   * Autoroutes ripup passes until the board is completed, the loop stops on one of its own criteria
+   * or the autorouter is stopped by the user. {@link #lastStopReason} tells which.
    */
-  public boolean runBatchLoop() {
+  public void runBatchLoop() {
     this.board.awaitPostLoad();
-    return batchLoop.run();
+    batchLoop.run();
   }
 
   String buildUnroutedConnectionsReport() {
@@ -660,6 +671,61 @@ public final class BatchAutorouter extends NamedAlgorithm {
   }
 
   /**
+   * Routes the copper that foreign tracks cut off from the fill of its pour to the rest of its net
+   * ({@link PlaneFillConnectivity}). The pour polygon connects that copper for the board's
+   * connectivity, so the passes route nothing to it. Each connection runs from a cut-off group to
+   * the net's main group without ripping other connections, and is kept only if its new copper
+   * violates no clearance and the board has fewer cut-off groups afterwards; a connection that cut
+   * off copper of another net elsewhere is undone. Returns the number of connections kept.
+   */
+  int connectPourCutOffs() {
+    int kept = 0;
+    Set<Integer> pourNets = PlaneFillConnectivity.pourNets(this.board);
+    int cutOffCount = PlaneFillConnectivity.cutOffGroupCount(this.board);
+    Set<Integer> failedGroups = new TreeSet<>(); // by the lowest item id of the group
+    boolean progress = cutOffCount > 0;
+    while (progress && !this.thread.isStopRequested()) {
+      progress = false;
+      sweep:
+      for (int netNumber : pourNets) {
+        PlaneFillConnectivity.Result connectivity =
+            PlaneFillConnectivity.analyze(this.board, netNumber);
+        for (Set<Item> group : connectivity.cutOffGroups) {
+          if (this.thread.isStopRequested()) {
+            break sweep;
+          }
+          int groupId = group.iterator().next().getId();
+          if (failedGroups.contains(groupId)) {
+            continue;
+          }
+          long contentVersion = this.board.itemList.getContentVersion();
+          this.board.generateSnapshot();
+          AutorouteAttemptResult result =
+              connectionRouter.routeWithoutRipup(netNumber, group, connectivity.mainGroup);
+          int newCutOffCount =
+              result.state == AutorouteAttemptState.ROUTED
+                  ? PlaneFillConnectivity.cutOffGroupCount(this.board)
+                  : cutOffCount;
+          boolean keep = newCutOffCount < cutOffCount;
+          if (keep || this.board.itemList.getContentVersion() == contentVersion) {
+            this.board.popSnapshot();
+          } else {
+            this.board.undo(null);
+          }
+          if (keep) {
+            cutOffCount = newCutOffCount;
+            kept++;
+            progress = true;
+            break sweep; // the groups of the analysis are out of date
+          }
+          failedGroups.add(groupId);
+        }
+      }
+    }
+    return kept;
+  }
+
+  /**
    * Returns the airline of the current autorouted connection, or null if no such airline exists.
    */
   public FloatLine getAirLine() {
@@ -670,23 +736,6 @@ public final class BatchAutorouter extends NamedAlgorithm {
       return null;
     }
     return this.airLine;
-  }
-
-  /**
-   * Returns the full statistics of the current board, reused until the board is replaced or its
-   * item list, item contents or net assignments change.
-   */
-  BoardStatistics boardStatistics() {
-    long stamp =
-        board.itemList.getVersion()
-            + board.itemList.getContentVersion()
-            + board.getNetAssignmentChangeCount();
-    if (boardStatistics == null || boardStatisticsBoard != board || boardStatisticsStamp != stamp) {
-      boardStatistics = new BoardStatistics(board);
-      boardStatisticsBoard = board;
-      boardStatisticsStamp = stamp;
-    }
-    return boardStatistics;
   }
 
   int calculateIncompleteCount(RoutingBoard board) {

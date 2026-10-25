@@ -28,6 +28,8 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -93,7 +95,8 @@ public class SessionControllerV1 extends BaseController {
 
     // filter the list of sessions to only include the ones that the user has access
     // to
-    var response = GSON.toJson(SessionManager.getInstance().listSessionIds(userId));
+    var response =
+        GSON.toJson(SessionManager.getInstance().listSessionIds(userId, callerApiKeyHash()));
     FRAnalytics.apiEndpointCalled("GET v1/sessions/list", "", response, userId);
     return Response.ok(response).build();
   }
@@ -210,7 +213,7 @@ public class SessionControllerV1 extends BaseController {
     UUID userId = authenticateUser();
 
     // Return one session with the id of sessionId
-    Session session = SessionManager.getInstance().getSession(sessionId, userId);
+    Session session = findOwnedSession(sessionId, userId);
     if (session == null) {
       return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
     } else {
@@ -228,7 +231,7 @@ public class SessionControllerV1 extends BaseController {
    */
   @Operation(
       summary = "Get session logs",
-      description = "Retrieves all log entries associated with a specific routing session.")
+      description = "Retrieves the log entries of the routing jobs of a session, oldest first.")
   @ApiResponses(
       value = {
         @ApiResponse(
@@ -256,13 +259,17 @@ public class SessionControllerV1 extends BaseController {
     UUID userId = authenticateUser();
 
     // Return one session with the id of sessionId
-    Session session = SessionManager.getInstance().getSession(sessionId, userId);
+    Session session = findOwnedSession(sessionId, userId);
     if (session == null) {
       return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
     }
 
-    var logEntries = FRLogger.getLogEntries();
-    var logs = logEntries.getEntries(null, session.id);
+    // Jobs log under their own id: the session's log is the log of the jobs the scheduler keeps.
+    List<UUID> jobIds =
+        Arrays.stream(RoutingJobScheduler.getInstance().listJobs(session.id.toString()))
+            .map(job -> job.id)
+            .toList();
+    var logs = FRLogger.getLogEntries().getEntriesOfTopics(null, jobIds);
 
     var response = GSON.toJson(logs);
     FRAnalytics.apiEndpointCalled("GET v1/sessions/" + sessionId + "/logs", "", response, userId);
@@ -304,7 +311,7 @@ public class SessionControllerV1 extends BaseController {
                   java.util.Map.of("error", "GUI is not running, cannot monitor session visually")))
           .build();
     }
-    Session session = SessionManager.getInstance().getSession(sessionId, userId);
+    Session session = findOwnedSession(sessionId, userId);
     if (session == null) {
       return Response.status(Response.Status.NOT_FOUND)
           .entity(GSON.toJson(java.util.Map.of("error", "Session not found")))

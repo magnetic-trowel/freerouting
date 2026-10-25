@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import app.freerouting.settings.sources.CliSettings;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -167,7 +168,6 @@ class GlobalSettingsCommandLineTest {
     assertEquals("myboard.dsn", settings.initialInputFile);
     assertEquals("myboard.ses", settings.designSessionFilename);
     assertEquals("output.ses", settings.initialOutputFile);
-    assertEquals(10, settings.getMaxPasses());
   }
 
   @Test
@@ -353,6 +353,17 @@ class GlobalSettingsCommandLineTest {
   }
 
   @Test
+  void apiServerFinishedJobLimitsViaCli() {
+    String[] args = {
+      "--api_server.max_finished_jobs=500", "--api_server.max_finished_job_boards=0"
+    };
+    settings.applyCommandLineArguments(args);
+
+    assertEquals(500, settings.apiServerSettings.maxFinishedJobs);
+    assertEquals(0, settings.apiServerSettings.maxFinishedJobBoards);
+  }
+
+  @Test
   @SuppressWarnings("deprecation") // CLI flags write into the JSON/CLI routerSettings bridge.
   void optimizerScoringVersionAcceptsShortNames() {
     assertTrue(settings.setValue("router.optimizer_scoring.version", "v1"));
@@ -365,14 +376,20 @@ class GlobalSettingsCommandLineTest {
   }
 
   @Test
-  @SuppressWarnings("deprecation") // CLI flags write into the JSON/CLI routerSettings bridge.
   void optimizerImprovementThresholdIsAlwaysPercent() {
-    settings.applyCommandLineArguments(
-        new String[] {"--router.optimizer.improvement_threshold=0.5"});
-    assertEquals(0.5f, settings.routerSettings.optimizer.optimizationImprovementThreshold, 0.0001f);
-
-    settings.applyCommandLineArguments(new String[] {"-oit", "0.035"});
     assertEquals(
-        0.035f, settings.routerSettings.optimizer.optimizationImprovementThreshold, 0.0001f);
+        0.5f,
+        new CliSettings(new String[] {"--router.optimizer.improvement_threshold=0.5"})
+            .getSettings()
+            .optimizer
+            .optimizationImprovementThreshold,
+        0.0001f);
+    assertEquals(
+        0.035f,
+        new CliSettings(new String[] {"-oit", "0.035"})
+            .getSettings()
+            .optimizer
+            .optimizationImprovementThreshold,
+        0.0001f);
   }
 }

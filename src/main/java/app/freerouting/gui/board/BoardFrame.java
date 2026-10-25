@@ -37,6 +37,7 @@ import app.freerouting.gui.windows.routing.WindowSelectParameter;
 import app.freerouting.gui.windows.routing.WindowUnconnectedRoute;
 import app.freerouting.gui.windows.routing.WindowVia;
 import app.freerouting.gui.workspace.GuiBoardManager;
+import app.freerouting.gui.workspace.WorkspaceSettings;
 import app.freerouting.gui.workspace.ports.BoardReplacement;
 import app.freerouting.gui.workspace.progress.RatsNest;
 import app.freerouting.gui.workspace.progress.ScreenMessages;
@@ -51,6 +52,7 @@ import app.freerouting.logger.LogEntryType;
 import app.freerouting.management.jobs.RoutingJobScheduler;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
+import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.DsnFileSettings;
 import java.awt.BorderLayout;
@@ -83,6 +85,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.JToolBar;
+import javax.swing.SwingUtilities;
 
 /** Graphical frame containing the Menu, Toolbar, Canvas and Status bar. */
 public class BoardFrame extends WindowBase {
@@ -229,14 +232,14 @@ public class BoardFrame extends WindowBase {
           scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
           scrollPane.setPreferredSize(new Dimension(1000, 600));
 
-          // Append the new log entries to the text area
+          // Append the new log entries to the text area; routing threads log, Swing paints.
           logEntryAddedListener =
               (LogEntry logEntry) -> {
                 var type = logEntry.getType();
                 if (type == LogEntryType.Error
                     || type == LogEntryType.Warning
                     || type == LogEntryType.Info) {
-                  textArea.append(logEntry + "\n");
+                  SwingUtilities.invokeLater(() -> textArea.append(logEntry + "\n"));
                 }
               };
           logEntries.addLogEntryAddedListener(logEntryAddedListener);
@@ -246,8 +249,14 @@ public class BoardFrame extends WindowBase {
                   ? JOptionPane.ERROR_MESSAGE
                   : JOptionPane.WARNING_MESSAGE;
 
-          JOptionPane.showMessageDialog(
-              null, scrollPane, tm.getText("logs_window_title"), messageType);
+          try {
+            JOptionPane.showMessageDialog(
+                null, scrollPane, tm.getText("logs_window_title"), messageType);
+          } finally {
+            // The dialog is modal: once it is closed, its text area must stop growing.
+            logEntries.removeLogEntryAddedListener(logEntryAddedListener);
+            logEntryAddedListener = null;
+          }
         });
 
     // Toolbar for inspected items (e.g. when a component is selected)
@@ -573,18 +582,11 @@ public class BoardFrame extends WindowBase {
           this.settingsMerger.addOrReplaceSources(
               new DsnFileSettings(new ByteArrayInputStream(fileContent), inputFilename));
         }
-        var mergedSettings = this.settingsMerger.merge();
-        int boardLayerCount = board.getLayerCount();
-        if (mergedSettings.getLayerCount() == 0
-            || mergedSettings.getLayerCount() != boardLayerCount) {
-          mergedSettings.setLayerCount(boardLayerCount);
-        }
-        mergedSettings.applyBoardSpecificOptimizations(board);
-        this.routingJob.setSettings(mergedSettings);
-        var interactiveSettings = boardPanel.boardHandling.getWorkspaceSettings();
-        if (interactiveSettings != null) {
-          interactiveSettings.setSettings(mergedSettings);
-        }
+        mergeSettingsForLoadedBoard(
+            this.settingsMerger,
+            this.routingJob,
+            boardPanel.boardHandling.getWorkspaceSettings(),
+            board);
       }
 
       this.boardLoadedEventListeners.forEach(
@@ -593,6 +595,38 @@ public class BoardFrame extends WindowBase {
     }
 
     return readResult instanceof BoardReadResult.OutlineMissing;
+  }
+
+  /**
+   * Merges the router settings for a board that has just been attached to the frame and stores them
+   * in the job.
+   *
+   * <p>The GUI source (priority 65) is emptied before the merge: {@code WorkspaceSettings.reset}
+   * seeds it with the job's settings, which at this point still hold the fully merged settings of
+   * the previously loaded board and would otherwise shadow the new DSN file's settings. After the
+   * merge the GUI source is bound to the job's live settings, exactly as after the initial load, so
+   * parameter-window edits (which write to {@code job.routerSettings}) survive the merge that
+   * starts the autorouter.
+   */
+  static RouterSettings mergeSettingsForLoadedBoard(
+      SettingsMerger merger,
+      RoutingJob job,
+      WorkspaceSettings workspaceSettings,
+      RoutingBoard board) {
+    if (workspaceSettings != null) {
+      workspaceSettings.setSettings(null);
+    }
+    RouterSettings mergedSettings = merger.merge();
+    int boardLayerCount = board.getLayerCount();
+    if (mergedSettings.getLayerCount() == 0 || mergedSettings.getLayerCount() != boardLayerCount) {
+      mergedSettings.setLayerCount(boardLayerCount);
+    }
+    mergedSettings.applyBoardSpecificOptimizations(board);
+    job.setSettings(mergedSettings);
+    if (workspaceSettings != null) {
+      workspaceSettings.setSettings(job.routerSettings);
+    }
+    return mergedSettings;
   }
 
   private void showBoardLoadError(BoardReadResult readResult) {
@@ -1248,7 +1282,7 @@ public class BoardFrame extends WindowBase {
    * @param parent the parent frame for the dialog
    * @return true if loading should proceed, false if cancelled
    */
-  private boolean confirmSaveBeforeLoad(BoardFrame parent) {
+  public boolean confirmSaveBeforeLoad(BoardFrame parent) {
     if (boardPanel == null || boardPanel.boardHandling == null) {
       return true;
     }
@@ -1284,10 +1318,16 @@ public class BoardFrame extends WindowBase {
         if (selectedValue.equals(cancelOption)) {
           return false; // Cancel loading
         } else if (selectedValue.equals(tm.getText("confirm_save_yes"))) {
-          // User wants to save - trigger save dialog via menu action
+          // The user wants to keep the changes: run the regular Save As action and only replace
+          // the board once it was actually saved (a successful save resets the change checksum).
           FRAnalytics.buttonClicked("drop_load_confirm_save", "save");
-          // The actual save would be handled by the file menu save action
-          // For now, we proceed with loading since the user confirmed they want to save
+          try {
+            this.menubar.fileMenu.fileSaveAsMenuitem.doClick();
+            return boardPanel.boardHandling != null && !boardPanel.boardHandling.isBoardChanged();
+          } catch (RuntimeException e) {
+            FRLogger.error("Couldn't save the board before loading another one", e);
+            return false;
+          }
         }
       }
     } catch (Exception e) {

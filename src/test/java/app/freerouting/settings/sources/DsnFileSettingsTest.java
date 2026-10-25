@@ -1,15 +1,25 @@
 package app.freerouting.settings.sources;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.Freerouting;
 import app.freerouting.io.specctra.DsnTestFixtures;
 import app.freerouting.settings.GlobalSettings;
+import app.freerouting.settings.RouterSettings;
+import app.freerouting.settings.SettingsMerger;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class DsnFileSettingsTest {
 
@@ -95,5 +105,52 @@ class DsnFileSettingsTest {
     DsnFileSettings settings = new DsnFileSettings(in, "Issue143-rpi_splitter.dsn");
 
     assertTrue(settings.getSourceName().contains("Issue143-rpi_splitter.dsn"));
+  }
+
+  /**
+   * An {@code (autoroute_settings ...)} scope sets only what it states. It used to force the
+   * optimizer (and the autorouter) on when {@code (postroute ...)} (or {@code (autoroute ...)}) was
+   * absent, which overrode {@code freerouting.json} at DSN priority.
+   */
+  @Test
+  void autorouteSettingsScopeSetsOnlyTheKeywordsItContains(@TempDir Path tempDir)
+      throws IOException {
+    String dsn = withAutorouteSettings("(autoroute_settings (via_costs 60))");
+
+    RouterSettings fromDsn = new DsnFileSettings(stream(dsn), "board.dsn").getSettings();
+    assertEquals(60, fromDsn.getViaCosts());
+    assertNull(fromDsn.optimizer.enabled, "no (postroute ...): the DSN has no optimizer opinion");
+    assertNull(fromDsn.autorouter.enabled, "no (autoroute ...): the DSN has no router opinion");
+
+    Path json = tempDir.resolve("freerouting.json");
+    Files.writeString(json, "{\"router\": {\"optimizer\": {\"enabled\": false}}}");
+    RouterSettings merged =
+        new SettingsMerger(
+                new DefaultSettings(),
+                new JsonFileSettings(json),
+                new DsnFileSettings(stream(dsn), "board.dsn"))
+            .merge();
+    assertFalse(merged.getRunOptimizer(), "freerouting.json disabled the optimizer");
+    assertEquals(60, merged.getViaCosts());
+
+    RouterSettings stated =
+        new DsnFileSettings(
+                stream(
+                    withAutorouteSettings("(autoroute_settings (autoroute off) (postroute on))")),
+                "board.dsn")
+            .getSettings();
+    assertFalse(stated.getRunRouter());
+    assertTrue(stated.getRunOptimizer());
+  }
+
+  private static String withAutorouteSettings(String scope) throws IOException {
+    try (InputStream in = DsnTestFixtures.openResource("Issue413-test.dsn")) {
+      String dsn = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+      return dsn.replaceFirst("\\(structure", "(structure\n    " + scope);
+    }
+  }
+
+  private static InputStream stream(String text) {
+    return new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8));
   }
 }

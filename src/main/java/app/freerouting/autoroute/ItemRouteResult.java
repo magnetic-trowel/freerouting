@@ -143,19 +143,4 @@ public class ItemRouteResult implements Comparable<ItemRouteResult> {
   public int incompleteCountBefore() {
     return incompleteCountBefore;
   }
-
-  /** Returns the same result for another item, including its improved flag. */
-  public ItemRouteResult withItemId(int otherItemId) {
-    ItemRouteResult copy =
-        new ItemRouteResult(
-            otherItemId,
-            viaCountBefore,
-            viaCountAfter,
-            traceLengthBefore,
-            traceLengthAfter,
-            incompleteCountBefore,
-            incompleteCountAfter);
-    copy.improved = this.improved;
-    return copy;
-  }
 }

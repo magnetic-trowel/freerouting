@@ -96,9 +96,35 @@ What changed, in order of measured effect:
   changes used different locks).
 - `ReflectionUtil.copyFields` copies primitive and String arrays instead of sharing them between
   the source and the merged settings.
+- Command-line options and `FREEROUTING__*` environment variables apply to their run only: a GUI
+  save no longer stores them in `freerouting.json` (a one-off
+  `--api_server.authentication.enabled=false` became the default of later headless servers), nor
+  runtime state such as a failed server start or a derived MCP target address. The analytics
+  opt-out is the one value that is kept.
+- The API server keeps at most 200 finished jobs and the routed boards of the newest ones only
+  (twice `max_parallel_jobs`); session eviction never picks the GUI session or one with an active
+  job; the in-memory log keeps at most 20,000 entries (2,000 per job) with bounded exceptions, and
+  drops a job's entries with the job. Before, all of these grew until 5,000 jobs or sessions.
 - `Item.setFixedState` and `unfix` were invisible to the shove-check cache (the content version
   does not count the fixed state), so a cached answer could reflect fixed states that
   `DirectPinRouting` had already restored.
+- A pass that throws no longer ends the loop on whatever state the exception left: the board the
+  pass started from is restored and the loop stops with the reason ERROR.
+- A stub joining a found connection to a trace has the width of that trace's layer (it had the
+  other end's layer width).
+- Board copies (`deepCopy`, `BoardImage`) keep the transient baseline of pre-existing clearance
+  violations. Without it a fallback continuation counted the input's violations as new (Issue313:
+  "40 new violations (40 total)") and could never replace the incumbent.
+- The zone-island DRC finds islands by containment depth and merges the band contours that
+  `java.awt.geom.Area` cuts one region into. The old contour-by-contour merge was quadratic (the
+  reload DRC of tairakb ran for over 30 minutes, now 14 s) and counted one pour as several islands
+  (wavefolder: 114 dead-copper islands, now 0). Thermal spokes of same-net vias now reach the pour,
+  and pour fills are clipped to the board outline.
+- The DRC of a DSN plus SES no longer doubles the design's own wiring (the session carries it too),
+  merges the router settings before loading (copper-to-edge and hole-clearance overrides), applies
+  the via rule to session vias on SMD pads, and reads v2.5.0 via padstack names. Hole-clearance
+  counts after reload now equal the input's and the router's (Mars-64 194 to 64, RelayModule 44 to
+  0).
 
 ## Measured and not adopted
 
@@ -121,6 +147,20 @@ and 716 vias (-7%); BBD Mars-64 reached 1 open connection but hit the 15-minute 
 ran under heavier machine load than the others, so its times are not comparable. A paired campaign
 on 21 further boards is in progress; the change is not adopted until it completes.
 
+Maze door tie-break (`MazeListElement.compareTo` returned 0 for distinct doors whose hash-like ids
+collide at equal cost, so the expansion set dropped one): with insertion order as the last
+tie-break, 8 of 9 easy boards change, all still complete, vias +11 (+3%), length -0.9% to +2.1%.
+Held on a local branch until the boards with open connections are measured.
+
+Dropping the `clearance_safety_margin` from the path locators (it makes bm06's default pass loop
+stall, so the fallback chain runs 92 passes instead of 7): bm06 converges in 8 passes, but over 10
+boards vias go from 414 to 427. Not adopted.
+
+Checking each optimizer commit for clearance as it lands, instead of dropping commits from the end
+at pass end: the drop path never fired in 30 optimizer runs. Reusing an optimizer candidate's
+result in the next pass when its region is unchanged: not possible as stated, because passes
+alternate the preferred-direction setting.
+
 ## Confirmed bugs that remain open
 
 Security (described only as far as needed to fix them):
@@ -128,8 +168,6 @@ Security (described only as far as needed to fix them):
 - MCP local-file tools and the `file_path` field of `/v1/autoroute` read and write paths chosen by
   the client, guarded only by a short denylist. An allowlisted root resolved with `toRealPath`, a
   size cap and loopback-only enablement are needed.
-- `POST /v1/jobs/enqueue` builds the whole `RoutingJob` from client JSON, including fields the
-  server should own. A request DTO with an explicit field list is needed.
 
 Geometry and DRC:
 
@@ -137,13 +175,16 @@ Geometry and DRC:
   lose area, and a keepout with a `(window ...)` lost 57% of its coverage in one repro, so traces
   route through solid keepout and DRC does not see it. The first-division-line merge is the main
   cause; limiting it to corners that start a ray cut the failure rate from 954 to 79 in 50,000 pairs,
-  so a complete fix needs a rework with property tests. A coverage check with a conservative
-  fallback is safe for keepouts but would mark plane windows as copper.
-- `MazeListElement.compareTo` returns 0 for distinct doors whose hash-like ids collide
-  (`ExpansionDoor.getId` is `min * 31 + max`) and whose costs are exactly equal, and the TreeSet then
-  drops one of them.
-- `FoundConnectionInserter.connectToTrace` builds the stubs with the other end's layer width; only
-  boards with per-layer widths are affected.
+  so a complete fix needs a rework with property tests. Fixed on this branch: the division's
+  result is checked (no overlap with the cut shape or between pieces, areas add up) and an exact
+  half-plane sweep replaces it when the check fails; the fuzz harness then finds no failure at any
+  coordinate scale. Only Issue756 tomu-fpga8/9 have areas with holes in the fixtures, and both
+  route to identical session files.
+- Plane nets: an item counts as connected (CONNECTED_TO_PLANE) as soon as its connected set touches
+  the pour polygon, but foreign-net tracks routed through the pour can cut it off from the actual
+  fill. On tairakb pad U3-23 ends up connected to neither GND pour and nothing reports it.
+- The zone-island DRC checks connectivity per layer, so an island reached through a through-hole
+  pin or via on another layer is reported as unconnected.
 - `PolygonShape.contains(FloatPoint)` rejects interior points on its convex-split seams, and
   `contains` means border-inclusive on octagons and circles but border-exclusive on simplices and
   boxes.
@@ -155,19 +196,88 @@ Optimizer and scoring:
   (Camera-Modules LG-G2 shim, induction-hob temperature sensor).
 - Commits are only checked for clearance at pass end; one violating commit makes the drop loop revert
   every later, clean commit.
-- Optimizer candidates share the job's stop flag; a nested router that reaches `max_items` stops the
-  whole optimizer, and in-flight candidates are then counted as not improved.
+- A nested optimizer router that reaches `max_items` calls `requestStop()` on the shared job thread
+  (`AutoroutePassRunner.java:119`) and stops the whole job. The interrupted pass now commits nothing
+  instead of a winner from a cut-off candidate set.
 
 Pipeline and jobs:
 
-- An exception in a pass is logged and treated as "nothing left to route", so the job reports
-  COMPLETED with open connections.
+- The routing fallback chain runs up to five more full pass loops after a stalled default loop:
+  bm06 takes 92 passes (7 in v2.5.0, 3x the CPU) although each pass is faster than in v2.5.0.
+  Trying `short-escape` first halves that with identical output on bm06, Issue313 and Issue367,
+  but changes which strategy wins elsewhere.
 - `router.fanout.timeout` hands the partially fanned-out board to the autorouter, so the routing
   depends on machine speed when that timeout is set.
-- Finished jobs keep their board, input and output until 5000 jobs exist; session eviction at 5000
-  picks an arbitrary session, possibly one with a running job.
-- CLI router arguments given at a GUI launch are written into `freerouting.json` and apply to every
-  later CLI and API run.
+- `GET /v1/sessions/{id}/logs` is always empty: nothing logs with a session id as topic.
+- A log listener that throws propagates into the thread that logged, possibly a routing thread.
+- `GlobalSettings.setDefaultValue` edits a fresh copy of the file, so the long-lived session copy
+  overwrites it at its next save for paths the command line did not set; floats are rounded to two
+  decimals when the settings are saved.
+- The router reports a connection ROUTED without checking that the inserted path reaches its
+  target (`AutorouteEngine.autorouteConnection`); off-centre fixed track ends made this loop
+  silently on caniot.
+
+## Second red-team round (October 2026)
+
+Nine red-team reviews covered the autorouter, the optimizer, geometry, DRC, file formats, settings,
+the REST and MCP servers, the GUI and concurrency. Fixed on this branch from that round: the GUI
+file-dialog and settings-reload defects, the rules-file precedence and settings parsing defects,
+the REST and MCP request hardening, the optimizer's leftover candidates and cut-off passes, and
+the DRC report order, `-drc` post-load race and pin and via shape-cache publication.
+
+No routing nondeterminism was found: SES files were byte-identical for `-mt 1` against `-mt 3`
+(bm02, Green14SegLED and tairakb, with optimizer commits) and across G1, Serial and Parallel GC and
+`-XX:hashCode=2`. A brute-force clearance checker (exact distances between every pair of tree
+shapes) agrees with `DesignRulesChecker.getAllClearanceViolations()` on 9 routed boards and two
+synthetic boards built to sit just below and above each clearance.
+
+Open, by area:
+
+- **SES reload drops wires.** `SesPathGeometry.crossingLines` rejects wires whose corners have
+  fractional coordinates and `SesReader.processWireScope` drops the whole wire: 38 of 354 wires on
+  Issue209-split05 and 14 of 406 on Issue297-myboard. The reload DRC's unconnected count is
+  inflated on those boards.
+- **Geometry.** `Polyline.offsetShapes` can cut real copper out of a trace's tree shapes when the
+  polyline winds back or turns the other way (11-15 of 20,000 random polylines);
+  `Line.sideOfIntersection` misjudges near-collinear corners at coordinates around 1e6-1e7. A
+  candidate fix for both exists and keeps the SES on four boards so far, but it changes tree
+  shapes and needs the full before/after protocol. `IntOctagon` normalized octagons can have
+  half-integer vertices, and `IntOctagon.cutoutFrom(IntBox)` returns overlapping pieces (no area
+  lost).
+- **Board load.** `Issue208-freerouting.dsn` takes 12-34 s and 3.2-3.8 GB of allocation to load:
+  48 keepout circles of 501 mm are tiled over their whole bounding box into 393,648 tree shapes.
+- **Units.** `BoardStatistics` lengths in "mm" ignore the board resolution (10x off on a um-10
+  board, 1000x on mil-1000); the optimizer compares against the same scaling, so both must change
+  together. `router.trace_pull_tight_accuracy` is in board units (500 means 0.5 um to 50 um
+  depending on the board). Outline strips use 100 board units whatever the resolution.
+- **Optimizer.** The "all vias are mandatory layer transitions" guard is vacuously true when every
+  via is user fixed and skips the optimizer whatever the trace length (Issue093-interf_u); a fix
+  measured 0.88 mm shorter traces for 33 s more CPU on interf_u and is held for a wider campaign.
+  The clearance veto counts violations, duplicate candidates are re-routed serially, and the
+  Manhattan length bound is not a lower bound on 45-degree boards.
+- **Autorouter state.** `RoutingBoard.failureLog` is never cleared and is copied with the board,
+  so continuations, exploration, optimizer candidates and GUI re-runs start with earlier failure
+  counts. The final tail cleanup is skipped whenever the loop stops on its own criterion. The
+  result manifest describes the last fallback attempt, not the chosen one, and `phases.fallback`
+  is never filled. The board-rank stagnation stop can never fire.
+- **Settings.** Floats and doubles are written with two decimals by the shared Gson (settings file,
+  KiCad JSON, DRC JSON, API responses); the `logging.*` section of `freerouting.json` is ignored;
+  a log file location given by environment variable also becomes the user-data directory; the
+  documented fanout `pin_sorting_order` values do not match the code.
+- **REST and MCP.** Failed API-key attempts are not throttled, each connected SSE client holds a
+  thread, and an API key is not bound to a profile (ownership trusts the profile header).
+- **Planes.** A trace that reconnects a pad cut off from the fill closes a cycle through the pour
+  polygon and is deleted again by trace normalization, so a repair needs connectivity through fill
+  islands. The check that a ROUTED connection reaches its target fires on 56-66% of connections
+  when run inside `AutorouteEngine`, which points to the following `optChangedArea` step.
+- **Memory.** The printed "peak heap usage" is heap occupancy including garbage, 3-10x the live
+  set (TeamAdapt: about 69 MB live against 311-342 MB printed). No leak between jobs was found.
+- **Output cost.** Headless runs write the SES plus a full DSN (for its checksum) on the routing
+  thread every 10 s in CLI mode and on every board update with the API server running; not yet
+  measured.
+
+The experiment packages under `docs/research/experiments/` turn the measurable ideas from this
+round into ready-to-run campaigns.
 
 ## Opportunities, ranked by expected value
 
@@ -183,6 +293,7 @@ Result-preserving:
 2. Run the routing-fallback alternatives in parallel and fold the results in strategy order. All
    alternatives start from the same input bytes; the fold is the existing sequence of `replaces()`
    and stop checks. Blockers: shared `RoutingJob` fields and the global `PerformanceProfiler`.
+   bm06 spends 61% of its job in four sequential fallback pass loops.
 3. Parallel read-only analysis at quiescent points (full DRC, incomplete counts, the integer parts of
    `BoardStatistics`), merged in item order. Lazy caches written during reads (`Pin`/`Via` shape
    arrays, `Item.getPrecalculatedTreeShapes`, `BoardOutline.getEdgePinNets`) must be made

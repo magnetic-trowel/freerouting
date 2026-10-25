@@ -38,17 +38,6 @@ public class FanoutSettings implements Serializable, Cloneable {
   public Integer maxItems;
 
   /**
-   * Base time budget (in milliseconds) that each individual SMD pin may consume in pass 1. The
-   * budget scales linearly with the pass number so that later, harder passes are given
-   * proportionally more time: {@code effectiveLimit = maxMillisecondsPerPin * passNumber}.
-   *
-   * <p>Reducing this value speeds up fanout on simple boards at the cost of fewer escape attempts
-   * per pin per pass.
-   */
-  @SerializedName("max_milliseconds_per_pin")
-  public Long maxMillisecondsPerPin;
-
-  /**
    * Whether the fanout router is allowed to rip up and re-route existing traces in order to make
    * room for a new escape via. When {@code false} fanout runs without any ripup, which is faster
    * but may leave more pins un-escaped on congested boards.
@@ -87,9 +76,10 @@ public class FanoutSettings implements Serializable, Cloneable {
   public Double endViaDiameterMm;
 
   /**
-   * The sorting order for SMD pins within a component. "inner_first" (v1.9 default) - pins closer
-   * to the component center first. "outer_first" - pins further from the component center first.
-   * "unsorted" - sorted by pin number only.
+   * The sorting order for SMD pins within a component: "outer_first" (default), "inner_first" (v1.9
+   * default), "distance_to_closest_on_net", "surroundings_density" or "unsorted" (pin number only).
+   * Case, "_" and "-" are ignored, so the older camelCase spellings still work; see
+   * docs/settings.md.
    */
   @SerializedName("pin_sorting_order")
   public String pinSortingOrder;

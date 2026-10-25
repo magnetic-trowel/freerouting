@@ -1,0 +1,10 @@
+# E01 variants. 'head' is the jar built from d4383b44 + patch.diff (pass --head-commit d4383b44
+# --head-patch <this directory>/patch.diff, or --head-jar with a jar built that way).
+# The switches default to true; the control turns both off and is byte-identical to plain head.
+control head -Dfreerouting.exp.wire_snap=false -Dfreerouting.exp.final_tail_cleanup=false
+a_snap  head -Dfreerouting.exp.wire_snap=true  -Dfreerouting.exp.final_tail_cleanup=false
+b_tail  head -Dfreerouting.exp.wire_snap=false -Dfreerouting.exp.final_tail_cleanup=true
+ab      head -Dfreerouting.exp.wire_snap=true  -Dfreerouting.exp.final_tail_cleanup=true
+# Optional checks (uncomment; each adds one arm of cost):
+# plain   jars/E01-plain.jar
+# ab_rerun head -Dfreerouting.exp.wire_snap=true -Dfreerouting.exp.final_tail_cleanup=true

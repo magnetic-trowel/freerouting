@@ -7,7 +7,9 @@ import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.board.searchtree.ShapeSearchTree;
+import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.geometry.planar.Area;
+import app.freerouting.geometry.planar.AwtAreas;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntPoint;
@@ -17,6 +19,9 @@ import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.geometry.planar.Vector;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.util.TextManager;
+import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
@@ -41,6 +46,10 @@ public class ConductionArea extends ObstacleArea implements Connectable {
 
   private transient int cachedBoardRevision = -1;
   private transient java.awt.geom.Area cachedBoardFillArea;
+
+  private transient int cachedIslandsRevision = -1;
+  private transient List<java.awt.geom.Area> cachedFillIslands;
+  private transient List<java.awt.geom.Rectangle2D> cachedFillIslandBounds;
 
   /** Creates a new instance of ConductionArea. */
   public ConductionArea(
@@ -78,6 +87,9 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     super.clearDerivedData();
     this.cachedBoardRevision = -1;
     this.cachedBoardFillArea = null;
+    this.cachedIslandsRevision = -1;
+    this.cachedFillIslands = null;
+    this.cachedFillIslandBounds = null;
   }
 
   /** Pre-computes detailed plane-fill geometry off the EDT so zoom-in paints stay responsive. */
@@ -85,17 +97,104 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     if (!this.isFilled) {
       return;
     }
-    int layerIndex = this.getLayer();
+    ensureDetailedFillCache(maxClearanceLookup(), this.getLayer());
+  }
+
+  /** The distance around the area within which other items can reduce its fill. */
+  private double maxClearanceLookup() {
     double maxClearanceLookupBoard = 2000.0 * this.board.communication.getResolution(Unit.UM);
     if (this.board.rules != null && this.board.rules.clearanceMatrix != null) {
       double maxMatrixClearance =
-          this.board.rules.clearanceMatrix.maxValue(this.clearanceClassIndex(), layerIndex);
+          this.board.rules.clearanceMatrix.maxValue(this.clearanceClassIndex(), this.getLayer());
       maxClearanceLookupBoard =
           Math.max(
               maxClearanceLookupBoard,
               maxMatrixClearance + 100.0 * this.board.communication.getResolution(Unit.UM));
     }
-    ensureDetailedFillCache(maxClearanceLookupBoard, layerIndex);
+    return maxClearanceLookupBoard;
+  }
+
+  /**
+   * Returns the copper of this area that connects the items of its net: {@link
+   * #getDetailedFillArea()} without the clearances to the pours of other nets. The design file does
+   * not give pour priorities, and with each of two overlapping pours cleared from the other, the
+   * smaller one (a teardrop, or a local zone on a plane) has no copper left. Computed on every
+   * call.
+   */
+  public java.awt.geom.Area getConnectingFill() {
+    return computeFill(maxClearanceLookup(), this.getLayer(), false);
+  }
+
+  /** Returns true for a pour: a conduction area that does not belong to a component. */
+  public boolean isPour() {
+    return this.getComponentId() <= 0;
+  }
+
+  /**
+   * Returns true if this area joins the two points through its copper: an area of a component
+   * wherever they lie in it, a pour only if one island of its fill contains both ({@link
+   * #fillIslandsMetBy}).
+   */
+  public boolean joins(Point first, Point second) {
+    if (!isPour()) {
+      return true;
+    }
+    BitSet firstIsland = new BitSet();
+    setFillIslandAt(first, firstIsland);
+    if (firstIsland.isEmpty()) {
+      return false;
+    }
+    BitSet secondIsland = new BitSet();
+    setFillIslandAt(second, secondIsland);
+    return firstIsland.equals(secondIsland);
+  }
+
+  /**
+   * Returns the indices of the islands of {@link #getConnectingFill()} that the item meets: those
+   * that contain its drill centre or one of its trace ends. These are the points at which {@link
+   * #getNormalContacts()} connects an item to this area, so the area joins two of its contacts
+   * through its copper exactly if they meet a common island.
+   */
+  public BitSet fillIslandsMetBy(Item item) {
+    BitSet result = new BitSet();
+    if (!item.sharesLayer(this)) {
+      return result;
+    }
+    if (item instanceof DrillItem drillItem && drillItem.getCenter() != null) {
+      setFillIslandAt(drillItem.getCenter(), result);
+    } else if (item instanceof Trace trace) {
+      setFillIslandAt(trace.firstCorner(), result);
+      setFillIslandAt(trace.lastCorner(), result);
+    }
+    return result;
+  }
+
+  /**
+   * Sets the index of the island of {@link #getConnectingFill()} that contains the point, if one
+   * does. The islands are computed again only after a change of the board that can change the fill:
+   * the traces of the area's own net leave it unchanged.
+   */
+  void setFillIslandAt(Point point, BitSet islands) {
+    int fillRevision =
+        this.netCount() > 0
+            ? this.board.revisionIgnoringTracesOf(this.getNetNumber(0))
+            : this.board.getRevision();
+    if (cachedFillIslands == null || cachedIslandsRevision != fillRevision) {
+      cachedFillIslands = DesignRulesChecker.decomposeAreaIntoIslands(getConnectingFill());
+      cachedFillIslandBounds = new ArrayList<>(cachedFillIslands.size());
+      for (java.awt.geom.Area island : cachedFillIslands) {
+        cachedFillIslandBounds.add(island.getBounds2D());
+      }
+      cachedIslandsRevision = fillRevision;
+    }
+    FloatPoint floatPoint = point.toFloat();
+    for (int i = 0; i < cachedFillIslands.size(); i++) {
+      if (cachedFillIslandBounds.get(i).contains(floatPoint.x, floatPoint.y)
+          && cachedFillIslands.get(i).contains(floatPoint.x, floatPoint.y)) {
+        islands.set(i);
+        return; // the islands do not overlap
+      }
+    }
   }
 
   /**
@@ -123,10 +222,34 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     if (cachedBoardFillArea != null && !boardChanged) {
       return;
     }
+    cachedBoardFillArea = computeFill(maxClearanceLookupBoard, layerIndex, true);
+    cachedBoardRevision = this.board.getRevision();
+  }
 
+  /**
+   * Computes the fill on {@code layerIndex}: as drawn ({@link #getDetailedFillArea()}), or as it
+   * connects ({@link #getConnectingFill()}), without clearances to other pours.
+   */
+  private java.awt.geom.Area computeFill(
+      double maxClearanceLookupBoard, int layerIndex, boolean asDrawn) {
     java.awt.geom.Area fillArea = getAwtAreaInBoardUnits(this.getArea());
     if (fillArea == null) {
       fillArea = new java.awt.geom.Area();
+    }
+    // Pours are filled only on the board. Zone outlines may extend past the board edge (KiCad
+    // exports them that way); unclipped, the part outside the edge becomes an off-board frame.
+    var outline = this.board.getOutline();
+    if (!fillArea.isEmpty() && outline != null && outline.shapeCount() > 0) {
+      java.awt.geom.Area boardArea = new java.awt.geom.Area();
+      for (int i = 0; i < outline.shapeCount(); i++) {
+        java.awt.geom.Area outlinePiece = getAwtAreaFromShapeInBoardUnits(outline.getShape(i));
+        if (outlinePiece != null) {
+          boardArea.exclusiveOr(outlinePiece);
+        }
+      }
+      if (!boardArea.isEmpty()) {
+        fillArea.intersect(boardArea);
+      }
     }
     if (!fillArea.isEmpty()) {
       IntBox bbox = this.boundingBox();
@@ -155,6 +278,11 @@ public class ConductionArea extends ObstacleArea implements Connectable {
             continue;
           }
         }
+        if (!asDrawn
+            && currentItem instanceof ConductionArea
+            && currentItem.getComponentId() <= 0) {
+          continue;
+        }
 
         int clClass1 = this.clearanceClassIndex();
         int clClass2 = currentItem.clearanceClassIndex();
@@ -174,9 +302,14 @@ public class ConductionArea extends ObstacleArea implements Connectable {
               continue;
             }
 
+            // The spokes must cross the whole clearance ring to reach the pour; along a diagonal
+            // that is the distance to the farthest corner of the item, not its half width.
             IntBox itemBbox = drillItem.boundingBox();
-            double maxDim = Math.max(itemBbox.width(), itemBbox.height());
-            double expansionRadiusBoard = (maxDim / 2.0) + clearanceDist;
+            double reachX =
+                Math.max(Math.abs(itemBbox.ll.x - center.x), Math.abs(itemBbox.ur.x - center.x));
+            double reachY =
+                Math.max(Math.abs(itemBbox.ll.y - center.y), Math.abs(itemBbox.ur.y - center.y));
+            double expansionRadiusBoard = Math.hypot(reachX, reachY) + clearanceDist + 1;
 
             double halfSpoke = spokeWidth / 2.0;
             java.awt.geom.Rectangle2D.Double baseSpoke =
@@ -228,18 +361,20 @@ public class ConductionArea extends ObstacleArea implements Connectable {
         }
       }
 
-      for (java.awt.geom.Area fa : foreignClearances) {
-        fillArea.subtract(fa);
+      // Spokes go in before the foreign clearances come out, and stay inside the pour, so that a
+      // spoke never bridges copper into the clearance of another net or past the pour outline.
+      // Each list is merged first and applied once: one operation per item re-sweeps the whole
+      // growing fill every time, which took minutes on pours with thousands of clearances.
+      java.awt.geom.Area pourOutline =
+          sameNetSpokesList.isEmpty() ? null : new java.awt.geom.Area(fillArea);
+      AwtAreas.subtractAll(fillArea, sameNetClearances);
+      if (pourOutline != null) {
+        fillArea.add(AwtAreas.unionAll(sameNetSpokesList));
+        fillArea.intersect(pourOutline);
       }
-      for (java.awt.geom.Area sa : sameNetClearances) {
-        fillArea.subtract(sa);
-      }
-      for (java.awt.geom.Area sp : sameNetSpokesList) {
-        fillArea.add(sp);
-      }
+      AwtAreas.subtractAll(fillArea, foreignClearances);
     }
-    cachedBoardFillArea = fillArea;
-    cachedBoardRevision = this.board.getRevision();
+    return fillArea;
   }
 
   private static java.awt.geom.Area getAwtAreaInBoardUnits(Area area) {

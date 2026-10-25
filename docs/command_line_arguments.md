@@ -151,10 +151,10 @@ Below is a comprehensive list of command-line options available in Freerouting, 
   Enables or disables file logging. Default is `true`.
 
 - **`--logging.file.level=[level]`**
-  Sets the file logging level. Default is `INFO`.
+  Sets the file logging level. Default is `DEBUG`.
 
-- **`--logging.file.location=[directory]`**
-  Defines the directory where `freerouting.log` is stored.
+- **`--logging.file.location=[directory or file]`**
+  Defines the directory where `freerouting.log` is stored, or the log file itself when the path ends in `.log`.
 
 - **`-dl`** (Legacy)
   Disables **file** logging. Equivalent to `--logging.file.enabled=false`.
@@ -174,7 +174,7 @@ Below is a comprehensive list of command-line options available in Freerouting, 
     - **Linux / POSIX:** `$XDG_CONFIG_HOME/freerouting` (default `~/.config/freerouting`)
   - Format constraint: Must use the `--user_data_path=path` syntax with an equals sign.
   - If the directory does not exist when Freerouting starts, it is created automatically on the first write (e.g. when `freerouting.json` is saved for the first time). A warning is printed to stderr if the initial `mkdirs()` attempt fails; the path is still registered and the directory will be created later.
-  - This option takes priority over the `FREEROUTING__USER_DATA_PATH` environment variable and over `FREEROUTING__LOGGING__FILE__LOCATION`.
+  - This option takes priority over the `FREEROUTING__USER_DATA_PATH` environment variable and over `FREEROUTING__LOGGING__FILE__LOCATION` (a deprecated fallback that sets the user data path to the directory of the log location).
 
 - **`-help`**
   Displays help information and exits.

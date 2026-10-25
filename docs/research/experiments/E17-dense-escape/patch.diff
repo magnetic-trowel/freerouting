@@ -1,0 +1,468 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+index 4a0812e2..862284b4 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+@@ -155,6 +155,9 @@ final class AutorouteBatchLoop {
+                 + " netless, "
+                 + ignoredSmdPins
+                 + " ignored).");
++        if (DenseEscape.ENABLED) {
++          job.logInfo(DenseEscape.describe(DenseEscape.run(router.board, router.thread)));
++        }
+         BatchFanout.FanoutRunSummary fanoutSummary =
+             BatchFanout.fanoutBoard(
+                 router.board,
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/DenseEscape.java b/src/main/java/app/freerouting/autoroute/pipeline/DenseEscape.java
+new file mode 100644
+index 00000000..cd55a44c
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/pipeline/DenseEscape.java
+@@ -0,0 +1,372 @@
++package app.freerouting.autoroute.pipeline;
++
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Pin;
++import app.freerouting.board.model.structure.FixedState;
++import app.freerouting.board.model.structure.Unit;
++import app.freerouting.core.library.Padstack;
++import app.freerouting.datastructures.Stoppable;
++import app.freerouting.geometry.planar.FloatPoint;
++import app.freerouting.geometry.planar.IntBox;
++import app.freerouting.geometry.planar.IntPoint;
++import app.freerouting.geometry.planar.Point;
++import app.freerouting.logger.FRLogger;
++import app.freerouting.rules.Net;
++import app.freerouting.rules.NetClass;
++import app.freerouting.rules.ViaInfo;
++import app.freerouting.rules.ViaRule;
++import java.util.ArrayList;
++import java.util.Comparator;
++import java.util.List;
++import java.util.Locale;
++import java.util.Map;
++import java.util.Set;
++import java.util.TreeMap;
++
++/**
++ * Prototype of the dense-escape pre-pass (experiment E17), switched on with the JVM system property
++ * {@value #PROPERTY}. For every fine-pitch peripheral part (all pins on the four sides of the
++ * bounding box of the pin centres) it places a short straight stub and a via in front of each pin
++ * that needs to leave its layer, in a staggered two-row pattern, before the fanout stage. Only free
++ * space is used: an escape whose new items have any clearance violation is undone.
++ *
++ * <p>The pass is a fixed sequence of geometric checks without maze search or time limit, so it is
++ * deterministic and independent of the time budget. Area arrays (BGA) and inside escapes are not
++ * part of the prototype.
++ */
++final class DenseEscape {
++
++  static final String PROPERTY = "freerouting.exp.dense_escape";
++  static final boolean ENABLED = Boolean.getBoolean(PROPERTY);
++
++  private static final String PATTERN =
++      System.getProperty(PROPERTY + ".pattern", "stagger").trim().toLowerCase(Locale.ROOT);
++  private static final double FINE_PITCH_UM =
++      Double.parseDouble(System.getProperty(PROPERTY + ".fine_pitch_um", "650"));
++  private static final int MIN_PINS = Integer.getInteger(PROPERTY + ".min_pins", 16);
++  private static final double MAX_ESCAPE_UM =
++      Double.parseDouble(System.getProperty(PROPERTY + ".max_escape_um", "3000"));
++
++  /** Counts of one run. */
++  record Summary(int components, int candidates, int escaped, int failed) {}
++
++  /** A side of a peripheral part, with its outward normal. */
++  enum Side {
++    W(-1, 0),
++    S(0, -1),
++    E(1, 0),
++    N(0, 1);
++
++    final int nx;
++    final int ny;
++
++    Side(int nx, int ny) {
++      this.nx = nx;
++      this.ny = ny;
++    }
++  }
++
++  private DenseEscape() {}
++
++  /** Runs the pre-pass on {@code board}; the stop request of {@code thread} ends it early. */
++  static Summary run(RoutingBoard board, Stoppable thread) {
++    final double unitsPerUm = board.communication.getResolution(Unit.UM);
++    Map<Integer, List<Pin>> pinsByComponent = new TreeMap<>();
++    for (Pin pin : board.getSmdPins()) {
++      if (pin.netCount() == 1 && !pin.hasIgnoredNets()) {
++        pinsByComponent.computeIfAbsent(pin.getComponentId(), k -> new ArrayList<>()).add(pin);
++      }
++    }
++    List<List<Pin>> parts = new ArrayList<>();
++    for (List<Pin> pins : pinsByComponent.values()) {
++      if (pins.size() >= MIN_PINS) {
++        parts.add(pins);
++      }
++    }
++    // Largest parts first, then component id (the order of BatchFanout).
++    parts.sort(
++        Comparator.comparingInt((List<Pin> pins) -> -pins.size())
++            .thenComparingInt(pins -> pins.get(0).getComponentId()));
++    int components = 0;
++    int candidates = 0;
++    int escaped = 0;
++    int failed = 0;
++    for (List<Pin> pins : parts) {
++      List<FloatPoint> centres = new ArrayList<>(pins.size());
++      for (Pin pin : pins) {
++        centres.add(pin.getCenter().toFloat());
++      }
++      double pitch = minPitch(centres);
++      if (pitch / unitsPerUm > FINE_PITCH_UM) {
++        continue;
++      }
++      List<SidePin> sidePins = classify(pins, pitch);
++      if (sidePins == null) {
++        continue;
++      }
++      components++;
++      for (SidePin sidePin : sidePins) {
++        if (thread != null && thread.isStopRequested()) {
++          return new Summary(components, candidates, escaped, failed);
++        }
++        if (!needsEscape(board, sidePin.pin, pitch)) {
++          continue;
++        }
++        candidates++;
++        if (escape(board, sidePin, unitsPerUm)) {
++          escaped++;
++        } else {
++          failed++;
++        }
++      }
++    }
++    return new Summary(components, candidates, escaped, failed);
++  }
++
++  /** A pin with its side and its index along the side. */
++  record SidePin(Pin pin, Side side, int index) {}
++
++  /**
++   * Assigns every pin to a side of the bounding box of the pin centres, or returns null when some
++   * pin lies inside (not a peripheral part). Pins are returned by side W, S, E, N and by position
++   * along the side, ties by pin index.
++   */
++  static List<SidePin> classify(List<Pin> pins, double pitch) {
++    double minX = Double.MAX_VALUE;
++    double minY = Double.MAX_VALUE;
++    double maxX = -Double.MAX_VALUE;
++    double maxY = -Double.MAX_VALUE;
++    for (Pin pin : pins) {
++      FloatPoint c = pin.getCenter().toFloat();
++      minX = Math.min(minX, c.x);
++      minY = Math.min(minY, c.y);
++      maxX = Math.max(maxX, c.x);
++      maxY = Math.max(maxY, c.y);
++    }
++    double tolerance = pitch / 2;
++    Map<Side, List<Pin>> bySide = new TreeMap<>();
++    for (Pin pin : pins) {
++      FloatPoint c = pin.getCenter().toFloat();
++      List<Side> sides = new ArrayList<>();
++      if (c.x - minX <= tolerance) {
++        sides.add(Side.W);
++      }
++      if (c.y - minY <= tolerance) {
++        sides.add(Side.S);
++      }
++      if (maxX - c.x <= tolerance) {
++        sides.add(Side.E);
++      }
++      if (maxY - c.y <= tolerance) {
++        sides.add(Side.N);
++      }
++      if (sides.isEmpty()) {
++        return null;
++      }
++      Side side = sides.get(0);
++      if (sides.size() > 1) {
++        IntBox pad = pin.boundingBox();
++        boolean wide = pad.width() >= pad.height();
++        for (Side candidate : sides) {
++          if ((candidate.nx != 0) == wide) {
++            side = candidate;
++            break;
++          }
++        }
++      }
++      bySide.computeIfAbsent(side, k -> new ArrayList<>()).add(pin);
++    }
++    List<SidePin> result = new ArrayList<>();
++    for (Map.Entry<Side, List<Pin>> entry : bySide.entrySet()) {
++      Side side = entry.getKey();
++      List<Pin> sidePins = entry.getValue();
++      sidePins.sort(
++          Comparator.comparingDouble(
++                  (Pin pin) ->
++                      side.nx != 0 ? pin.getCenter().toFloat().y : pin.getCenter().toFloat().x)
++              .thenComparingInt(Pin::getPinIndex));
++      for (int i = 0; i < sidePins.size(); i++) {
++        result.add(new SidePin(sidePins.get(i), side, i));
++      }
++    }
++    return result;
++  }
++
++  /**
++   * True when the pin is not yet connected off its layer, has unconnected items on its net, and the
++   * nearest other pin of its net is farther than three pitches.
++   */
++  private static boolean needsEscape(RoutingBoard board, Pin pin, double pitch) {
++    if (pin.firstLayer() != pin.lastLayer()) {
++      return false;
++    }
++    int net = pin.getNetNumber(0);
++    Net rulesNet = board.rules.nets.get(net);
++    if (rulesNet == null || viaInfo(rulesNet) == null) {
++      return false;
++    }
++    int layer = pin.firstLayer();
++    for (Item item : pin.getConnectedSet(net)) {
++      if (item.firstLayer() != layer || item.lastLayer() != layer) {
++        return false;
++      }
++    }
++    Set<Item> unconnected = pin.getUnconnectedSet(net);
++    if (unconnected.isEmpty()) {
++      return false;
++    }
++    FloatPoint centre = pin.getCenter().toFloat();
++    double limit = 3 * pitch;
++    for (Item item : unconnected) {
++      if (item instanceof Pin other && other.getCenter().toFloat().distance(centre) <= limit) {
++        return false;
++      }
++    }
++    return true;
++  }
++
++  private static ViaInfo viaInfo(Net net) {
++    NetClass netClass = net.getNetClass();
++    ViaRule viaRule = netClass != null ? netClass.getViaRule() : null;
++    if (viaRule == null || viaRule.viaCount() == 0) {
++      return null;
++    }
++    return viaRule.getVia(0);
++  }
++
++  /** Tries the escape distances of the pattern in order; keeps the first clean one. */
++  private static boolean escape(RoutingBoard board, SidePin sidePin, double unitsPerUm) {
++    Pin pin = sidePin.pin;
++    int net = pin.getNetNumber(0);
++    int layer = pin.firstLayer();
++    final NetClass netClass = board.rules.nets.get(net).getNetClass();
++    ViaInfo viaInfo = viaInfo(board.rules.nets.get(net));
++    Padstack padstack = viaInfo.getPadstack();
++    if (padstack.fromLayer() > layer || padstack.toLayer() < layer) {
++      return false;
++    }
++    if (padstack.getShape(layer) == null) {
++      return false;
++    }
++    IntBox viaBox = padstack.getShape(layer).boundingBox();
++    double viaDiameter = Math.max(viaBox.width(), viaBox.height());
++    double clearance =
++        board.rules.clearanceMatrix.maxValue(viaInfo.getClearanceClassIndex(), layer);
++    FloatPoint centre = pin.getCenter().toFloat();
++    IntBox pad = pin.boundingBox();
++    double padExtent =
++        switch (sidePin.side) {
++          case W -> centre.x - pad.ll.x;
++          case E -> pad.ur.x - centre.x;
++          case S -> centre.y - pad.ll.y;
++          case N -> pad.ur.y - centre.y;
++        };
++    double near = padExtent + clearance + viaDiameter / 2;
++    double far = near + viaDiameter + clearance;
++    List<Double> distances = new ArrayList<>();
++    if ("out_only".equals(PATTERN) || sidePin.index % 2 == 0) {
++      distances.add(near);
++      distances.add(far);
++    } else {
++      distances.add(far);
++      distances.add(near);
++    }
++    double maxEscape = MAX_ESCAPE_UM * unitsPerUm;
++    for (double d = far + viaDiameter / 2; d <= maxEscape; d += viaDiameter / 2) {
++      distances.add(d);
++    }
++    int halfWidth = netClass.getTraceHalfWidth(layer);
++    int traceClearanceClass = netClass.getTraceClearanceClass();
++    for (double distance : distances) {
++      Point viaCentre =
++          new IntPoint(
++              (int) Math.round(centre.x + sidePin.side.nx * distance),
++              (int) Math.round(centre.y + sidePin.side.ny * distance));
++      if (!board.boundingBox.contains(viaCentre)) {
++        continue;
++      }
++      if (tryInsert(board, pin, net, layer, viaInfo, viaCentre, halfWidth, traceClearanceClass)) {
++        return true;
++      }
++    }
++    FRLogger.debug("DenseEscape: no clean escape for pin " + pin + " on net " + net);
++    return false;
++  }
++
++  private static boolean tryInsert(
++      RoutingBoard board,
++      Pin pin,
++      int net,
++      int layer,
++      ViaInfo viaInfo,
++      Point viaCentre,
++      int halfWidth,
++      int traceClearanceClass) {
++    int maxIdBefore = board.communication.idGenerator.maxGeneratedId();
++    final long contentBefore = board.itemList.getContentVersion();
++    board.generateSnapshot();
++    int[] nets = new int[] {net};
++    board.insertVia(
++        viaInfo.getPadstack(),
++        viaCentre,
++        nets,
++        viaInfo.getClearanceClassIndex(),
++        FixedState.UNFIXED,
++        viaInfo.attachSmdAllowed());
++    board.insertTrace(
++        new Point[] {pin.getCenter(), viaCentre},
++        layer,
++        halfWidth,
++        nets,
++        traceClearanceClass,
++        FixedState.UNFIXED);
++    boolean clean =
++        BatchAutorouter.strictDrcRejection(board, net, maxIdBefore) == null
++            && connectsPinToVia(pin, net, layer);
++    if (clean) {
++      board.popSnapshot();
++    } else if (board.itemList.getContentVersion() != contentBefore) {
++      board.undo(null);
++    } else {
++      board.popSnapshot();
++    }
++    return clean;
++  }
++
++  private static boolean connectsPinToVia(Pin pin, int net, int layer) {
++    for (Item item : pin.getConnectedSet(net)) {
++      if (item.firstLayer() != layer || item.lastLayer() != layer) {
++        return true;
++      }
++    }
++    return false;
++  }
++
++  /** Smallest distance between two distinct points, or {@link Double#MAX_VALUE} if none. */
++  static double minPitch(List<FloatPoint> points) {
++    double best = Double.MAX_VALUE;
++    for (int i = 0; i < points.size(); i++) {
++      for (int j = i + 1; j < points.size(); j++) {
++        double distance = points.get(i).distance(points.get(j));
++        if (distance > 0) {
++          best = Math.min(best, distance);
++        }
++      }
++    }
++    return best;
++  }
++
++  /** One-line description for the job log. */
++  static String describe(Summary summary) {
++    return String.format(
++        Locale.US,
++        "Dense escape (experimental, pattern %s): %d fine-pitch peripheral part(s), %d pin(s) "
++            + "needing escape, %d escaped, %d left to the fanout.",
++        PATTERN,
++        summary.components(),
++        summary.candidates(),
++        summary.escaped(),
++        summary.failed());
++  }
++}
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/DenseEscapeTest.java b/src/test/java/app/freerouting/autoroute/pipeline/DenseEscapeTest.java
+new file mode 100644
+index 00000000..e265c9bd
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/DenseEscapeTest.java
+@@ -0,0 +1,70 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertInstanceOf;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Pin;
++import app.freerouting.board.model.items.Via;
++import app.freerouting.geometry.planar.FloatPoint;
++import app.freerouting.io.BoardReadResult;
++import app.freerouting.io.specctra.DsnReader;
++import java.io.FileInputStream;
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.EnumMap;
++import java.util.List;
++import java.util.Map;
++import org.junit.jupiter.api.Test;
++
++class DenseEscapeTest {
++
++  @Test
++  void classifiesTheLqfpPinsIntoFourSidesOfSixteen() throws IOException {
++    RoutingBoard board = loadCaniot();
++    List<Pin> u1 = new ArrayList<>();
++    for (Pin pin : board.getPins()) {
++      if ("U1".equals(board.components.get(pin.getComponentId()).name)) {
++        u1.add(pin);
++      }
++    }
++    assertEquals(64, u1.size());
++    List<FloatPoint> centres = new ArrayList<>();
++    for (Pin pin : u1) {
++      centres.add(pin.getCenter().toFloat());
++    }
++    List<DenseEscape.SidePin> sidePins = DenseEscape.classify(u1, DenseEscape.minPitch(centres));
++    assertNotNull(sidePins);
++    Map<DenseEscape.Side, Integer> counts = new EnumMap<>(DenseEscape.Side.class);
++    for (DenseEscape.SidePin sidePin : sidePins) {
++      counts.merge(sidePin.side(), 1, Integer::sum);
++    }
++    for (DenseEscape.Side side : DenseEscape.Side.values()) {
++      assertEquals(16, counts.get(side), side.name());
++    }
++  }
++
++  @Test
++  void escapesLeaveNoClearanceViolationAndAreRepeatable() throws IOException {
++    RoutingBoard first = loadCaniot();
++    DenseEscape.Summary summary = DenseEscape.run(first, null);
++    assertTrue(summary.components() >= 1);
++    assertTrue(summary.escaped() > 0, summary.toString());
++    for (Via via : first.getVias()) {
++      assertTrue(via.clearanceViolations().isEmpty(), "via " + via);
++    }
++    RoutingBoard second = loadCaniot();
++    assertEquals(summary, DenseEscape.run(second, null));
++    assertEquals(first.getVias().size(), second.getVias().size());
++  }
++
++  private static RoutingBoard loadCaniot() throws IOException {
++    try (FileInputStream in = new FileInputStream("fixtures/Issue269-caniot-tiny-arm.dsn")) {
++      BoardReadResult result = DsnReader.readBoard(in, null, null, "caniot");
++      assertInstanceOf(BoardReadResult.Success.class, result);
++      return (RoutingBoard) ((BoardReadResult.Success) result).board();
++    }
++  }
++}

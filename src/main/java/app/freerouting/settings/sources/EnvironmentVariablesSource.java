@@ -1,7 +1,7 @@
 package app.freerouting.settings.sources;
 
 import app.freerouting.logger.FRLogger;
-import app.freerouting.settings.LegacyRouterSettingsBridge;
+import app.freerouting.settings.RouterPropertyNames;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.SettingsSource;
 import app.freerouting.util.ReflectionUtil;
@@ -17,8 +17,10 @@ import java.util.Map;
  *
  * <p>Examples: {@code FREEROUTING__ROUTER__AUTOROUTER__MAX_PASSES=100} maps to {@code
  * router.autorouter.max_passes}. {@code FREEROUTING__ROUTER__OPTIMIZER__MAX_THREADS=4} maps to
- * {@code router.optimizer.max_threads}. Flat keys such as {@code FREEROUTING__ROUTER__MAX_PASSES}
- * still apply and warn until they are removed.
+ * {@code router.optimizer.max_threads}. Names and values are read like command-line arguments
+ * ({@link RouterPropertyNames}), so {@code FREEROUTING__ROUTER__SCORING__VERSION=v1} works too.
+ * Flat keys such as {@code FREEROUTING__ROUTER__MAX_PASSES} still apply and warn until they are
+ * removed.
  *
  * <p>Priority: 55 (between GUI and CLI) - Higher than GUI (50): Environment variables override
  * interactive GUI settings - Lower than CLI (60): Command-line arguments override environment
@@ -63,38 +65,39 @@ public class EnvironmentVariablesSource implements SettingsSource {
         continue;
       }
 
-      // Remove the FREEROUTING__ROUTER__ prefix and convert double underscores to property path
-      String propertyPath =
-          uppercaseKey.substring((ENV_PREFIX + ROUTER_PREFIX).length()).replace("__", ".");
-      String canonical = LegacyRouterSettingsBridge.canonicalCliPath(propertyPath);
-      if (LegacyRouterSettingsBridge.isDeprecatedFlatAutorouterPath(propertyPath)) {
-        LegacyRouterSettingsBridge.warnDeprecatedPath(
-            rawKey,
-            ENV_PREFIX + ROUTER_PREFIX + canonical.replace(".", "__").toUpperCase(Locale.ROOT));
-      }
-
-      // Try to set the value using reflection
-      try {
-        ReflectionUtil.setFieldValue(settings, canonical, value);
-        parsedVariables.put(rawKey, value);
-        parsedCount++;
-        FRLogger.debug(
-            "Parsed environment variable: " + rawKey + " → " + canonical + " = " + value);
-      } catch (NoSuchFieldException e) {
-        FRLogger.warn(
-            "Unknown router setting in environment variable: "
-                + rawKey
-                + " (property: "
-                + canonical
-                + ")");
-      } catch (Exception e) {
-        FRLogger.warn(
-            "Failed to parse environment variable: "
-                + rawKey
-                + " = "
-                + value
-                + ": "
-                + e.getMessage());
+      // FREEROUTING__ROUTER__A__B names the property router.a.b.
+      String propertyName =
+          "router."
+              + uppercaseKey.substring((ENV_PREFIX + ROUTER_PREFIX).length()).replace("__", ".");
+      for (String fieldPath : RouterPropertyNames.fieldPaths(propertyName)) {
+        String normalizedValue = RouterPropertyNames.normalizeValue(fieldPath, value);
+        try {
+          ReflectionUtil.setFieldValue(settings, fieldPath, normalizedValue);
+          parsedVariables.put(rawKey, value);
+          parsedCount++;
+          FRLogger.debug(
+              "Parsed environment variable: "
+                  + rawKey
+                  + " → "
+                  + fieldPath
+                  + " = "
+                  + normalizedValue);
+        } catch (NoSuchFieldException e) {
+          FRLogger.warn(
+              "Unknown router setting in environment variable: "
+                  + rawKey
+                  + " (property: "
+                  + fieldPath
+                  + ")");
+        } catch (Exception e) {
+          FRLogger.warn(
+              "Failed to parse environment variable: "
+                  + rawKey
+                  + " = "
+                  + value
+                  + ": "
+                  + e.getMessage());
+        }
       }
     }
 

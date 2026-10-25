@@ -1,0 +1,5 @@
+control head
+bound head -Dfreerouting.exp.optimizer_early_exit=gain_bound
+control_all head --router.optimizer.commit_selection=all
+bound_all head -Dfreerouting.exp.optimizer_early_exit=gain_bound --router.optimizer.commit_selection=all
+bound_margin2.5 head -Dfreerouting.exp.optimizer_early_exit=gain_bound -Dfreerouting.exp.optimizer_early_exit_margin=2.5

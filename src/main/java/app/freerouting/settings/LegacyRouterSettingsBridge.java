@@ -19,28 +19,9 @@ public final class LegacyRouterSettingsBridge {
           "algorithm", "algorithm",
           "max_passes", "maxPasses",
           "max_items", "maxItems",
-          "save_intermediate_stages", "saveIntermediateStages",
           "ignore_net_classes", "ignoreNetClasses");
 
   private LegacyRouterSettingsBridge() {}
-
-  /**
-   * CLI or env path relative to {@code router.} (for example {@code max_passes} or {@code
-   * autorouter.max_passes}).
-   */
-  public static String canonicalCliPath(String routerRelativePath) {
-    String path = normalizeRelativePath(routerRelativePath);
-    return switch (path) {
-      case "enabled",
-          "max_passes",
-          "algorithm",
-          "max_items",
-          "save_intermediate_stages",
-          "ignore_net_classes" ->
-          "autorouter." + path;
-      default -> path;
-    };
-  }
 
   /** Returns true when {@code routerRelativePath} is a deprecated flat autorouter key. */
   public static boolean isDeprecatedFlatAutorouterPath(String routerRelativePath) {
@@ -90,12 +71,6 @@ public final class LegacyRouterSettingsBridge {
         && json.has("max_items")
         && !json.get("max_items").isJsonNull()) {
       autorouter.maxItems = json.get("max_items").getAsInt();
-      warned = true;
-    }
-    if (autorouter.saveIntermediateStages == null
-        && json.has("save_intermediate_stages")
-        && !json.get("save_intermediate_stages").isJsonNull()) {
-      autorouter.saveIntermediateStages = json.get("save_intermediate_stages").getAsBoolean();
       warned = true;
     }
     if (autorouter.ignoreNetClasses == null

@@ -1,0 +1,5 @@
+# E06 transactional last-mile repair. "head" = jar built from d4383b44 + patch.diff.
+control head
+last_mile4 head -Dfreerouting.exp.last_mile=4
+last_mile8 head -Dfreerouting.exp.last_mile=8
+last_mile16 head -Dfreerouting.exp.last_mile=16

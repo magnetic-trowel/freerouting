@@ -1,0 +1,11 @@
+control head
+short-first head --router.autorouter.fallback_strategies=short-escape,fanout-retry,direct-first,open-escape,no-fanout
+fanout-only-first head --router.autorouter.fallback_strategies=fanout-retry,short-escape,direct-first,open-escape,no-fanout
+short-direct head --router.autorouter.fallback_strategies=short-escape,direct-first,fanout-retry,open-escape,no-fanout
+drop-no-fanout head --router.autorouter.fallback_strategies=direct-first,fanout-retry,short-escape,open-escape
+short-direct-open head --router.autorouter.fallback_strategies=short-escape,direct-first,open-escape
+direct-only head --router.autorouter.fallback_strategies=direct-first
+fallback-none head --router.autorouter.fallback_strategies=none
+residual0 head --router.autorouter.residual_repair_max_open=0
+residual8 head --router.autorouter.residual_repair_max_open=8
+short-first-residual0 head --router.autorouter.fallback_strategies=short-escape,fanout-retry,direct-first,open-escape,no-fanout --router.autorouter.residual_repair_max_open=0

@@ -17,6 +17,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.Locale;
 
 /** Machine-readable summary of a headless CLI routing run for benchmark and autopilot harnesses. */
 public final class RoutingResultManifest {
@@ -82,6 +83,14 @@ public final class RoutingResultManifest {
   @SerializedName("cpu_score")
   public Integer cpuScore;
 
+  /**
+   * True when the routing thread was still running as the manifest was built: the job monitor
+   * marked the job as timed out because the thread did not stop within the grace period. The
+   * manifest then has no board statistics or scores, which only the ended thread provides.
+   */
+  @SerializedName("routing_thread_running")
+  public boolean routingThreadRunning;
+
   /** Input fixture identity for the run. */
   public static class FixtureInfo {
     @SerializedName("filename")
@@ -141,6 +150,14 @@ public final class RoutingResultManifest {
 
   /** Duration and pass count for one routing stage. */
   public static class PhaseDetail {
+    /**
+     * Why the stage stopped, in the lower-case form of {@link #stopReason(Enum)}: for the
+     * autorouter a {@code BatchAutorouter.StopReason}, for the optimizer a {@code
+     * BatchOptimizer.StopReason}. Null for a stage that did not run.
+     */
+    @SerializedName("stop_reason")
+    public String stopReason;
+
     @SerializedName("before")
     public PhaseSnapshot before;
 
@@ -240,8 +257,11 @@ public final class RoutingResultManifest {
     manifest.resourceUsage = job.resourceUsage;
     manifest.cpuScore = cpuScore;
 
-    if (job.board != null) {
-      manifest.boardStatistics = new BoardStatistics(job.board);
+    manifest.routingThreadRunning = !job.isRoutingThreadEnded();
+    // The routing thread took them of the final board; reading the board again here would repeat
+    // that work and, while the thread still runs, race with it.
+    if (job.finalStatistics != null) {
+      manifest.boardStatistics = job.finalStatistics;
       manifest.bounds = manifest.boardStatistics.bounds;
       if (job.routerSettings != null && job.routerSettings.scoring != null) {
         manifest.normalizedScore = manifest.boardStatistics.getRouterScore(job.routerSettings);
@@ -264,6 +284,11 @@ public final class RoutingResultManifest {
     }
 
     return manifest;
+  }
+
+  /** The manifest form of a stage's stop reason: its lower-case name, or null. */
+  public static String stopReason(Enum<?> reason) {
+    return reason != null ? reason.name().toLowerCase(Locale.ROOT) : null;
   }
 
   /** Writes the manifest as UTF-8 JSON to {@code targetPath}. */

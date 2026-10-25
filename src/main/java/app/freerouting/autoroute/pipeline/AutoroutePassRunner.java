@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +41,12 @@ final class AutoroutePassRunner {
   private Set<Integer> previousIncompleteNets = Collections.emptySet();
   private int previousIncompleteCount = -1;
   private int stagnationCount = 0;
+
+  /**
+   * Failed routing attempts per item id in the current pass loop. A pass loop starts with none, so
+   * a later loop on the same or a copied board does not inherit the failures of an earlier one.
+   */
+  private final Map<Integer, Integer> failureCounts = new HashMap<>();
 
   AutoroutePassRunner(BatchAutorouter router) {
     this.router = router;
@@ -72,9 +79,7 @@ final class AutoroutePassRunner {
       // Statistics only feed board-updated listeners; a listener-less attempt (optimizer
       // candidate) discards them.
       router.progressStatistics =
-          router.boardUpdatedEventListeners.isEmpty()
-              ? null
-              : new BoardStatistics(router.board, null, false);
+          router.boardUpdatedEventListeners.isEmpty() ? null : router.board.getStatistics(false);
       router.progressItemsSinceStatistics = 0;
       final BoardStatistics stats = router.progressStatistics;
       if (BatchAutorouter.isBenchmarkProfileEnabled()) {
@@ -165,10 +170,8 @@ final class AutoroutePassRunner {
           } else {
             Net net = router.board.rules.nets.get(currentItem.getNetNumber(i));
             String netName = net != null ? net.name : "net#" + currentItem.getNetNumber(i);
-            router.board.failureLog.recordFailure(
-                currentItem, passNo, autorouterResult.state, autorouterResult.details);
             router.job.logDebug("Autorouter " + autorouterResult.details);
-            int failureCount = router.board.failureLog.getFailureCount(currentItem);
+            int failureCount = failureCounts.merge(currentItem.getId(), 1, Integer::sum);
             int netNo = currentItem.getNetNumber(i);
             if (failureCount >= 2 && !designBlocked(router.board, currentItem, netNo)) {
               List<Item> tracesToRip = failedNetRipItems(router.board, currentItem, netNo);
@@ -213,7 +216,7 @@ final class AutoroutePassRunner {
       long finalBoardStatisticsStart =
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
       final BoardStatistics boardStatistics =
-          router.boardUpdatedEventListeners.isEmpty() ? null : router.boardStatistics();
+          router.boardUpdatedEventListeners.isEmpty() ? null : router.board.getStatistics();
       if (BatchAutorouter.isBenchmarkProfileEnabled()) {
         router.profileBoardStatisticsNanos += System.nanoTime() - finalBoardStatisticsStart;
         router.profileIntermediateStatisticsNanos += System.nanoTime() - finalStatisticsStart;
@@ -240,14 +243,19 @@ final class AutoroutePassRunner {
 
       long passDuration = System.currentTimeMillis() - passStartTime;
       int currentRipupCost = router.startRipupCosts * passNo;
-      PerformanceProfiler.recordPass(
-          passNo, routerCounters.incompleteCount, passDuration, currentRipupCost);
+      // Optimizer candidates run passes of their own on worker threads; the job's pass history
+      // must not collect them (it is printed and cleared only when a pass loop ends).
+      if (!router.isOptimizerAutorouter) {
+        PerformanceProfiler.recordPass(
+            passNo, routerCounters.incompleteCount, passDuration, currentRipupCost);
+      }
       router.logBenchmarkProfile(passNo);
 
       router.airLine = null;
       return routed > 0 || notRouted > 0;
     } catch (Exception e) {
       router.job.logError("Something went wrong during the auto-routing", e);
+      router.lastPassFailure = e;
       router.airLine = null;
       return false;
     }
@@ -324,6 +332,12 @@ final class AutoroutePassRunner {
     this.previousIncompleteNets = Collections.emptySet();
     this.previousIncompleteCount = -1;
     this.stagnationCount = 0;
+  }
+
+  /** Starts a pass loop: no anti-oscillation state and no failure counts carried over. */
+  void startPassLoop() {
+    resetAntiOscillationState();
+    this.failureCounts.clear();
   }
 
   private void logIncompleteDetails(int passNo, int itemsToGoCount, RouterCounters counters) {
@@ -439,9 +453,7 @@ final class AutoroutePassRunner {
         long progressStatisticsStart =
             BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
         router.progressStatistics =
-            router.boardUpdatedEventListeners.isEmpty()
-                ? null
-                : new BoardStatistics(router.board, null, false);
+            router.boardUpdatedEventListeners.isEmpty() ? null : router.board.getStatistics(false);
         router.progressItemsSinceStatistics = 0;
         if (BatchAutorouter.isBenchmarkProfileEnabled()) {
           router.profileBoardStatisticsNanos += System.nanoTime() - progressStatisticsStart;
@@ -462,7 +474,7 @@ final class AutoroutePassRunner {
     Set<Integer> ruleBlockedNets = ruleBlockedNets(router.board);
     items.removeIf(
         item ->
-            (router.board.failureLog.getFailureCount(item) > 0
+            (failureCounts.containsKey(item.getId())
                     || (ruleBlockedNets != null
                         && item.netCount() == 1
                         && ruleBlockedNets.contains(item.getNetNumber(0))))

@@ -12,6 +12,7 @@ import app.freerouting.autoroute.expansion.IncompleteFreeSpaceExpansionRoom;
 import app.freerouting.autoroute.expansion.ObstacleExpansionRoom;
 import app.freerouting.autoroute.expansion.TargetItemExpansionDoor;
 import app.freerouting.board.actions.ItemSelectionFilter;
+import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.Connectable;
 import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
@@ -653,7 +654,7 @@ public class MazeSearchEngine {
       if (toDoor.room != null && !ctrl.layerActive[toDoor.room.getLayer()]) {
         continue;
       }
-      if (toDoor == listElement.door) {
+      if (toDoor == listElement.door || isIgnoredTarget(toDoor)) {
         continue;
       }
       TileShape safeTargetShape = getWidthSafeTargetShape(toDoor);
@@ -1060,6 +1061,9 @@ public class MazeSearchEngine {
         if (this.autorouteEngine.isStopRequested()) {
           return false;
         }
+        if (isIgnoredTarget(currentDoor)) {
+          continue;
+        }
         if (currentDoor.isDestinationDoor()) {
           expansionDoorsDestination++;
           continue;
@@ -1268,6 +1272,13 @@ public class MazeSearchEngine {
       }
     }
     return 0;
+  }
+
+  /**
+   * Returns true for a door to a pour that is no target ({@link AutorouteControl#poursAreTargets}).
+   */
+  private boolean isIgnoredTarget(TargetItemExpansionDoor door) {
+    return !ctrl.poursAreTargets && door.item instanceof ConductionArea area && area.isPour();
   }
 
   /** The result type of MazeSearchEngine.find_connection. */

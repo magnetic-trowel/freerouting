@@ -1,0 +1,5 @@
+control jars/e17.jar
+head-unpatched head
+dense jars/e17.jar -Dfreerouting.exp.dense_escape=true
+dense_out jars/e17.jar -Dfreerouting.exp.dense_escape=true -Dfreerouting.exp.dense_escape.pattern=out_only
+dense_fine_pitch_first jars/e16e17.jar -Dfreerouting.exp.dense_escape=true -Dfreerouting.exp.route_order=fine_pitch_first

@@ -6,16 +6,14 @@ import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.api.BaseController;
 import app.freerouting.api.dto.BoardFilePayload;
 import app.freerouting.board.actions.ItemIdGenerator;
+import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.core.RoutingJobState;
-import app.freerouting.core.Session;
 import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.io.FileFormat;
 import app.freerouting.io.kicad.KiCadDrcReport;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.management.BoardLoader;
 import app.freerouting.management.HeadlessBoardManager;
-import app.freerouting.management.jobs.RoutingJobScheduler;
-import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.util.TextManager;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -99,9 +97,7 @@ public class JobOutputResource extends BaseController {
             responseCode = "204",
             description = "Job is in progress but no output data is available yet"),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(
-            responseCode = "400",
-            description = "Job failed, was cancelled, or session is invalid")
+        @ApiResponse(responseCode = "400", description = "Job failed or was cancelled")
       })
   @GET
   @Path("/{jobId}/output")
@@ -115,22 +111,10 @@ public class JobOutputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    // Get the job based on the jobId
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-
-    // If the job does not exist, return a 404 response
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    // Check if the sessionId references a valid session
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity(
-              GSON.toJson(
-                  java.util.Map.of("error", "The session ID '" + job.sessionId + "' is invalid.")))
-          .build();
+      return jobNotFound();
     }
 
     // Reject jobs that have failed, been cancelled, or are in an invalid terminal state
@@ -225,7 +209,12 @@ public class JobOutputResource extends BaseController {
         @ApiResponse(responseCode = "404", description = "Job not found"),
         @ApiResponse(
             responseCode = "400",
-            description = "Job output is not in JSON format, or job failed/was cancelled")
+            description = "Job output is not in JSON format, or job failed/was cancelled"),
+        @ApiResponse(
+            responseCode = "410",
+            description =
+                "The output is not JSON and the routed board of this finished job is no longer"
+                    + " kept in memory")
       })
   @GET
   @Path("/{jobId}/output/json")
@@ -238,18 +227,10 @@ public class JobOutputResource extends BaseController {
           String jobId) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND).entity("{}").build();
-    }
-
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity(
-              GSON.toJson(
-                  java.util.Map.of("error", "The session ID '" + job.sessionId + "' is invalid.")))
-          .build();
+      return jobNotFound();
     }
 
     // Reject terminal error states
@@ -283,9 +264,10 @@ public class JobOutputResource extends BaseController {
     // If the output is not JSON format, attempt to generate JSON from the board
     if (job.output.format != FileFormat.KICAD_SESSION_JSON) {
       // If we have a board loaded, we can generate JSON on the fly
-      if (job.board != null) {
+      RoutingBoard board = job.board;
+      if (board != null) {
         try {
-          String jsonStr = app.freerouting.io.kicad.KiCadJsonWriter.write(job.board, job.name);
+          String jsonStr = app.freerouting.io.kicad.KiCadJsonWriter.write(board, job.name);
           FRAnalytics.apiEndpointCalled(
               "GET v1/jobs/" + jobId + "/output/json", "", "json-generated-from-board", userId);
           if (isInProgress) {
@@ -301,6 +283,9 @@ public class JobOutputResource extends BaseController {
                           "error", "Failed to generate JSON output: " + e.getMessage())))
               .build();
         }
+      }
+      if (job.isBoardReleased()) {
+        return boardReleasedResponse(jobId);
       }
       return Response.status(Response.Status.BAD_REQUEST)
           .entity(
@@ -370,12 +355,9 @@ public class JobOutputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    // Get the job based on the jobId
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-
-    // If the job does not exist or session is invalid, close the connection
-    if (job == null
-        || SessionManager.getInstance().getSession(job.sessionId.toString(), userId) == null) {
+    // Another caller's job is answered like an absent one: the stream closes.
+    var job = findOwnedJob(jobId, userId);
+    if (job == null) {
       try {
         eventSink.close();
       } catch (Exception e) {
@@ -427,9 +409,9 @@ public class JobOutputResource extends BaseController {
       @Context Sse sse) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-    if (job == null
-        || SessionManager.getInstance().getSession(job.sessionId.toString(), userId) == null) {
+    // Another caller's job is answered like an absent one: the stream closes.
+    var job = findOwnedJob(jobId, userId);
+    if (job == null) {
       try {
         eventSink.close();
       } catch (Exception e) {
@@ -450,7 +432,7 @@ public class JobOutputResource extends BaseController {
    * <p>If the job's board is not already loaded in memory, the input DSN file is loaded on demand.
    * The report JSON follows the {@code https://schemas.kicad.org/drc.v1.json} schema and includes
    * unconnected items and clearance violations. Returns HTTP 500 if the board cannot be loaded from
-   * the stored DSN input.
+   * the stored DSN input, and HTTP 410 for a finished job whose routed board is no longer kept.
    */
   @Operation(
       summary = "Get DRC report",
@@ -467,7 +449,10 @@ public class JobOutputResource extends BaseController {
                     mediaType = MediaType.APPLICATION_JSON,
                     schema = @Schema(implementation = KiCadDrcReport.class))),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(responseCode = "400", description = "Invalid session or failed to load board"),
+        @ApiResponse(responseCode = "400", description = "Failed to load board"),
+        @ApiResponse(
+            responseCode = "410",
+            description = "The routed board of this finished job is no longer kept in memory"),
         @ApiResponse(responseCode = "500", description = "Failed to load board for DRC check")
       })
   @GET
@@ -485,22 +470,15 @@ public class JobOutputResource extends BaseController {
     // Authenticate the user
     UUID userId = authenticateUser();
 
-    // Get the job based on the jobId
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
-
-    // If the job does not exist, return a 404 response
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND)
-          .entity("{\"error\":\"Job not found.\"}")
-          .build();
+      return jobNotFound();
     }
 
-    // Check if the sessionId references a valid session
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+    // A released board must not be replaced by the unrouted board of the input.
+    if (job.isBoardReleased()) {
+      return boardReleasedResponse(jobId);
     }
 
     // Check if the job has a board loaded, and load it if needed
@@ -528,8 +506,18 @@ public class JobOutputResource extends BaseController {
       }
     }
 
+    // Read the board once: the scheduler may release the board of a finished job at any time.
+    RoutingBoard board = job.board;
+    if (board == null) {
+      return job.isBoardReleased()
+          ? boardReleasedResponse(jobId)
+          : Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+              .entity("{\"error\":\"Failed to load board for DRC check.\"}")
+              .build();
+    }
+
     // Run DRC check
-    DesignRulesChecker drcChecker = new DesignRulesChecker(job.board, job.drcSettings);
+    DesignRulesChecker drcChecker = new DesignRulesChecker(board, job.drcSettings);
 
     // Determine coordinate unit (default to mm)
     String coordinateUnit = "mm";
@@ -572,7 +560,10 @@ public class JobOutputResource extends BaseController {
                     schema =
                         @Schema(implementation = app.freerouting.drc.DrcSummaryResponse.class))),
         @ApiResponse(responseCode = "404", description = "Job not found"),
-        @ApiResponse(responseCode = "400", description = "Invalid session or failed to load board"),
+        @ApiResponse(responseCode = "400", description = "Failed to load board"),
+        @ApiResponse(
+            responseCode = "410",
+            description = "The routed board of this finished job is no longer kept in memory"),
         @ApiResponse(responseCode = "500", description = "Failed to load board for DRC summary")
       })
   @GET
@@ -586,18 +577,14 @@ public class JobOutputResource extends BaseController {
           String jobId) {
     UUID userId = authenticateUser();
 
-    var job = RoutingJobScheduler.getInstance().getJob(jobId);
+    // Another caller's job is answered like an absent one.
+    var job = findOwnedJob(jobId, userId);
     if (job == null) {
-      return Response.status(Response.Status.NOT_FOUND)
-          .entity("{\"error\":\"Job not found.\"}")
-          .build();
+      return jobNotFound();
     }
 
-    Session session = SessionManager.getInstance().getSession(job.sessionId.toString(), userId);
-    if (session == null) {
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"The session ID '" + job.sessionId + "' is invalid.\"}")
-          .build();
+    if (job.isBoardReleased()) {
+      return boardReleasedResponse(jobId);
     }
 
     if (!BoardLoader.loadBoardIfNeeded(job)) {
@@ -623,7 +610,16 @@ public class JobOutputResource extends BaseController {
       }
     }
 
-    DesignRulesChecker drcChecker = new DesignRulesChecker(job.board, job.drcSettings);
+    RoutingBoard board = job.board;
+    if (board == null) {
+      return job.isBoardReleased()
+          ? boardReleasedResponse(jobId)
+          : Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+              .entity("{\"error\":\"Failed to load board for DRC summary.\"}")
+              .build();
+    }
+
+    DesignRulesChecker drcChecker = new DesignRulesChecker(board, job.drcSettings);
     var summary = drcChecker.generateSummary();
     String summaryJson = GSON.toJson(summary);
 
@@ -631,5 +627,24 @@ public class JobOutputResource extends BaseController {
         "GET v1/jobs/" + jobId + "/drc/summary", "", "drc-summary-generated", userId);
 
     return Response.ok(summaryJson).build();
+  }
+
+  /**
+   * Answers a board request for a finished job whose routed board the scheduler no longer keeps
+   * (see {@code api_server.max_finished_job_boards}). Its output and statistics remain available.
+   */
+  private static Response boardReleasedResponse(String jobId) {
+    return Response.status(Response.Status.GONE)
+        .entity(
+            GSON.toJson(
+                java.util.Map.of(
+                    "error",
+                    "The routed board of job '"
+                        + jobId
+                        + "' is no longer kept in memory, because more recent jobs have finished"
+                        + " since. Its output is still available at /v1/jobs/"
+                        + jobId
+                        + "/output.")))
+        .build();
   }
 }

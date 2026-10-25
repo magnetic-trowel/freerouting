@@ -66,7 +66,11 @@ public class PlaceControl extends ScopeKeyword {
       }
     }
     if (flipStyleRotateFirst) {
-      scopeParameter.boardHandling.getRoutingBoard().components.setFlipStyleRotateFirst(true);
+      var board = scopeParameter.boardForScope("place_control");
+      if (board == null) {
+        return false;
+      }
+      board.components.setFlipStyleRotateFirst(true);
     }
     return true;
   }

@@ -1,0 +1,753 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+index 4a0812e2..2f4482da 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+@@ -83,7 +83,7 @@ final class AutorouteBatchLoop {
+     final BoardHistory bh = new BoardHistory(job.routerSettings);
+ 
+     // Record configuration for profiler
+-    if (router.settings.getLayerCount() > 0) {
++    if (router.settings.getLayerCount() > 0 && !router.detachedAttempt) {
+       int layerCount = router.settings.getLayerCount();
+       double[] prefCosts = new double[layerCount];
+       double[] againstCosts = new double[layerCount];
+@@ -693,8 +693,10 @@ final class AutorouteBatchLoop {
+     }
+ 
+     // Print all profiling results at the end of session
+-    PerformanceProfiler.printResults();
+-    PerformanceProfiler.reset();
++    if (!router.detachedAttempt) {
++      PerformanceProfiler.printResults();
++      PerformanceProfiler.reset();
++    }
+ 
+     if (!router.thread.isStopAutoRouterRequested()) {
+       router.fireTaskStateChangedEvent(
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/BatchAutorouter.java b/src/main/java/app/freerouting/autoroute/pipeline/BatchAutorouter.java
+index 1b55d92f..0ab684c8 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/BatchAutorouter.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/BatchAutorouter.java
+@@ -139,6 +139,12 @@ public final class BatchAutorouter extends NamedAlgorithm {
+   /** Board hash after fanout, where the pass loop started. */
+   public String passLoopStartHash;
+ 
++  /**
++   * Whether this attempt runs on a fallback worker thread next to other attempts; such an attempt
++   * leaves the process-wide profiler configuration and totals alone.
++   */
++  boolean detachedAttempt;
++
+   private java.util.function.Predicate<String> repeatsPassLoop;
+ 
+   /** Why {@link #runBatchLoop()} stopped. */
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/ParallelFallbackAttempts.java b/src/main/java/app/freerouting/autoroute/pipeline/ParallelFallbackAttempts.java
+new file mode 100644
+index 00000000..328ead0c
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/pipeline/ParallelFallbackAttempts.java
+@@ -0,0 +1,393 @@
++package app.freerouting.autoroute.pipeline;
++
++import app.freerouting.board.facade.BasicBoard;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.core.RoutingJob;
++import app.freerouting.core.RoutingJobState;
++import app.freerouting.core.StoppableThread;
++import app.freerouting.drc.ClearanceBaseline;
++import app.freerouting.settings.RouterSettings;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.concurrent.ExecutionException;
++import java.util.concurrent.Future;
++import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.ThreadPoolExecutor;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicInteger;
++
++/**
++ * Experiment {@code -Dfreerouting.exp.parallel_fallback=<threads>}: runs the fallback's alternative
++ * strategies on worker threads ahead of the sequential fold in {@link RoutingFallbackRunner}. Every
++ * alternative starts from the same input bytes and its own settings copy, so a worker computes the
++ * board the sequential loop would compute. The fold takes the results in strategy order and applies
++ * the unchanged replace and stop checks, so the chosen board is the sequential one; results after
++ * the point where the fold stops are discarded.
++ *
++ * <p>A fanout-only strategy stops after its fanout when the post-fanout board repeats an earlier
++ * pass loop. Workers only know the pass loops that started before they were launched, so the fold
++ * re-checks the hash against the pass loops folded so far and treats a late match as that stop.
++ *
++ * <p>Each worker routes through a private {@link RoutingJob} view: its own board, settings, stop
++ * flag and phase metrics, with log lines buffered and replayed through the real job when the fold
++ * takes the attempt. Worker attempts do not forward board or task events to the job's listeners,
++ * and they leave the global {@code PerformanceProfiler} configuration and totals alone.
++ */
++final class ParallelFallbackAttempts implements AutoCloseable {
++
++  static final String PROPERTY = "freerouting.exp.parallel_fallback";
++
++  /** Worker threads requested at startup; 0 or 1 keeps the sequential loop. */
++  static final int CONFIGURED_THREADS = parseThreads(System.getProperty(PROPERTY));
++
++  private static final String REPEAT_SKIP_LINE =
++      "Pass loop skipped: fanout left the board an earlier pass loop with the same settings"
++          + " started on.";
++
++  private final RoutingJob job;
++  private final List<RoutingFallback.Strategy> strategies;
++  private final List<AttemptJob> jobs = new ArrayList<>();
++  private final List<Future<Result>> futures = new ArrayList<>();
++  private final ThreadPoolExecutor pool;
++
++  private ParallelFallbackAttempts(
++      RoutingJob job, List<RoutingFallback.Strategy> strategies, int threads) {
++    this.job = job;
++    this.strategies = List.copyOf(strategies);
++    AtomicInteger counter = new AtomicInteger();
++    this.pool =
++        new ThreadPoolExecutor(
++            threads,
++            threads,
++            0L,
++            TimeUnit.MILLISECONDS,
++            new LinkedBlockingQueue<>(),
++            runnable -> {
++              Thread thread =
++                  new Thread(runnable, "routing-fallback-attempt-" + counter.incrementAndGet());
++              thread.setDaemon(true);
++              return thread;
++            });
++  }
++
++  /** Parses the property value; anything but a positive integer means 0. */
++  static int parseThreads(String value) {
++    if (value == null || value.isBlank()) {
++      return 0;
++    }
++    try {
++      return Math.max(0, Integer.parseInt(value.trim()));
++    } catch (NumberFormatException e) {
++      return 0;
++    }
++  }
++
++  /**
++   * Worker threads for a fallback with {@code alternatives} strategies: the requested count capped
++   * by {@code router.autorouter.max_threads} and the strategy count. Fewer than two means
++   * sequential (0).
++   */
++  static int effectiveThreads(int configured, RouterSettings settings, int alternatives) {
++    int threads = Math.min(configured, Math.min(settings.getAutorouterMaxThreads(), alternatives));
++    return threads >= 2 ? threads : 0;
++  }
++
++  /**
++   * Starts every alternative on {@code initialThreads} workers, in strategy order. The settings
++   * copies are made here, on the job thread, from the job's current settings.
++   */
++  static ParallelFallbackAttempts start(
++      RoutingJob job,
++      byte[] input,
++      List<RoutingFallback.Strategy> alternatives,
++      ClearanceBaseline inputBaseline,
++      Set<String> knownPassLoopStarts,
++      int initialThreads) {
++    ParallelFallbackAttempts workers =
++        new ParallelFallbackAttempts(job, alternatives, Math.max(1, initialThreads));
++    Set<String> known = Set.copyOf(knownPassLoopStarts);
++    for (RoutingFallback.Strategy strategy : alternatives) {
++      RouterSettings settings = job.routerSettings.clone();
++      strategy.apply(settings);
++      RouterSettings scoring = job.routerSettings.clone();
++      AttemptJob attemptJob = new AttemptJob(job, settings);
++      workers.jobs.add(attemptJob);
++      workers.futures.add(
++          workers.pool.submit(
++              () -> runDetached(attemptJob, input, strategy, scoring, inputBaseline, known)));
++    }
++    return workers;
++  }
++
++  /** Raises the worker count, for example once the job thread stops routing continuations. */
++  void setThreads(int threads) {
++    if (threads > this.pool.getMaximumPoolSize()) {
++      this.pool.setMaximumPoolSize(threads);
++      this.pool.setCorePoolSize(threads);
++    }
++  }
++
++  private static Result runDetached(
++      AttemptJob attemptJob,
++      byte[] input,
++      RoutingFallback.Strategy strategy,
++      RouterSettings scoring,
++      ClearanceBaseline inputBaseline,
++      Set<String> knownPassLoopStarts) {
++    BatchAutorouter router = null;
++    try {
++      RoutingBoard board = (RoutingBoard) BasicBoard.deserialize(input);
++      if (board.clearanceBaseline == null) {
++        board.clearanceBaseline = inputBaseline;
++      }
++      attemptJob.board = board;
++      RouterSettings settings = attemptJob.routerSettings;
++      boolean removeUnconnectedVias = !settings.isFanoutEnabled();
++      router = BatchAutorouter.createAttempt(attemptJob, board, settings, removeUnconnectedVias);
++      router.detachedAttempt = true;
++      if (strategy.fanoutOnly) {
++        router.setRepeatsPassLoop(
++            hash -> {
++              attemptJob.repeatCheckMark = attemptJob.lines.size();
++              return hash != null && knownPassLoopStarts.contains(hash);
++            });
++      }
++      router.runBatchLoop();
++      RoutingFallback.Outcome outcome =
++          RoutingFallback.Outcome.of(strategy.name, attemptJob.board, scoring);
++      ClearanceBaseline baseline =
++          RoutingFallback.captureClearance(attemptJob.board, outcome.violations);
++      return new Result(
++          new RoutingFallbackRunner.Attempt(outcome, attemptJob.board, router, baseline),
++          router,
++          null);
++    } catch (RuntimeException e) {
++      return new Result(null, router, e);
++    }
++  }
++
++  /**
++   * Waits for the attempt at {@code index}, replays its log lines through the job and returns it as
++   * the sequential loop would have: a fanout-only attempt whose post-fanout board is one of {@code
++   * passLoopStarts} counts as stopped after its fanout. Returns null for a failed attempt.
++   */
++  Taken take(int index, Map<String, RoutingFallback.Outcome> passLoopStarts) {
++    RoutingFallback.Strategy strategy = this.strategies.get(index);
++    AttemptJob attemptJob = this.jobs.get(index);
++    Result result = await(index);
++    BatchAutorouter router = result.router;
++    if (router != null) {
++      router.job = this.job;
++    }
++    String hash = router != null ? router.passLoopStartHash : null;
++    boolean ranRepeat =
++        router != null && router.lastStopReason == BatchAutorouter.StopReason.REPEATED;
++    boolean lateRepeat =
++        !ranRepeat
++            && strategy.fanoutOnly
++            && hash != null
++            && attemptJob.repeatCheckMark >= 0
++            && passLoopStarts.containsKey(hash);
++    if (lateRepeat) {
++      attemptJob.replay(this.job, attemptJob.repeatCheckMark);
++      this.job.logInfo(REPEAT_SKIP_LINE);
++    } else {
++      attemptJob.replay(this.job, attemptJob.lines.size());
++    }
++    if (result.failure != null && !lateRepeat) {
++      this.job.logError(
++          "Routing fallback attempt '" + strategy.name + "' failed and was discarded.",
++          result.failure);
++      return null;
++    }
++    copyPhaseMetrics(attemptJob, this.job);
++    boolean repeated = ranRepeat || lateRepeat;
++    RoutingFallbackRunner.Attempt attempt = result.attempt;
++    if (repeated) {
++      RoutingFallback.Outcome earlier = passLoopStarts.get(hash);
++      if (earlier != null) {
++        attempt =
++            new RoutingFallbackRunner.Attempt(
++                new RoutingFallback.Outcome(
++                    strategy.name,
++                    earlier.unrouted,
++                    earlier.newOrChanged,
++                    earlier.violations,
++                    earlier.score,
++                    earlier.designBlocked),
++                attempt != null ? attempt.board() : attemptJob.board,
++                router,
++                attempt != null ? attempt.baseline() : null);
++      } else if (attempt == null) {
++        return null;
++      }
++    }
++    return new Taken(attempt, repeated);
++  }
++
++  private Result await(int index) {
++    try {
++      return this.futures.get(index).get();
++    } catch (InterruptedException e) {
++      Thread.currentThread().interrupt();
++      return new Result(null, null, new IllegalStateException("interrupted", e));
++    } catch (ExecutionException e) {
++      if (e.getCause() instanceof Error error) {
++        throw error;
++      }
++      RuntimeException failure =
++          e.getCause() instanceof RuntimeException runtime
++              ? runtime
++              : new IllegalStateException(e.getCause());
++      return new Result(null, null, failure);
++    }
++  }
++
++  private static void copyPhaseMetrics(AttemptJob from, RoutingJob to) {
++    if (from.resultPhaseMetrics == null || to.resultPhaseMetrics == null) {
++      return;
++    }
++    if (from.resultPhaseMetrics.fanout.before != null) {
++      to.resultPhaseMetrics.fanout = from.resultPhaseMetrics.fanout;
++    }
++    if (from.resultPhaseMetrics.autorouter.before != null) {
++      to.resultPhaseMetrics.autorouter = from.resultPhaseMetrics.autorouter;
++    }
++  }
++
++  /** Stops attempts the fold did not take, and waits for the workers to finish. */
++  @Override
++  public void close() {
++    for (int i = 0; i < this.futures.size(); i++) {
++      if (!this.futures.get(i).isDone()) {
++        this.jobs.get(i).thread.requestStop();
++        this.futures.get(i).cancel(false);
++      }
++    }
++    this.pool.shutdown();
++    boolean interrupted = false;
++    while (true) {
++      try {
++        if (this.pool.awaitTermination(1, TimeUnit.SECONDS)) {
++          break;
++        }
++      } catch (InterruptedException e) {
++        interrupted = true;
++      }
++    }
++    if (interrupted) {
++      Thread.currentThread().interrupt();
++    }
++  }
++
++  /** An attempt as the fold sees it. */
++  record Taken(RoutingFallbackRunner.Attempt attempt, boolean repeated) {}
++
++  private record Result(
++      RoutingFallbackRunner.Attempt attempt, BatchAutorouter router, RuntimeException failure) {}
++
++  /** Log levels a worker attempt buffers. */
++  enum Level {
++    INFO,
++    WARNING,
++    ERROR,
++    DEBUG
++  }
++
++  /** One buffered log line. */
++  record Line(Level level, String message, Throwable error) {}
++
++  /**
++   * The job view a worker attempt routes through. Log lines are buffered for an ordered replay;
++   * stop and timeout requests of the real job reach the attempt through its stop flag.
++   */
++  static final class AttemptJob extends RoutingJob {
++    final List<Line> lines = new ArrayList<>();
++    volatile int repeatCheckMark = -1;
++
++    AttemptJob(RoutingJob parent, RouterSettings settings) {
++      this.name = parent.name;
++      this.shortName = parent.shortName;
++      this.routerSettings = settings;
++      this.timeoutAt = parent.timeoutAt;
++      this.resourceUsage = parent.resourceUsage;
++      this.stage = parent.stage;
++      this.state = parent.state;
++      this.thread = new AttemptStop(parent, this);
++    }
++
++    @Override
++    public void logInfo(String message) {
++      this.lines.add(new Line(Level.INFO, message, null));
++    }
++
++    @Override
++    public void logWarning(String message) {
++      this.lines.add(new Line(Level.WARNING, message, null));
++    }
++
++    @Override
++    public void logError(String message, Throwable ex) {
++      this.lines.add(new Line(Level.ERROR, message, ex));
++    }
++
++    @Override
++    public void logDebug(String message) {
++      this.lines.add(new Line(Level.DEBUG, message, null));
++    }
++
++    /** Replays the first {@code count} buffered lines through {@code target}. */
++    void replay(RoutingJob target, int count) {
++      int end = Math.min(count, this.lines.size());
++      for (int i = 0; i < end; i++) {
++        Line line = this.lines.get(i);
++        switch (line.level()) {
++          case INFO -> target.logInfo(line.message());
++          case WARNING -> target.logWarning(line.message());
++          case ERROR -> target.logError(line.message(), line.error());
++          case DEBUG -> target.logDebug(line.message());
++          default -> throw new IllegalStateException("unknown level " + line.level());
++        }
++      }
++    }
++  }
++
++  /**
++   * A worker attempt's own stop flag. The attempt's pass loop requests its own auto-router stop
++   * without touching the job thread; a stop of the job, or its timeout, also stops the attempt.
++   */
++  static final class AttemptStop extends StoppableThread {
++    private final RoutingJob parent;
++    private final RoutingJob attemptJob;
++
++    AttemptStop(RoutingJob parent, RoutingJob attemptJob) {
++      this.parent = parent;
++      this.attemptJob = attemptJob;
++    }
++
++    @Override
++    protected void threadAction() {
++      // Never started: this object only carries the attempt's stop state.
++    }
++
++    @Override
++    public boolean isStopRequested() {
++      return super.isStopRequested() || parentStopped();
++    }
++
++    @Override
++    public boolean isStopAutoRouterRequested() {
++      return super.isStopAutoRouterRequested() || parentStopped();
++    }
++
++    private boolean parentStopped() {
++      if (this.parent.state == RoutingJobState.TIMED_OUT
++          && this.attemptJob.state != RoutingJobState.TIMED_OUT) {
++        this.attemptJob.state = RoutingJobState.TIMED_OUT;
++      }
++      return this.parent.thread != null && this.parent.thread.isStopRequested();
++    }
++  }
++}
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/RoutingFallbackRunner.java b/src/main/java/app/freerouting/autoroute/pipeline/RoutingFallbackRunner.java
+index 6aad7af8..881fd777 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/RoutingFallbackRunner.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/RoutingFallbackRunner.java
+@@ -22,9 +22,16 @@ final class RoutingFallbackRunner {
+ 
+   private final Map<String, RoutingFallback.Outcome> passLoopStarts = new LinkedHashMap<>();
+   private final BatchAutorouter listenerSource;
++  private final int parallelThreads;
+ 
+   RoutingFallbackRunner(BatchAutorouter listenerSource) {
++    this(listenerSource, ParallelFallbackAttempts.CONFIGURED_THREADS);
++  }
++
++  /** {@code parallelThreads} below 2 keeps the alternatives on the job thread. */
++  RoutingFallbackRunner(BatchAutorouter listenerSource, int parallelThreads) {
+     this.listenerSource = listenerSource;
++    this.parallelThreads = parallelThreads;
+   }
+ 
+   BatchAutorouter run(
+@@ -90,20 +97,101 @@ final class RoutingFallbackRunner {
+     ClearanceBaseline defaultClearance =
+         RoutingFallback.captureClearance(job.board, best.violations);
+     Attempt bestAttempt = new Attempt(best, job.board, defaultRouter, defaultClearance);
+-    RoutingBoard continuedFrom = null;
+-    if (residual && !alternatives.isEmpty()) {
+-      bestAttempt = runContinuations(job, bestAttempt, automaticContinuations(job.routerSettings));
+-      continuedFrom = bestAttempt.board;
++    boolean continuesFirst = residual && !alternatives.isEmpty();
++    int threads =
++        ParallelFallbackAttempts.effectiveThreads(
++            this.parallelThreads, job.routerSettings, alternatives.size());
++    ParallelFallbackAttempts workers = null;
++    if (threads > 0 && !stopped(job)) {
++      // While the job thread routes the continuations, one worker fewer keeps max_threads.
++      workers =
++          ParallelFallbackAttempts.start(
++              job,
++              input,
++              alternatives,
++              inputBaseline,
++              this.passLoopStarts.keySet(),
++              continuesFirst ? threads - 1 : threads);
+     }
+-    for (RoutingFallback.Strategy strategy : alternatives) {
++    try {
++      RoutingBoard continuedFrom = null;
++      if (continuesFirst) {
++        bestAttempt =
++            runContinuations(job, bestAttempt, automaticContinuations(job.routerSettings));
++        continuedFrom = bestAttempt.board;
++      }
++      if (workers != null) {
++        workers.setThreads(threads);
++      }
++      bestAttempt = runAlternatives(job, input, alternatives, inputBaseline, bestAttempt, workers);
++      if (workers != null) {
++        // Attempts after the point where the fold stopped are not needed; stop them now.
++        workers.close();
++        workers = null;
++      }
++      List<RoutingFallback.Strategy> after = new ArrayList<>(continuations);
++      if (continuedFrom != null && bestAttempt.board == continuedFrom) {
++        if (!bestAttempt.outcome.isCompleteAndClean()) {
++          job.logInfo(
++              "Routing fallback: no alternative replaced the board the continuations ran on; not continuing it again.");
++        }
++      } else {
++        after.addAll(automaticContinuations(job.routerSettings));
++      }
++      if (!after.isEmpty()) {
++        bestAttempt = runContinuations(job, bestAttempt, after);
++      }
++    } finally {
++      if (workers != null) {
++        workers.close();
++      }
++    }
++    job.board = bestAttempt.board;
++    job.logInfo(
++        "Routing fallback chose '"
++            + bestAttempt.outcome.strategy
++            + "': "
++            + bestAttempt.outcome
++            + ".");
++    return bestAttempt.router;
++  }
++
++  /**
++   * Tries the alternatives in order on fresh copies of the input. With {@code workers}, the
++   * attempts were started ahead on worker threads and are taken here in the same order.
++   */
++  private Attempt runAlternatives(
++      RoutingJob job,
++      byte[] input,
++      List<RoutingFallback.Strategy> alternatives,
++      ClearanceBaseline inputBaseline,
++      Attempt incumbent,
++      ParallelFallbackAttempts workers) {
++    Attempt bestAttempt = incumbent;
++    for (int index = 0; index < alternatives.size(); index++) {
++      RoutingFallback.Strategy strategy = alternatives.get(index);
+       if (stopped(job) || bestAttempt.outcome.isCompleteAndClean()) {
+         break;
+       }
+-      Attempt attempt = runAttempt(job, input, strategy, false, inputBaseline);
++      Attempt attempt;
++      BatchAutorouter.StopReason reason;
++      if (workers != null) {
++        ParallelFallbackAttempts.Taken taken = workers.take(index, this.passLoopStarts);
++        attempt = taken != null ? taken.attempt() : null;
++        reason =
++            taken == null
++                ? null
++                : taken.repeated()
++                    ? BatchAutorouter.StopReason.REPEATED
++                    : attempt.router.lastStopReason;
++      } else {
++        attempt = runAttempt(job, input, strategy, false, inputBaseline);
++        reason = attempt != null ? attempt.router.lastStopReason : null;
++      }
+       if (attempt == null) {
+         continue;
+       }
+-      if (attempt.router.lastStopReason == BatchAutorouter.StopReason.REPEATED) {
++      if (reason == BatchAutorouter.StopReason.REPEATED) {
+         RoutingFallback.Outcome repeated =
+             this.passLoopStarts.get(attempt.router.passLoopStartHash);
+         job.logInfo(
+@@ -112,14 +200,14 @@ final class RoutingFallbackRunner {
+                 + "': its fanout left the board an earlier pass loop started on; stopped after the fanout ("
+                 + (repeated != null ? repeated : attempt.outcome)
+                 + ").");
+-        if (stopAlternatives(bestAttempt.outcome, attempt.router.lastStopReason)) {
++        if (stopAlternatives(bestAttempt.outcome, reason)) {
+           break;
+         }
+         continue;
+       }
+       if (strategy.fanoutOnly
+           && attempt.router.passLoopStartHash != null
+-          && attempt.router.lastStopReason != BatchAutorouter.StopReason.TIMED_OUT) {
++          && reason != BatchAutorouter.StopReason.TIMED_OUT) {
+         this.passLoopStarts.putIfAbsent(attempt.router.passLoopStartHash, attempt.outcome);
+       }
+       job.logInfo(
+@@ -128,37 +216,18 @@ final class RoutingFallbackRunner {
+               + "': "
+               + attempt.outcome
+               + " after "
+-              + RoutingFallback.describe(attempt.router.lastStopReason)
++              + RoutingFallback.describe(reason)
+               + ".");
+       if (replaces(attempt, bestAttempt)) {
+         bestAttempt = attempt;
+       } else {
+         job.board = bestAttempt.board;
+       }
+-      if (stopAlternatives(bestAttempt.outcome, attempt.router.lastStopReason)) {
++      if (stopAlternatives(bestAttempt.outcome, reason)) {
+         break;
+       }
+     }
+-    List<RoutingFallback.Strategy> after = new ArrayList<>(continuations);
+-    if (continuedFrom != null && bestAttempt.board == continuedFrom) {
+-      if (!bestAttempt.outcome.isCompleteAndClean()) {
+-        job.logInfo(
+-            "Routing fallback: no alternative replaced the board the continuations ran on; not continuing it again.");
+-      }
+-    } else {
+-      after.addAll(automaticContinuations(job.routerSettings));
+-    }
+-    if (!after.isEmpty()) {
+-      bestAttempt = runContinuations(job, bestAttempt, after);
+-    }
+-    job.board = bestAttempt.board;
+-    job.logInfo(
+-        "Routing fallback chose '"
+-            + bestAttempt.outcome.strategy
+-            + "': "
+-            + bestAttempt.outcome
+-            + ".");
+-    return bestAttempt.router;
++    return bestAttempt;
+   }
+ 
+   /**
+@@ -365,7 +434,7 @@ final class RoutingFallbackRunner {
+     return result;
+   }
+ 
+-  private record Attempt(
++  record Attempt(
+       RoutingFallback.Outcome outcome,
+       RoutingBoard board,
+       BatchAutorouter router,
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/ParallelFallbackAttemptsTest.java b/src/test/java/app/freerouting/autoroute/pipeline/ParallelFallbackAttemptsTest.java
+new file mode 100644
+index 00000000..17c1fc3f
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/ParallelFallbackAttemptsTest.java
+@@ -0,0 +1,108 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.core.RoutingJob;
++import app.freerouting.core.RoutingJobState;
++import app.freerouting.core.StoppableThread;
++import app.freerouting.settings.AutorouterSettings;
++import app.freerouting.settings.RouterSettings;
++import java.util.ArrayList;
++import java.util.List;
++import org.junit.jupiter.api.Test;
++
++class ParallelFallbackAttemptsTest {
++
++  @Test
++  void propertyParsesToZeroUnlessPositiveInteger() {
++    assertEquals(0, ParallelFallbackAttempts.parseThreads(null));
++    assertEquals(0, ParallelFallbackAttempts.parseThreads(" "));
++    assertEquals(0, ParallelFallbackAttempts.parseThreads("four"));
++    assertEquals(0, ParallelFallbackAttempts.parseThreads("-2"));
++    assertEquals(4, ParallelFallbackAttempts.parseThreads(" 4 "));
++  }
++
++  @Test
++  void threadsAreCappedByMaxThreadsAndStrategyCount() {
++    RouterSettings settings = new RouterSettings();
++    settings.autorouter = new AutorouterSettings();
++    settings.autorouter.maxThreads = 1;
++    assertEquals(0, ParallelFallbackAttempts.effectiveThreads(4, settings, 5));
++
++    settings.autorouter.maxThreads = 64;
++    int cores = settings.getAutorouterMaxThreads();
++    int expected = Math.min(3, cores) >= 2 ? Math.min(3, cores) : 0;
++    assertEquals(expected, ParallelFallbackAttempts.effectiveThreads(8, settings, 3));
++    assertEquals(0, ParallelFallbackAttempts.effectiveThreads(1, settings, 5));
++    assertEquals(0, ParallelFallbackAttempts.effectiveThreads(4, settings, 1));
++    assertEquals(0, ParallelFallbackAttempts.effectiveThreads(0, settings, 5));
++  }
++
++  @Test
++  void attemptLogLinesReplayInOrderUpToTheMark() {
++    RecordingJob parent = new RecordingJob();
++    ParallelFallbackAttempts.AttemptJob attempt =
++        new ParallelFallbackAttempts.AttemptJob(parent, new RouterSettings());
++    attempt.logInfo("one");
++    attempt.logWarning("two");
++    attempt.logDebug("three");
++    assertTrue(parent.lines.isEmpty(), "worker lines are buffered");
++
++    attempt.replay(parent, 2);
++    assertEquals(List.of("I:one", "W:two"), parent.lines);
++  }
++
++  @Test
++  void attemptStopIsPrivateButFollowsTheJob() {
++    RecordingJob parent = new RecordingJob();
++    parent.thread = new IdleThread();
++    parent.state = RoutingJobState.RUNNING;
++    ParallelFallbackAttempts.AttemptJob attempt =
++        new ParallelFallbackAttempts.AttemptJob(parent, new RouterSettings());
++
++    attempt.thread.requestStopAutoRouter();
++    assertTrue(attempt.thread.isStopAutoRouterRequested());
++    assertFalse(parent.thread.isStopAutoRouterRequested(), "the job thread is not stopped");
++
++    attempt.thread.resetAutoRouterStopRequest();
++    assertFalse(attempt.thread.isStopAutoRouterRequested());
++    parent.state = RoutingJobState.TIMED_OUT;
++    attempt.thread.isStopAutoRouterRequested();
++    assertEquals(RoutingJobState.TIMED_OUT, attempt.state, "the timeout reaches the attempt");
++
++    parent.thread.requestStop();
++    assertTrue(attempt.thread.isStopRequested());
++    assertTrue(attempt.thread.isStopAutoRouterRequested());
++  }
++
++  private static final class RecordingJob extends RoutingJob {
++    final List<String> lines = new ArrayList<>();
++
++    @Override
++    public void logInfo(String message) {
++      this.lines.add("I:" + message);
++    }
++
++    @Override
++    public void logWarning(String message) {
++      this.lines.add("W:" + message);
++    }
++
++    @Override
++    public void logDebug(String message) {
++      this.lines.add("D:" + message);
++    }
++
++    @Override
++    public void logError(String message, Throwable ex) {
++      this.lines.add("E:" + message);
++    }
++  }
++
++  private static final class IdleThread extends StoppableThread {
++    @Override
++    protected void threadAction() {}
++  }
++}

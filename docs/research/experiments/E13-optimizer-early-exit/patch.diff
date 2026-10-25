@@ -1,0 +1,187 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java b/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
+index fbe9c591..852d8f86 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
+@@ -821,6 +821,13 @@ public final class BatchOptimizer extends NamedAlgorithm {
+       return 0.0f;
+     }
+ 
++    String skipReason =
++        EXP_EARLY_EXIT ? passSkipReason(candidateItemIds, boardStatisticsBefore, selection) : null;
++    if (skipReason != null) {
++      job.logInfo(String.format(Locale.US, "Optimizer pass #%d skipped: %s.", passNo, skipReason));
++      return 0.0f;
++    }
++
+     int configuredThreads =
+         (this.settings.optimizer != null && this.settings.optimizer.maxThreads != null)
+             ? this.settings.optimizer.maxThreads
+@@ -1043,6 +1050,123 @@ public final class BatchOptimizer extends NamedAlgorithm {
+     return routeImproved;
+   }
+ 
++  /**
++   * Experiment E13: {@code -Dfreerouting.exp.optimizer_early_exit=gain_bound} skips an optimizer
++   * pass whose candidates cannot raise the lower-bound optimizer score. Off by default.
++   */
++  private static final boolean EXP_EARLY_EXIT =
++      "gain_bound"
++          .equalsIgnoreCase(
++              System.getProperty("freerouting.exp.optimizer_early_exit", "off").trim());
++
++  /**
++   * Experiment E13: with a margin above 0, a pass is also skipped when the bound on the score of
++   * all its candidates together is at most this many percent above the current score. The pass
++   * then loses at most that much; 0 (default) skips only passes that cannot improve at all.
++   */
++  private static final double EXP_EARLY_EXIT_MARGIN_PERCENT =
++      Math.max(
++          0.0,
++          Double.parseDouble(
++              System.getProperty("freerouting.exp.optimizer_early_exit_margin", "0").trim()));
++
++  /**
++   * Returns why the pass cannot improve the lower-bound optimizer score, or null if it may. A
++   * candidate rips its connections and routes them again, so it can at best remove their trace
++   * length, vias and bends; the score with all of them removed bounds the candidate's score from
++   * above, because the score never rises with length, vias or bends. With {@code score_ranked} a
++   * pass commits only candidates that raise the score on their own, so the best single bound
++   * decides; the other selections may combine commits, so the bound of the union of all ripped
++   * items decides. The bound assumes that a candidate does not shorten items outside its ripped
++   * connections (the nested router may rip and re-route others; see the experiment README).
++   */
++  private String passSkipReason(
++      List<Integer> candidateItemIds, BoardStatistics stats, CommitSelection selection) {
++    double traceLengthMm = stats.traces.totalLengthMm != null ? stats.traces.totalLengthMm : 0.0;
++    int viaCount = stats.vias.totalCount != null ? stats.vias.totalCount : 0;
++    int bendCount = stats.bends.totalCount != null ? stats.bends.totalCount : 0;
++    Float current = stats.getOptimizerScore(job.routerSettings, traceLengthMm, viaCount, bendCount);
++    if (current == null) {
++      return null;
++    }
++    double boardUnitToMm = this.board.communication.boardUnitSize(Unit.MM);
++    float bestSingle = Float.NEGATIVE_INFINITY;
++    Set<Item> union = new TreeSet<>();
++    for (int itemId : candidateItemIds) {
++      Item item = this.board.getItem(itemId);
++      if (item == null || item.hasIgnoredNets()) {
++        continue;
++      }
++      Set<Item> ripped = rippedConnectionsOf(item);
++      union.addAll(ripped);
++      bestSingle =
++          Math.max(
++              bestSingle,
++              scoreWithout(stats, ripped, traceLengthMm, viaCount, bendCount, boardUnitToMm));
++    }
++    float unionBound = scoreWithout(stats, union, traceLengthMm, viaCount, bendCount, boardUnitToMm);
++    String reason =
++        skipDecision(
++            current,
++            bestSingle,
++            unionBound,
++            selection == CommitSelection.SCORE_RANKED,
++            EXP_EARLY_EXIT_MARGIN_PERCENT);
++    return reason == null
++        ? null
++        : String.format(Locale.US, "%s (%d candidates)", reason, candidateItemIds.size());
++  }
++
++  /**
++   * The decision of {@link #passSkipReason} from the current score and the two bounds: the best
++   * score one candidate can reach and the score all candidates together can reach.
++   */
++  static String skipDecision(
++      float current,
++      float bestSingle,
++      float unionBound,
++      boolean scoreRanked,
++      double marginPercent) {
++    float bound = scoreRanked ? Math.min(bestSingle, unionBound) : unionBound;
++    if (!(bound > current)) {
++      return String.format(
++          Locale.US, "no candidate can raise the optimizer score %.2f (bound %.2f)", current, bound);
++    }
++    if (marginPercent > 0 && current > 0 && unionBound <= current * (1.0 + marginPercent / 100.0)) {
++      return String.format(
++          Locale.US,
++          "all candidates together can raise the optimizer score %.2f to at most %.2f, within the"
++              + " %.2f%% margin",
++          current,
++          unionBound,
++          marginPercent);
++    }
++    return null;
++  }
++
++  /** The lower-bound optimizer score of the board with the given traces and vias removed. */
++  private float scoreWithout(
++      BoardStatistics stats,
++      Set<Item> removed,
++      double traceLengthMm,
++      int viaCount,
++      int bendCount,
++      double boardUnitToMm) {
++    double length = 0;
++    int vias = 0;
++    int bends = 0;
++    for (Item item : removed) {
++      length += ChangeSet.traceLength(item);
++      vias += item instanceof Via ? 1 : 0;
++      bends += ChangeSet.bendCount(item);
++    }
++    return stats.getOptimizerScore(
++        job.routerSettings,
++        Math.max(0.0, traceLengthMm - length * boardUnitToMm),
++        Math.max(0, viaCount - vias),
++        Math.max(0, bendCount - bends));
++  }
++
+   /**
+    * Commits the pass's other improved candidates after its best one, up to {@code
+    * optimizer.max_commits_per_pass} in total (a value below 1 means no limit). All candidates were
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerEarlyExitTest.java b/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerEarlyExitTest.java
+new file mode 100644
+index 00000000..487306a8
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/BatchOptimizerEarlyExitTest.java
+@@ -0,0 +1,39 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertNull;
++
++import org.junit.jupiter.api.Test;
++
++/** Tests the pass-skip decision of experiment E13. */
++class BatchOptimizerEarlyExitTest {
++
++  @Test
++  void skipsAtTheClampedFloorWhenNoCandidateCanLiftIt() {
++    // Score clamped at 0 and no single candidate (nor all of them) can lift it.
++    assertNotNull(BatchOptimizer.skipDecision(0.0f, 0.0f, 0.0f, true, 0.0));
++    assertNotNull(BatchOptimizer.skipDecision(0.0f, 0.0f, 0.0f, false, 0.0));
++  }
++
++  @Test
++  void scoreRankedNeedsOneCandidateThatGainsOnItsOwn() {
++    // All candidates together could lift the floor, but none alone: score_ranked commits nothing.
++    assertNotNull(BatchOptimizer.skipDecision(0.0f, 0.0f, 12.0f, true, 0.0));
++    // The other selections may combine commits, so the pass runs.
++    assertNull(BatchOptimizer.skipDecision(0.0f, 0.0f, 12.0f, false, 0.0));
++  }
++
++  @Test
++  void runsWheneverACandidateMayImprove() {
++    assertNull(BatchOptimizer.skipDecision(700.0f, 700.5f, 900.0f, true, 0.0));
++    assertNull(BatchOptimizer.skipDecision(700.0f, 700.0f, 700.5f, false, 0.0));
++  }
++
++  @Test
++  void marginSkipsPassesWhoseWholeGainIsSmall() {
++    // 700 -> at most 710 is 1.43%: skipped with a 2.5% margin, run without a margin.
++    assertNotNull(BatchOptimizer.skipDecision(700.0f, 705.0f, 710.0f, true, 2.5));
++    assertNull(BatchOptimizer.skipDecision(700.0f, 705.0f, 710.0f, true, 0.0));
++    assertNull(BatchOptimizer.skipDecision(700.0f, 705.0f, 800.0f, true, 2.5));
++  }
++}

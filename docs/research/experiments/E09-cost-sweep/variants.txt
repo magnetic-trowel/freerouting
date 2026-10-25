@@ -1,0 +1,38 @@
+# E09 cost sweep: <name> <jar> <flags>; first line is the control (current defaults).
+# Factor levels (low/high, default): A=router.scoring.via_costs 25/100 (50); B=router.scoring.start_ripup_costs 50/200 (100); C=router.autorouter.smd_net_via_cost_factor 0.03/0.3 (0.1); D=router.scoring.default_undesired_direction_trace_cost 0.5/2.0 (1.0); E=router.trace_pull_tight_accuracy 160/1600 (500); F=router.scoring.plane_via_costs 2/12 (5); G=router.fanout.enabled false/true (true)
+control head
+seed1 head --router.autorouter.item_order_seed=1
+seed2 head --router.autorouter.item_order_seed=2
+seed3 head --router.autorouter.item_order_seed=3
+# d01 ABCDEFG -------
+d01 head --router.scoring.via_costs=25 --router.scoring.start_ripup_costs=50 --router.autorouter.smd_net_via_cost_factor=0.03 --router.scoring.default_undesired_direction_trace_cost=0.5 --router.trace_pull_tight_accuracy=160 --router.scoring.plane_via_costs=2 --router.fanout.enabled=false
+# d02 ABCDEFG +---+-+
+d02 head --router.scoring.via_costs=100 --router.scoring.start_ripup_costs=50 --router.autorouter.smd_net_via_cost_factor=0.03 --router.scoring.default_undesired_direction_trace_cost=0.5 --router.trace_pull_tight_accuracy=1600 --router.scoring.plane_via_costs=2 --router.fanout.enabled=true
+# d03 ABCDEFG -+--++-
+d03 head --router.scoring.via_costs=25 --router.scoring.start_ripup_costs=200 --router.autorouter.smd_net_via_cost_factor=0.03 --router.scoring.default_undesired_direction_trace_cost=0.5 --router.trace_pull_tight_accuracy=1600 --router.scoring.plane_via_costs=12 --router.fanout.enabled=false
+# d04 ABCDEFG ++---++
+d04 head --router.scoring.via_costs=100 --router.scoring.start_ripup_costs=200 --router.autorouter.smd_net_via_cost_factor=0.03 --router.scoring.default_undesired_direction_trace_cost=0.5 --router.trace_pull_tight_accuracy=160 --router.scoring.plane_via_costs=12 --router.fanout.enabled=true
+# d05 ABCDEFG --+-+++
+d05 head --router.scoring.via_costs=25 --router.scoring.start_ripup_costs=50 --router.autorouter.smd_net_via_cost_factor=0.3 --router.scoring.default_undesired_direction_trace_cost=0.5 --router.trace_pull_tight_accuracy=1600 --router.scoring.plane_via_costs=12 --router.fanout.enabled=true
+# d06 ABCDEFG +-+--+-
+d06 head --router.scoring.via_costs=100 --router.scoring.start_ripup_costs=50 --router.autorouter.smd_net_via_cost_factor=0.3 --router.scoring.default_undesired_direction_trace_cost=0.5 --router.trace_pull_tight_accuracy=160 --router.scoring.plane_via_costs=12 --router.fanout.enabled=false
+# d07 ABCDEFG -++---+
+d07 head --router.scoring.via_costs=25 --router.scoring.start_ripup_costs=200 --router.autorouter.smd_net_via_cost_factor=0.3 --router.scoring.default_undesired_direction_trace_cost=0.5 --router.trace_pull_tight_accuracy=160 --router.scoring.plane_via_costs=2 --router.fanout.enabled=true
+# d08 ABCDEFG +++-+--
+d08 head --router.scoring.via_costs=100 --router.scoring.start_ripup_costs=200 --router.autorouter.smd_net_via_cost_factor=0.3 --router.scoring.default_undesired_direction_trace_cost=0.5 --router.trace_pull_tight_accuracy=1600 --router.scoring.plane_via_costs=2 --router.fanout.enabled=false
+# d09 ABCDEFG ---+-++
+d09 head --router.scoring.via_costs=25 --router.scoring.start_ripup_costs=50 --router.autorouter.smd_net_via_cost_factor=0.03 --router.scoring.default_undesired_direction_trace_cost=2.0 --router.trace_pull_tight_accuracy=160 --router.scoring.plane_via_costs=12 --router.fanout.enabled=true
+# d10 ABCDEFG +--+++-
+d10 head --router.scoring.via_costs=100 --router.scoring.start_ripup_costs=50 --router.autorouter.smd_net_via_cost_factor=0.03 --router.scoring.default_undesired_direction_trace_cost=2.0 --router.trace_pull_tight_accuracy=1600 --router.scoring.plane_via_costs=12 --router.fanout.enabled=false
+# d11 ABCDEFG -+-++-+
+d11 head --router.scoring.via_costs=25 --router.scoring.start_ripup_costs=200 --router.autorouter.smd_net_via_cost_factor=0.03 --router.scoring.default_undesired_direction_trace_cost=2.0 --router.trace_pull_tight_accuracy=1600 --router.scoring.plane_via_costs=2 --router.fanout.enabled=true
+# d12 ABCDEFG ++-+---
+d12 head --router.scoring.via_costs=100 --router.scoring.start_ripup_costs=200 --router.autorouter.smd_net_via_cost_factor=0.03 --router.scoring.default_undesired_direction_trace_cost=2.0 --router.trace_pull_tight_accuracy=160 --router.scoring.plane_via_costs=2 --router.fanout.enabled=false
+# d13 ABCDEFG --+++--
+d13 head --router.scoring.via_costs=25 --router.scoring.start_ripup_costs=50 --router.autorouter.smd_net_via_cost_factor=0.3 --router.scoring.default_undesired_direction_trace_cost=2.0 --router.trace_pull_tight_accuracy=1600 --router.scoring.plane_via_costs=2 --router.fanout.enabled=false
+# d14 ABCDEFG +-++--+
+d14 head --router.scoring.via_costs=100 --router.scoring.start_ripup_costs=50 --router.autorouter.smd_net_via_cost_factor=0.3 --router.scoring.default_undesired_direction_trace_cost=2.0 --router.trace_pull_tight_accuracy=160 --router.scoring.plane_via_costs=2 --router.fanout.enabled=true
+# d15 ABCDEFG -+++-+-
+d15 head --router.scoring.via_costs=25 --router.scoring.start_ripup_costs=200 --router.autorouter.smd_net_via_cost_factor=0.3 --router.scoring.default_undesired_direction_trace_cost=2.0 --router.trace_pull_tight_accuracy=160 --router.scoring.plane_via_costs=12 --router.fanout.enabled=false
+# d16 ABCDEFG +++++++
+d16 head --router.scoring.via_costs=100 --router.scoring.start_ripup_costs=200 --router.autorouter.smd_net_via_cost_factor=0.3 --router.scoring.default_undesired_direction_trace_cost=2.0 --router.trace_pull_tight_accuracy=1600 --router.scoring.plane_via_costs=12 --router.fanout.enabled=true

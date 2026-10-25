@@ -9,6 +9,7 @@ import com.google.api.services.sheets.v4.model.Spreadsheet;
 import com.google.api.services.sheets.v4.model.ValueRange;
 import java.io.IOException;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -29,6 +30,9 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li><b>API Key</b>: Contains valid GUID strings (e.g., 550e8400-e29b-41d4-a716-446655440000)
  *   <li><b>Access granted?</b>: Contains "Yes" for granted access, any other value denies access
+ *   <li><b>Profile ID</b> (optional): The Freerouting profile UUID the key is issued to. A bound
+ *       key acts only as that profile; an empty cell, or a sheet without this column, leaves the
+ *       key unbound (see {@link ApiKeyPrincipal})
  * </ul>
  *
  * <h2>Configuration</h2>
@@ -69,7 +73,7 @@ public class GoogleSheetsApiKeyProvider implements ApiKeyProvider {
   private final String googleApiKey;
   private final Sheets sheetsService;
   private final ScheduledExecutorService scheduler;
-  private volatile ConcurrentHashMap<String, Boolean> apiKeyCache;
+  private volatile ConcurrentHashMap<String, KeyEntry> apiKeyCache;
   private volatile String firstSheetName;
   private volatile boolean isHealthy;
   private volatile long lastSuccessfulRefresh;
@@ -167,9 +171,9 @@ public class GoogleSheetsApiKeyProvider implements ApiKeyProvider {
     }
 
     // Check cache
-    Boolean isValid = apiKeyCache.get(apiKey.trim());
-    if (isValid != null) {
-      if (isValid) {
+    KeyEntry entry = apiKeyCache.get(apiKey.trim());
+    if (entry != null) {
+      if (entry.granted()) {
         FRLogger.debug("API key validation successful: " + apiKey);
         return ApiKeyValidationResult.ACCESS_GRANTED;
       } else {
@@ -180,6 +184,83 @@ public class GoogleSheetsApiKeyProvider implements ApiKeyProvider {
 
     FRLogger.debug("API key validation undecided: key not found - " + apiKey);
     return ApiKeyValidationResult.UNDECIDED;
+  }
+
+  @Override
+  public UUID getProfileId(String apiKey) {
+    KeyEntry entry = apiKey != null ? apiKeyCache.get(apiKey.trim()) : null;
+    return entry != null ? entry.profileId() : null;
+  }
+
+  /** One row of the sheet: whether the key is granted and the profile it is issued to. */
+  record KeyEntry(boolean granted, UUID profileId) {}
+
+  /** The keys of a sheet, with counts for the log. */
+  record KeyTable(ConcurrentHashMap<String, KeyEntry> keys, int grantedCount, int skippedRows) {}
+
+  /**
+   * Reads the sheet's rows (the first row holds the column names). The "API Key" and "Access
+   * granted?" columns are required; the optional "Profile ID" column binds a key to one profile
+   * (see {@link ApiKeyPrincipal}), and an empty cell or a sheet without the column leaves the key
+   * unbound. A row whose profile ID is not a UUID is skipped, so a mistyped profile never grants an
+   * unbound key.
+   *
+   * @return the keys, or {@code null} when a required column is missing
+   */
+  static KeyTable parseRows(List<List<Object>> values) {
+    List<Object> headers = values.getFirst();
+    int apiKeyColumnIndex = findColumnIndex(headers, "API Key");
+    int accessGrantedColumnIndex = findColumnIndex(headers, "Access granted?");
+    int profileColumnIndex = findColumnIndex(headers, "Profile ID");
+    if (apiKeyColumnIndex == -1 || accessGrantedColumnIndex == -1) {
+      return null;
+    }
+
+    ConcurrentHashMap<String, KeyEntry> keys = new ConcurrentHashMap<>();
+    int grantedCount = 0;
+    int skippedRows = 0;
+    for (int i = 1; i < values.size(); i++) {
+      List<Object> row = values.get(i);
+      if (row.isEmpty()) {
+        continue;
+      }
+      if (row.size() <= Math.max(apiKeyColumnIndex, accessGrantedColumnIndex)) {
+        skippedRows++;
+        continue;
+      }
+
+      String apiKey = row.get(apiKeyColumnIndex).toString().trim();
+      String accessGranted = row.get(accessGrantedColumnIndex).toString().trim();
+      if (apiKey.isEmpty()) {
+        continue;
+      }
+      if (!GUID_PATTERN.matcher(apiKey).matches()) {
+        FRLogger.debug("Skipping invalid GUID in row " + (i + 1) + ": " + apiKey);
+        skippedRows++;
+        continue;
+      }
+
+      String profile =
+          profileColumnIndex >= 0 && profileColumnIndex < row.size()
+              ? row.get(profileColumnIndex).toString().trim()
+              : "";
+      UUID profileId = null;
+      if (!profile.isEmpty()) {
+        if (!GUID_PATTERN.matcher(profile).matches()) {
+          FRLogger.warn("Skipping row " + (i + 1) + " of the API key sheet: invalid Profile ID");
+          skippedRows++;
+          continue;
+        }
+        profileId = UUID.fromString(profile);
+      }
+
+      boolean isGranted = "Yes".equalsIgnoreCase(accessGranted);
+      keys.put(apiKey, new KeyEntry(isGranted, profileId));
+      if (isGranted) {
+        grantedCount++;
+      }
+    }
+    return new KeyTable(keys, grantedCount, skippedRows);
   }
 
   @Override
@@ -220,64 +301,19 @@ public class GoogleSheetsApiKeyProvider implements ApiKeyProvider {
         return;
       }
 
-      // Find column indices for "API Key" and "Access granted?"
-      List<Object> headers = values.getFirst();
-      int apiKeyColumnIndex = findColumnIndex(headers, "API Key");
-      int accessGrantedColumnIndex = findColumnIndex(headers, "Access granted?");
-
-      if (apiKeyColumnIndex == -1 || accessGrantedColumnIndex == -1) {
+      KeyTable table = parseRows(values);
+      if (table == null) {
         FRLogger.warn(
             "Required columns not found in Google Sheet. Expected 'API Key' and 'Access granted?'"
                 + " columns. Found: "
-                + headers);
+                + values.getFirst());
         this.apiKeyCache = new ConcurrentHashMap<>();
         this.isHealthy = false;
         return;
       }
-
-      // Build new cache
-      ConcurrentHashMap<String, Boolean> newCache = new ConcurrentHashMap<>();
-      int validKeysCount = 0;
-      int skippedRows = 0;
-
-      // Process rows (skip header row)
-      for (int i = 1; i < values.size(); i++) {
-        List<Object> row = values.get(i);
-
-        // Skip empty rows
-        if (row.isEmpty()) {
-          continue;
-        }
-
-        // Skip rows that don't have enough columns
-        if (row.size() <= Math.max(apiKeyColumnIndex, accessGrantedColumnIndex)) {
-          skippedRows++;
-          continue;
-        }
-
-        String apiKey = row.get(apiKeyColumnIndex).toString().trim();
-        String accessGranted = row.get(accessGrantedColumnIndex).toString().trim();
-
-        // Skip empty API keys
-        if (apiKey.isEmpty()) {
-          continue;
-        }
-
-        // Validate GUID format
-        if (!GUID_PATTERN.matcher(apiKey).matches()) {
-          FRLogger.debug("Skipping invalid GUID in row " + (i + 1) + ": " + apiKey);
-          skippedRows++;
-          continue;
-        }
-
-        // Check if access is granted
-        boolean isGranted = "Yes".equalsIgnoreCase(accessGranted);
-        newCache.put(apiKey, isGranted);
-
-        if (isGranted) {
-          validKeysCount++;
-        }
-      }
+      ConcurrentHashMap<String, KeyEntry> newCache = table.keys();
+      int validKeysCount = table.grantedCount();
+      int skippedRows = table.skippedRows();
 
       // Atomically replace the cache
       final int previousCacheSize = this.apiKeyCache.size();
@@ -338,7 +374,7 @@ public class GoogleSheetsApiKeyProvider implements ApiKeyProvider {
    * @param headerName The header name to find
    * @return The column index, or -1 if not found
    */
-  private int findColumnIndex(List<Object> headers, String headerName) {
+  private static int findColumnIndex(List<Object> headers, String headerName) {
     for (int i = 0; i < headers.size(); i++) {
       if (headers.get(i).toString().trim().equalsIgnoreCase(headerName)) {
         return i;

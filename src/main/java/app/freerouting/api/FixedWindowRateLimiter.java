@@ -40,15 +40,35 @@ public class FixedWindowRateLimiter {
     }
 
     if (counter.count >= Math.max(1, maxRequests)) {
-      long elapsed = now - counter.windowStartMs;
-      long remainingMs = Math.max(0L, windowMs - elapsed);
-      long retryAfter = Math.max(1L, (remainingMs + 999L) / 1000L);
-      return new Decision(false, retryAfter);
+      return denied(counter, now, windowMs);
     }
 
     counter.count++;
     cleanupIfNeeded(now, windowMs);
     return new Decision(true, 0L);
+  }
+
+  /** Returns what {@link #check} would decide for the key, without counting a request. */
+  public synchronized Decision peek(String key, int maxRequests, int windowSeconds) {
+    long now = System.currentTimeMillis();
+    long windowMs = Math.max(1L, windowSeconds) * 1000L;
+    WindowCounter counter = counters.get(key);
+    if (counter == null
+        || now - counter.windowStartMs >= windowMs
+        || counter.count < Math.max(1, maxRequests)) {
+      return new Decision(true, 0L);
+    }
+    return denied(counter, now, windowMs);
+  }
+
+  /** Forgets all counts. */
+  public synchronized void clear() {
+    counters.clear();
+  }
+
+  private static Decision denied(WindowCounter counter, long now, long windowMs) {
+    long remainingMs = Math.max(0L, windowMs - (now - counter.windowStartMs));
+    return new Decision(false, Math.max(1L, (remainingMs + 999L) / 1000L));
   }
 
   private void cleanupIfNeeded(long now, long windowMs) {

@@ -23,7 +23,11 @@ import java.util.Objects;
 })
 public abstract class Rule {
 
-  /** Returns a collection of objects of class Rule. */
+  /**
+   * Returns a collection of objects of class Rule. Never {@code null}: when the scope ends early
+   * (end of file or IO error), the rules read so far are returned and the caller meets the same
+   * condition on its next token.
+   */
   public static Collection<Rule> readScope(IJFlexScanner scanner) {
     Collection<Rule> result = new LinkedList<>();
     Object currentToken = null;
@@ -34,12 +38,12 @@ public abstract class Rule {
         currentToken = scanner.nextToken();
       } catch (IOException e) {
         FRLogger.error("Rule.read_scope: IO error scanning file", e);
-        return null;
+        return result;
       }
       if (currentToken == null) {
         FRLogger.warn(
             "Rule.read_scope: unexpected end of file at '" + scanner.getScopeIdentifier() + "'");
-        return null;
+        return result;
       }
       if (currentToken == Keyword.CLOSED_BRACKET) {
         // end of scope
@@ -122,9 +126,9 @@ public abstract class Rule {
   }
 
   /**
-   * Reads a "(width" rule. A width that is not finite and positive (KiCad exports "(width -0.001)"
-   * for unset track widths) is ignored with a warning, so the enclosing scope's or the default
-   * width applies instead of producing zero-width wires.
+   * Reads a "(width" rule. An unset width ({@link DsnFile#isUnsetSize}) or a zero width is ignored
+   * with a warning, so the enclosing scope's or the default width applies instead of producing
+   * zero-width wires.
    */
   public static WidthRule readWidthRule(IJFlexScanner scanner) {
     // Null if the token is not a number; unboxing it used to abort the whole read with an NPE.
@@ -134,9 +138,9 @@ public abstract class Rule {
       return null;
     }
 
-    if (value == null || !Double.isFinite(value) || value <= 0) {
+    if (DsnFile.isUnsetSize(value) || value == 0) {
       FRLogger.warn(
-          "Rule.readWidthRule: ignoring non-positive or unreadable width "
+          "Rule.readWidthRule: ignoring unset or zero width "
               + value
               + " at '"
               + scanner.getScopeIdentifier()
@@ -327,9 +331,13 @@ public abstract class Rule {
         }
       }
 
-      if (value == null) {
+      if (DsnFile.isUnsetSize(value)) {
+        // An unset clearance (KiCad exports "(clearance -0.001)") falls back to the enclosing
+        // scope's clearance like a missing one.
         FRLogger.warn(
-            "Rule.read_clearance_rule: ignoring unreadable clearance at '"
+            "Rule.read_clearance_rule: ignoring unset clearance "
+                + value
+                + " at '"
                 + scanner.getScopeIdentifier()
                 + "'");
         return null;

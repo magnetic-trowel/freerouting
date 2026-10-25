@@ -27,7 +27,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Base64;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -95,7 +94,7 @@ class JobOutputHttpStreamTest {
       value = RoutingJobState.class,
       names = {"INVALID", "CANCELLED", "TIMED_OUT", "TERMINATED"})
   void terminalErrorClosesBothHttpStreamsAndTheirWorkers(RoutingJobState state) throws Exception {
-    final Set<Thread> previousWorkers = workers();
+    final int previousWorkers = openStreams();
     try (HttpClient client = HttpClient.newHttpClient()) {
       try {
         var sesResponse = client.sendAsync(request(false), HttpResponse.BodyHandlers.ofString());
@@ -118,7 +117,7 @@ class JobOutputHttpStreamTest {
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void completedHttpStreamIncludesFinalSnapshotBeforeEndOfResponse(boolean json) throws Exception {
-    final Set<Thread> previousWorkers = workers();
+    final int previousWorkers = openStreams();
     job.output = new BoardFileDetails();
     HeadlessBoardManager manager = new HeadlessBoardManager(job);
     manager.replaceRoutingBoard(job.board);
@@ -172,17 +171,22 @@ class JobOutputHttpStreamTest {
         .build();
   }
 
-  private static Set<Thread> workers() {
-    return Thread.getAllStackTraces().keySet().stream()
-        .filter(thread -> thread.getName().startsWith("job-output-") && thread.isAlive())
-        .collect(Collectors.toSet());
+  /** Open job streams: a stream is a scheduled poll on a shared executor, not a thread. */
+  private static int openStreams() {
+    try {
+      var method =
+          Class.forName("app.freerouting.api.v1.JobOutputStream").getDeclaredMethod("openStreams");
+      method.setAccessible(true);
+      return (int) method.invoke(null);
+    } catch (ReflectiveOperationException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
-  private static boolean awaitWorkerCount(Set<Thread> previous, int count)
-      throws InterruptedException {
+  private static boolean awaitWorkerCount(int previous, int count) throws InterruptedException {
     long deadline = System.nanoTime() + 5_000_000_000L;
     while (System.nanoTime() < deadline) {
-      if (workers().stream().filter(thread -> !previous.contains(thread)).count() == count) {
+      if (openStreams() - previous == count) {
         return true;
       }
       Thread.sleep(10);

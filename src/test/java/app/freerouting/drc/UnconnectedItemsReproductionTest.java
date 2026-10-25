@@ -35,9 +35,9 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
       "Issue575-drc_Natural_Tone_Preamp_7_unconnected_items.dsn";
 
   /** Expected counts from the reference freerouting DRC JSON for this board. */
-  private static final int EXPECTED_UNCONNECTED_NET_GROUPS = 9;
+  private static final int EXPECTED_UNCONNECTED_NET_GROUPS = 7; // KiCad's unconnected items
 
-  private static final int EXPECTED_DANGLING_TRACKS = 24;
+  private static final int EXPECTED_DANGLING_TRACKS = 5; // KiCad's track_dangling
   private static final int EXPECTED_DANGLING_VIAS = 4;
 
   /** Resets global settings before the reproduction test. */
@@ -71,12 +71,12 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
         trace2.getNetNumber(0),
         "Traces 2402 and 2411 must belong to the same net");
 
-    // Trace 2402 is genuinely dangling: the board-model connectivity check
-    // confirms neither endpoint has a contact. The DRC must report this.
-    assertTrue(
+    // KiCad does not report trace 2402 (GND, 153.1-154.4 mm, y 109.588) as dangling
+    // (-kicad_drc.json). Its ends lie inside GND pads, which the DSN import joins to the pad
+    // centres, so it is connected here too.
+    assertFalse(
         trace1.isTail(),
-        "Trace 2402 (GND) is expected to be a dangling trace (is_tail == true). "
-            + "It has no connected endpoints in this partially-routed board.");
+        "Trace 2402 (GND) ends inside GND pads; KiCad does not report it as dangling.");
 
     Item item321 = board.getItem(321); // GND pin (component #26)
     // Confirm that pin 321 is indeed NOT in the normal contacts of trace 2402.
@@ -156,7 +156,9 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
             .map(ui -> ui.firstItem.getId())
             .collect(Collectors.toSet());
 
-    int[] spotCheckIds = {2372, 2433, 2436};
+    // 2433 (GND, 119.8-121.5 mm) is not among KiCad's dangling tracks: its end lies inside a GND
+    // pad, which the DSN import joins to the pad centre. 2372 is one of KiCad's five.
+    int[] spotCheckIds = {2372, 2436};
     for (int trackId : spotCheckIds) {
       Item trackItem = board.getItem(trackId);
       assertNotNull(trackItem, "Track with ID " + trackId + " should exist in the board");

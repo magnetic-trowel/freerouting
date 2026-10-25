@@ -1,0 +1,4 @@
+control head
+heap build/e18.jar
+retain head -Dfreerouting.benchmark.retain_autoroute_database=true
+heap_retain build/e18.jar -Dfreerouting.benchmark.retain_autoroute_database=true

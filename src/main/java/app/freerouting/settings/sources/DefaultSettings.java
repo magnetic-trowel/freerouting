@@ -188,7 +188,6 @@ public class DefaultSettings implements SettingsSource {
     settings.tracePullTightAccuracy = 500;
     settings.viasAllowed = true;
     settings.automaticNeckdown = true;
-    settings.autorouter.saveIntermediateStages = false;
     settings.autorouter.ignoreNetClasses = new String[0];
     settings.autorouter.startNecked = true;
     settings.autorouter.fallbackStrategies = DEFAULT_FALLBACK_STRATEGIES;
@@ -221,7 +220,6 @@ public class DefaultSettings implements SettingsSource {
     // Fanout pre-pass defaults
     settings.fanout.enabled = true;
     settings.fanout.maxPasses = 20;
-    settings.fanout.maxMillisecondsPerPin = 10000L;
     settings.fanout.ripupAllowed = true;
     settings.fanout.minEscapeLengthMm = 2.5;
     settings.fanout.maxEscapeLengthMm = 4.5;
@@ -245,6 +243,7 @@ public class DefaultSettings implements SettingsSource {
     settings.optimizer.additionalRipupCostFactorAtStart = 10;
     settings.optimizer.traceRipupCostFactor = 0.6f;
     settings.optimizer.maxAutoroutePasses = 6;
+    settings.optimizer.reworkImportedRouting = false;
     settings.optimizer.enablePreflightGuards = true;
     settings.optimizer.maxConsecutiveFailures = 50;
     settings.optimizer.maxConsecutiveFailuresPass1 = 12;

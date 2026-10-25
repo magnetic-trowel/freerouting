@@ -1,0 +1,3 @@
+# E05 same-pass requeue. "head" = jar built from d4383b44 + patch.diff.
+control head
+requeue head -Dfreerouting.exp.requeue_ripped=true

@@ -118,6 +118,18 @@ graph TD
   - `timeoutSeconds`: Routing budget limit.
 - **Benefit:** Reduces conversational turn latency from 6-7 round-trips to **1 single turn**, while automatically retrieving diagnostic DRC summaries without polluting context with raw trace coordinate blobs.
 
+#### Local file paths
+
+The tools that take a local path (`autoroute_board` with `filePath`/`rulesPath`/`sessionPath`, `upload_job_input_from_local_file`, `download_job_output_to_local_file`) read and write files on the machine that runs the Java server, not on the client's machine. They work out of the box with the local Java server (Option B), whose endpoints are loopback addresses. A server listening on a network address refuses local paths unless a directory is configured, and then accepts only files under it (after resolving `..` and symbolic links):
+
+```
+java -jar freerouting-executable.jar --gui.enabled=false --api_server.enabled=true --mcp_server.enabled=true --mcp_server.local_file_root=/srv/boards --api_server.local_file_root=/srv/boards
+```
+
+`mcp_server.local_file_root` governs the upload and download tools; `autoroute_board` passes its paths to `POST /v1/autoroute`, which follows `api_server.local_file_root`. Files larger than 100 MB are refused, and `download_job_output_to_local_file` needs an existing directory.
+
+**Troubleshooting:** "Local file paths are disabled because the server is reachable from the network" means the server listens on a non-loopback address: send the file content (`fileContent`, or the Base64 tools) or set `local_file_root`. "outside the allowed directory" means the path resolves outside `local_file_root`.
+
 ---
 
 ### Step-by-Step Multi-Turn Workflow (Alternative)
@@ -183,6 +195,8 @@ To prevent confusion, both **single underscore** (convention in Python CLI) and 
    - **Local Self-Hosted Mode**: Resolves to the local `userId` stored in `freerouting.json`.
 3. Defaults to `00000000-0000-0000-0000-000000000000` if resolving fails.
 
+4. With MCP authentication enabled and an API key bound to a profile (the provider's optional `Profile ID` column), the key's profile is used when no profile is configured, and a different profile is refused: `tools/call` and `initialize` answer with a JSON-RPC error (`-32602`, "Authentication failed: The API key is issued to another profile ..."), the REST calls of the tools answer **403**, and `/v1/mcp/events` answers **403**, while `/v1/mcp/ws` closes with "Profile does not match the API key". Unbound keys keep using the configured profile.
+
 #### Profile Email (`Freerouting-Profile-Email`)
 1. Resolves first to environment variables if provided.
 2. If not defined:
@@ -191,7 +205,7 @@ To prevent confusion, both **single underscore** (convention in Python CLI) and 
 
 #### Environment Host (`Freerouting-Environment-Host`)
 1. Resolves first to environment variables if provided.
-2. If not defined, it is **dynamically detected** from the MCP client's `initialize` handshake details (e.g. `Cursor/0.45.0` or `Roo-Cline/3.2.0`), working seamlessly in both modes.
+2. If not defined, it is **dynamically detected** from the MCP client's `initialize` handshake details (e.g. `Cursor/0.45.0` or `Roo-Cline/3.2.0`), working seamlessly in both modes. The detected value belongs to the caller that sent the `initialize` request (its profile ID and, with authentication enabled, its API key); other clients are not affected.
 3. Falls back to `MCP-Client/1.0`.
 
 ---

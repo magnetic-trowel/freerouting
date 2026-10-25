@@ -60,6 +60,7 @@ class RoutingResultManifestTest {
     job.resourceUsage.cpuTimeUsed = 1.5f;
     job.resourceUsage.peakMemoryUsed = 128.0f;
     BoardStatistics stats = new BoardStatistics(board);
+    job.finalStatistics = stats;
     job.resultPhaseMetrics.autorouter.before =
         RoutingResultManifest.PhaseSnapshot.fromBoardStatistics(
             stats, job.routerSettings, "current");
@@ -95,7 +96,7 @@ class RoutingResultManifestTest {
     assertTrue(root.get("output_written").getAsBoolean());
     assertEquals(310, root.get("cpu_score").getAsInt());
     assertFalse(root.has("optimizer_score"));
-    assertTrue(json.contains("\"cpu_time\": 1.50"));
+    assertEquals(1.5, root.getAsJsonObject("resource_usage").get("cpu_time").getAsDouble());
     assertNotNull(root.getAsJsonObject("phases").getAsJsonObject("autorouter").get("before"));
     assertNotNull(root.getAsJsonObject("phases").getAsJsonObject("autorouter").get("after"));
 

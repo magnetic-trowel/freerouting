@@ -92,7 +92,11 @@ public final class GuiBoardPersistence {
     if (manager.isBoardReadOnlyForPersistence()) {
       return false;
     }
-    return manager.saveHeadlessSpecctraSessionSes(outputStream, designName);
+    if (!manager.saveHeadlessSpecctraSessionSes(outputStream, designName)) {
+      return false;
+    }
+    manager.setOriginalBoardChecksum(manager.calculateCrc32());
+    return true;
   }
 
   public boolean saveSpecctraSessionSesAsFusionScriptScr(

@@ -18,9 +18,11 @@ import app.freerouting.board.state.BoardObservers;
 import app.freerouting.board.state.Communication;
 import app.freerouting.core.BoardFileDetails;
 import app.freerouting.core.RoutingJob;
+import app.freerouting.core.library.Padstack;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.IdGenerator;
 import app.freerouting.drc.ClearanceViolation;
+import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.PolylineShape;
@@ -40,6 +42,8 @@ import app.freerouting.rules.DefaultItemClearanceClasses;
 import app.freerouting.rules.DifferentialPairDetector;
 import app.freerouting.rules.MeanderPatternType;
 import app.freerouting.rules.NetMeanderConstraint;
+import app.freerouting.rules.ViaInfo;
+import app.freerouting.rules.ViaRule;
 import app.freerouting.settings.sources.DefaultSettings;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -47,6 +51,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
@@ -989,6 +994,7 @@ public class HeadlessBoardManager implements BoardManager {
       if (this.routingJob.routerSettings.getLayerCount() != boardLayerCount) {
         this.routingJob.routerSettings.setLayerCount(boardLayerCount);
       }
+      applyFallbackVia();
       this.routingJob.routerSettings.applyBoardSpecificOptimizations(this.board);
       this.routingJob.routerSettings.applyNetClassExclusions(this.board);
       applyCopperToEdgeClearanceOverride();
@@ -999,6 +1005,107 @@ public class HeadlessBoardManager implements BoardManager {
       applyClearanceToleranceOverride();
       applyMeanderSettingsOverride();
     }
+  }
+
+  /**
+   * Gives the net classes that the design leaves without a usable via the fallback via of {@code
+   * router.fallback_via_diameter_um} and {@code router.fallback_via_drill_um}, or warns once that
+   * they cannot change layers.
+   *
+   * <p>KiCad exports the via of a net class whose via size is unset as a padstack of size -0.001.
+   * The DSN reader does not build such a padstack, so a class whose only via it was (on a board
+   * whose default class has none either) is left without any via.
+   */
+  private void applyFallbackVia() {
+    List<String> missingVias = this.board.library.getMissingViaPadstacks();
+    if (missingVias.isEmpty() || this.board.getLayerCount() < 2) {
+      return;
+    }
+    List<app.freerouting.rules.NetClass> classesWithoutVia = new ArrayList<>();
+    for (int i = 0; i < this.board.rules.netClasses.count(); i++) {
+      app.freerouting.rules.NetClass netClass = this.board.rules.netClasses.get(i);
+      if (netClass.getViaRule() == null || netClass.getViaRule().viaCount() == 0) {
+        classesWithoutVia.add(netClass);
+      }
+    }
+    if (classesWithoutVia.isEmpty()) {
+      return;
+    }
+    List<String> classNames = classesWithoutVia.stream().map(c -> c.getName()).toList();
+    Double diameterUm = this.routingJob.routerSettings.fallbackViaDiameterUm;
+    Double drillUm = this.routingJob.routerSettings.fallbackViaDrillUm;
+    if (diameterUm == null || drillUm == null || !(drillUm > 0) || !(diameterUm > drillUm)) {
+      FRLogger.warn(
+          "The net class(es) "
+              + classNames
+              + " have no usable via: the via padstack(s) "
+              + missingVias
+              + " could not be read. KiCad writes a via of size -0.001 when the via size of the"
+              + " net class is not set in the KiCad project. Set the via sizes of the net class in"
+              + " KiCad (Board Setup > Net Classes) and export again, or pass"
+              + " --router.fallback_via_diameter_um=<d> --router.fallback_via_drill_um=<d> (the"
+              + " diameter larger than the drill). Without a via, connections that need a layer"
+              + " change stay unrouted.");
+      return;
+    }
+    int layerCount = this.board.getLayerCount();
+    int radius =
+        (int) Math.round(this.board.communication.physicalToBoard(diameterUm, Unit.UM) / 2);
+    ConvexShape[] shapes = new ConvexShape[layerCount];
+    Arrays.fill(shapes, new app.freerouting.geometry.planar.Circle(Point.ZERO, radius));
+    // Named as KiCad names a through via, so that KiCad reads the drill back from the name.
+    String name =
+        "Via[0-"
+            + (layerCount - 1)
+            + "]_"
+            + kiCadNumber(diameterUm)
+            + ":"
+            + kiCadNumber(drillUm)
+            + "_um";
+    Padstack padstack = this.board.library.padstacks.get(name);
+    if (padstack == null) {
+      padstack = this.board.library.padstacks.add(name, shapes, false, false);
+    }
+    this.board.library.addViaPadstack(padstack);
+    for (app.freerouting.rules.NetClass netClass : classesWithoutVia) {
+      boolean isDefault = netClass == this.board.rules.getDefaultNetClass();
+      String viaName = isDefault ? name : name + "-" + netClass.getName();
+      ViaInfo viaInfo = this.board.rules.viaInfos.get(viaName);
+      if (viaInfo == null) {
+        viaInfo =
+            new ViaInfo(
+                viaName,
+                padstack,
+                netClass.defaultItemClearanceClasses.get(DefaultItemClearanceClasses.ItemClass.VIA),
+                false,
+                this.board.rules);
+        this.board.rules.viaInfos.add(viaInfo);
+      }
+      ViaRule emptyRule = this.board.rules.getViaRule(netClass.getName());
+      if (emptyRule != null && emptyRule.viaCount() == 0) {
+        this.board.rules.viaRules.remove(emptyRule);
+      }
+      ViaRule viaRule = new ViaRule(netClass.getName());
+      viaRule.appendVia(viaInfo);
+      this.board.rules.viaRules.add(viaRule);
+      netClass.setViaRule(viaRule);
+    }
+    FRLogger.info(
+        "The net class(es) "
+            + classNames
+            + " have no usable via in the design (missing via padstack(s) "
+            + missingVias
+            + "); they use the fallback via "
+            + name
+            + ".");
+  }
+
+  /** A number as KiCad writes it into a via name ({@code %.6g}). */
+  private static String kiCadNumber(double value) {
+    return new java.math.BigDecimal(value)
+        .round(new java.math.MathContext(6))
+        .stripTrailingZeros()
+        .toPlainString();
   }
 
   void applyImmediatePostLoadProcessing() {
@@ -1184,12 +1291,9 @@ public class HeadlessBoardManager implements BoardManager {
    *   <li>CAD tool imports SES to update design with routing
    * </ol>
    *
-   * <p><strong>Post-Save Operations:</strong> On successful save:
-   *
-   * <ul>
-   *   <li>Updates {@link #originalBoardChecksum} to reflect the saved state
-   *   <li>Marks the board as having no unsaved changes
-   * </ul>
+   * <p>Only the GUI tracks unsaved changes; it updates {@link #originalBoardChecksum} after its own
+   * saves. A headless save writes the session only: the checksum is computed from a full DSN
+   * export, which cost about twice the session itself on every interim output of a routing job.
    *
    * <p><strong>Note:</strong> The output stream is NOT closed by this method. The caller is
    * responsible for closing it.
@@ -1201,20 +1305,13 @@ public class HeadlessBoardManager implements BoardManager {
    * @see #loadFromSpecctraDsn
    */
   public boolean saveAsSpecctraSessionSes(OutputStream outputStream, String designName) {
-    boolean wasSaveSuccessful;
     try {
       SesWriter.write(this.getRoutingBoard(), outputStream, designName);
-      wasSaveSuccessful = true;
+      return true;
     } catch (IOException e) {
       FRLogger.error("unable to write session file", e);
-      wasSaveSuccessful = false;
+      return false;
     }
-
-    if (wasSaveSuccessful) {
-      originalBoardChecksum = calculateCrc32();
-    }
-
-    return wasSaveSuccessful;
   }
 
   /**

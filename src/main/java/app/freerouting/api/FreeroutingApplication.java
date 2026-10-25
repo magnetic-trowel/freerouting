@@ -19,6 +19,8 @@ import org.glassfish.jersey.media.sse.SseFeature;
  * request-filter chain executes in ascending {@link jakarta.annotation.Priority} order:
  *
  * <ol>
+ *   <li><b>Priority 950</b> — {@link RequestBodyLimitFilter}: rejects request bodies above the size
+ *       limit with 413 before they are read.
  *   <li><b>Priority 1000</b> — {@link app.freerouting.api.security.ApiKeyValidationFilter}:
  *       validates {@code Authorization: Bearer} tokens; aborts with 401 on failure.
  *   <li><b>Priority 1050</b> — {@link EnvironmentHostValidationFilter}: validates the {@code
@@ -49,6 +51,8 @@ public class FreeroutingApplication extends Application {
                 ApiExceptionMapper.class,
                 NotFoundExceptionMapper.class,
                 CorrelationIdFilter.class,
+                // Bounds request bodies before any resource reads them into memory.
+                RequestBodyLimitFilter.class,
                 ApiRateLimitFilter.class,
                 app.freerouting.api.security.ApiKeyValidationFilter.class,
                 // Enforces the mandatory Freerouting-Environment-Host header on every protected

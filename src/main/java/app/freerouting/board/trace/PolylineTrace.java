@@ -218,36 +218,11 @@ public class PolylineTrace extends Trace implements Serializable {
    * remain.
    */
   private boolean combineAtStart(boolean ignoreAreas) {
-    boolean debugNet49 =
-        this.netNumbers != null && this.netNumbers.length > 0 && this.netNumbers[0] == 49;
     Point startCorner = firstCorner();
     Collection<Item> contacts = getNormalContacts(startCorner, false);
     if (ignoreAreas) {
       // remove conduction areas from the list
       contacts.removeIf(ConductionArea.class::isInstance);
-    }
-    if (debugNet49) {
-      FRLogger.trace(
-          "compare_trace_combine_at_start_net49 thisId="
-              + this.getId()
-              + ", thisFixed="
-              + this.getFixedState()
-              + ", start="
-              + startCorner
-              + ", contacts="
-              + contacts.size());
-      for (Item c : contacts) {
-        FRLogger.trace(
-            "  contact id="
-                + c.getId()
-                + ", type="
-                + c.getClass().getSimpleName()
-                + ", fixed="
-                + c.getFixedState()
-                + (c instanceof Trace t
-                    ? ", first=" + t.firstCorner() + ", last=" + t.lastCorner()
-                    : ""));
-      }
     }
     if (contacts.size() != 1) {
       return false;
@@ -272,22 +247,6 @@ public class PolylineTrace extends Trace implements Serializable {
             traceFound = true;
             break;
           }
-        } else if (debugNet49) {
-          FRLogger.trace(
-              "  combineAtStart REJECTED: layer="
-                  + otherTrace.getLayer()
-                  + "=="
-                  + getLayer()
-                  + ", nets="
-                  + otherTrace.netsEqual(this)
-                  + ", width="
-                  + otherTrace.getHalfWidth()
-                  + "=="
-                  + getHalfWidth()
-                  + ", fixed="
-                  + otherTrace.getFixedState()
-                  + "=="
-                  + this.getFixedState());
         }
       }
     }
@@ -358,36 +317,11 @@ public class PolylineTrace extends Trace implements Serializable {
    * remain.
    */
   private boolean combineAtEnd(boolean ignoreAreas) {
-    boolean debugNet49 =
-        this.netNumbers != null && this.netNumbers.length > 0 && this.netNumbers[0] == 49;
     Point endCorner = lastCorner();
     Collection<Item> contacts = getNormalContacts(endCorner, false);
     if (ignoreAreas) {
       // remove conduction areas from the list
       contacts.removeIf(ConductionArea.class::isInstance);
-    }
-    if (debugNet49) {
-      FRLogger.trace(
-          "compare_trace_combine_at_end_net49 thisId="
-              + this.getId()
-              + ", thisFixed="
-              + this.getFixedState()
-              + ", end="
-              + endCorner
-              + ", contacts="
-              + contacts.size());
-      for (Item c : contacts) {
-        FRLogger.trace(
-            "  contact id="
-                + c.getId()
-                + ", type="
-                + c.getClass().getSimpleName()
-                + ", fixed="
-                + c.getFixedState()
-                + (c instanceof Trace t
-                    ? ", first=" + t.firstCorner() + ", last=" + t.lastCorner()
-                    : ""));
-      }
     }
     if (contacts.size() != 1) {
       return false;
@@ -538,30 +472,6 @@ public class PolylineTrace extends Trace implements Serializable {
           Line[] intersectingLines = foundLineSegment.intersection(currentLineSegment);
           Collection<PolylineTrace> splitPieces = new LinkedList<>();
 
-          boolean debugNet49 =
-              this.netNumbers != null && this.netNumbers.length > 0 && this.netNumbers[0] == 49;
-          if (debugNet49 && intersectingLines.length > 0) {
-            FRLogger.trace(
-                "compare_trace_split_found_trace net=49, this_id="
-                    + this.getId()
-                    + ", this_seg="
-                    + i
-                    + ", this_first="
-                    + this.firstCorner()
-                    + ", this_last="
-                    + this.lastCorner()
-                    + ", found_id="
-                    + foundTrace.getId()
-                    + ", found_seg="
-                    + foundEntry.shapeIndexInObject
-                    + ", found_first="
-                    + foundTrace.firstCorner()
-                    + ", found_last="
-                    + foundTrace.lastCorner()
-                    + ", intersections="
-                    + intersectingLines.length);
-          }
-
           // try splitting the found trace first
           boolean foundTraceSplit = false;
 
@@ -575,27 +485,6 @@ public class PolylineTrace extends Trace implements Serializable {
                 for (int k = 0; k < 2; k++) {
                   if (currentSplitPieces[k] != null) {
                     foundTraceSplit = true;
-                    if (this.netNumbers.length > 0 && this.netNumbers[0] == 94) {
-                      FRLogger.trace(
-                          "PolylineTrace.split",
-                          "compare_trace_found_trace_split",
-                          "foundTraceSplit=true at line index "
-                              + foundEntry.shapeIndexInObject
-                              + " with intersection "
-                              + intersectingLines[j],
-                          "Net #"
-                              + this.netNumbers[0]
-                              + ",Trace #"
-                              + foundTrace.getId()
-                              + ",Layer #"
-                              + foundTrace.getLayer(),
-                          new Point[] {
-                            foundTrace.firstCorner(),
-                            foundTrace.lastCorner(),
-                            lines.corner(i),
-                            lines.corner(i + 1)
-                          });
-                    }
                     splitPieces.add(currentSplitPieces[k]);
                   }
                 }
@@ -613,10 +502,20 @@ public class PolylineTrace extends Trace implements Serializable {
               splitPieces.add(foundTrace);
             }
           }
-          // now try splitting the own trace
-
+          // now try splitting the own trace where the found trace touches it: where it was split,
+          // or where it contains the split point. A trace contains its interior points only if they
+          // have integer coordinates, so a split at another point of a trace that cannot be split
+          // there itself (a fixed trace, a point inside a pad) would connect nothing and be undone
+          // by combine().
           intersectingLines = currentLineSegment.intersection(foundLineSegment);
+          Line ownLine = this.lines.lines[i + 1];
           for (int j = 0; j < intersectingLines.length; j++) {
+            if (!foundTraceSplit
+                && foundTrace != this
+                && !ownLine.isParallel(intersectingLines[j])
+                && !foundTrace.contains(ownLine.intersection(intersectingLines[j]))) {
+              continue;
+            }
             PolylineTrace[] currentSplitPieces = split(i + 1, intersectingLines[j]);
             if (currentSplitPieces != null) {
               ownTraceSplit = true;
@@ -637,29 +536,7 @@ public class PolylineTrace extends Trace implements Serializable {
             for (int j = 0; j < 2; j++) {
               while (it2.hasNext()) {
                 PolylineTrace currentPiece = it2.next();
-                boolean debugThis =
-                    this.netNumbers != null
-                        && this.netNumbers.length > 0
-                        && this.netNumbers[0] == 49;
-                Point pieceFirst =
-                    debugThis && currentPiece.isOnTheBoard() ? currentPiece.firstCorner() : null;
-                Point pieceLast =
-                    debugThis && currentPiece.isOnTheBoard() ? currentPiece.lastCorner() : null;
-                int pieceId = currentPiece.getId();
-                boolean removedAsCycle = board.removeIfCycle(currentPiece);
-                if (debugThis && removedAsCycle) {
-                  FRLogger.trace(
-                      "compare_trace_split_cycle_removed net=49, pass="
-                          + j
-                          + ", piece_id="
-                          + pieceId
-                          + ", piece_first="
-                          + pieceFirst
-                          + ", piece_last="
-                          + pieceLast
-                          + ", this_id="
-                          + this.getId());
-                }
+                board.removeIfCycle(currentPiece);
               }
 
               // remove cycles in the own split pieces last
@@ -677,7 +554,7 @@ public class PolylineTrace extends Trace implements Serializable {
             Line splitLine = new Line(splitPoint, splitLineDirection);
             split(i + 1, splitLine);
           }
-        } else if (!this.isUserFixed() && (foundItem instanceof ConductionArea)) {
+        } else if (!this.isUserFixed() && (foundItem instanceof ConductionArea area)) {
           boolean ignoreAreas = false;
           if (this.netNumbers.length > 0) {
             Net currentNet = this.board.rules.nets.get(this.netNumbers[0]);
@@ -687,7 +564,8 @@ public class PolylineTrace extends Trace implements Serializable {
           }
           if (!ignoreAreas
               && this.getStartContacts().contains(foundItem)
-              && this.getEndContacts().contains(foundItem)) {
+              && this.getEndContacts().contains(foundItem)
+              && area.joins(this.firstCorner(), this.lastCorner())) {
             // this trace can be removed because of cycle with conduction area
             board.removeItem(this);
             return result;

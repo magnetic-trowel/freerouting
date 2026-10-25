@@ -133,30 +133,47 @@ public final class ApiKeyValidationService {
    *     if denied or unresolved.
    */
   public boolean validateApiKey(String apiKey) {
-    if (!isEnabled) {
-      return true;
-    }
+    return authenticate(apiKey) != null;
+  }
 
+  /**
+   * Validates the API key and returns the caller it authenticates, with the profile the key is
+   * issued to.
+   *
+   * @param apiKey The API key to validate
+   * @return the caller, or {@code null} when the key is denied or unresolved. With authentication
+   *     disabled every key is accepted, unbound.
+   */
+  public ApiKeyPrincipal authenticate(String apiKey) {
+    if (!isEnabled) {
+      return new ApiKeyPrincipal(apiKey, null);
+    }
     if (providers.isEmpty()) {
       FRLogger.warn(
           "API authentication is enabled but no providers are correctly configured. Denying"
               + " access.");
-      return false;
+      return null;
     }
+    return authenticate(providers, apiKey);
+  }
 
+  /**
+   * Asks the providers in order; the first that grants or denies the key decides. Unresolved and
+   * failed lookups fall through to the next provider, and a key no provider grants is denied. The
+   * profile comes from the provider that granted the key.
+   *
+   * @return the caller, or {@code null} when the key is denied or unresolved
+   */
+  public static ApiKeyPrincipal authenticate(List<ApiKeyProvider> providers, String apiKey) {
     for (ApiKeyProvider provider : providers) {
       ApiKeyValidationResult result = provider.validateApiKey(apiKey);
-
       if (result == ApiKeyValidationResult.ACCESS_GRANTED) {
-        return true;
+        return new ApiKeyPrincipal(apiKey, provider.getProfileId(apiKey));
       }
       if (result == ApiKeyValidationResult.ACCESS_DENIED) {
-        return false;
+        return null;
       }
-      // if UNDECIDED or PROVIDER_FAILED, continue to next provider
     }
-
-    // If we've exhausted all providers without an explicit grant, deny access.
-    return false;
+    return null;
   }
 }

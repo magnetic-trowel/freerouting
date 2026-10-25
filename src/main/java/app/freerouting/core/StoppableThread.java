@@ -46,21 +46,12 @@ public abstract class StoppableThread extends Thread implements Stoppable {
   }
 
   /**
-   * Clears an autorouter-only stop so another fallback attempt can run. A stop of the whole job is
-   * left in place.
+   * Resets the Autorouter stop request if it was set to AUTO_ROUTER_ONLY, allowing subsequent
+   * stages (such as the optimizer) to run. Does not clear a full stop request (ALL).
    */
-  public synchronized void resetAutoRouterStopRequest() {
+  public synchronized void resetStopAutoRouterRequest() {
     if (this.stopRequestState == StopRequestState.AUTO_ROUTER_ONLY) {
       this.stopRequestState = StopRequestState.NONE;
     }
-  }
-
-  /**
-   * Resets the Autorouter stop request if it was set to AUTO_ROUTER_ONLY, allowing subsequent
-   * stages (such as the optimizer) or retry attempts to run. Does not clear a full stop request
-   * (ALL).
-   */
-  public synchronized void resetStopAutoRouterRequest() {
-    resetAutoRouterStopRequest();
   }
 }

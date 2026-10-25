@@ -25,8 +25,13 @@ public class PolylineArea implements Area, Serializable {
   }
 
   private static void cutoutHolePiece(
-      TileShape dividePiece, TileShape holePiece, Collection<TileShape> pieces) {
-    TileShape[] resultPieces = dividePiece.cutout(holePiece);
+      TileShape dividePiece, TileShape holePiece, IntBox holeBox, Collection<TileShape> pieces) {
+    // A hole piece away from dividePiece leaves it whole. Cutting every hole piece out of every
+    // piece made the split quadratic in the number of holes.
+    TileShape[] resultPieces =
+        dividePiece.boundingBox().overlaps(holeBox)
+            ? dividePiece.cutout(holePiece)
+            : new TileShape[] {dividePiece};
     for (int i = 0; i < resultPieces.length; i++) {
       TileShape currentPiece = resultPieces[i];
       if (currentPiece.dimension() == 2) {
@@ -184,12 +189,13 @@ public class PolylineArea implements Area, Serializable {
         }
         for (int j = 0; j < convexHolePieces.length; j++) {
           TileShape currentHolePiece = convexHolePieces[j];
+          IntBox holeBox = currentHolePiece.boundingBox();
           Collection<TileShape> newPieceList = new LinkedList<>();
           for (TileShape currentDividePiece : currentPieceList) {
             if (stoppableThread != null && stoppableThread.isStopRequested()) {
               return null;
             }
-            cutoutHolePiece(currentDividePiece, currentHolePiece, newPieceList);
+            cutoutHolePiece(currentDividePiece, currentHolePiece, holeBox, newPieceList);
           }
           currentPieceList = newPieceList;
         }

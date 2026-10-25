@@ -433,8 +433,7 @@ public class Polyline implements Serializable {
           }
 
           if (nextBorderLine.sideOf(cornerToCheck) == Side.ON_THE_LEFT
-              && nextBorderLine.sideOf(this.corner(i)) == Side.ON_THE_RIGHT
-              && nextBorderLine.sideOf(this.corner(i - 1)) == Side.ON_THE_RIGHT) {
+              && keepsSegmentCopper(nextBorderLine, i, halfWidth)) {
             // an outstanding corner
             cutDogEarLines.add(nextBorderLine);
           }
@@ -470,8 +469,7 @@ public class Polyline implements Serializable {
             prevBorderLine = this.lines[j].opposite().translate(-halfWidth);
           }
           if (prevBorderLine.sideOf(cornerToCheck) == Side.ON_THE_LEFT
-              && prevBorderLine.sideOf(this.corner(i)) == Side.ON_THE_RIGHT
-              && prevBorderLine.sideOf(this.corner(i - 1)) == Side.ON_THE_RIGHT) {
+              && keepsSegmentCopper(prevBorderLine, i, halfWidth)) {
             // an outstanding corner
             cutDogEarLines.add(prevBorderLine);
           }
@@ -511,6 +509,19 @@ public class Polyline implements Serializable {
       currentDirection = nextDir;
     }
     return shapes;
+  }
+
+  /**
+   * Returns true if cutting the offset shape of line no with cutLine keeps all of that segment's
+   * copper, the points within halfWidth of the segment from corner(no - 1) to corner(no): both
+   * corners lie at least halfWidth to the right of cutLine. The distance from a line is linear
+   * along a segment, so checking the two corners suffices. A dog-ear line closer to a corner would
+   * remove copper that no other shape of the trace covers, for example where the polyline winds
+   * back past this segment or turns the other way in between.
+   */
+  private boolean keepsSegmentCopper(Line cutLine, int no, int halfWidth) {
+    return cutLine.signedDistance(cornerApprox(no)) <= -halfWidth
+        && cutLine.signedDistance(cornerApprox(no - 1)) <= -halfWidth;
   }
 
   /**

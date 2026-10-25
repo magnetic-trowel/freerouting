@@ -53,6 +53,10 @@ If authentication is enabled, requests to protected endpoints must include a val
 Authorization: Bearer <API_KEY>
 ```
 
+With authentication enabled, a session belongs to its `Freerouting-Profile-ID` **and** to the API key that created it: requests with another key cannot list or reach that session or its jobs, even with the same profile ID.
+
+A key can be **bound to a profile**. A bound key acts only as that profile: a request whose `Freerouting-Profile-ID` names another profile (or is not a UUID) is answered with **HTTP 403 Forbidden**, and a request without the header acts as the key's profile. `Freerouting-Profile-Email` cannot be checked against a bound key and is ignored for it. A key without a profile is unbound: the `Freerouting-Profile-ID` header decides, as before. Keys are never bound implicitly (for example by first use), so the binding comes only from the key provider. The key provider decides which keys are bound (the Google Sheets provider's optional `Profile ID` column, see [API_authentication.md](API_authentication.md)). With authentication disabled, nothing changes: the header decides.
+
 For complete details on how to configure and enable authentication on your own server, please see the [API Authentication System Documentation](API_authentication.md).
 
 ## Required headers
@@ -173,11 +177,13 @@ If `Freerouting-Environment-Host` is absent or does not match the `<ToolName>/<V
   **Parameters:**
     - `sessionId` *(required)*: The unique identifier of the session.
 
-  **Description:** Retrieves a JSON array of all log entries recorded for a specific session.
+  **Description:** Retrieves a JSON array of the log entries of the session's jobs (those the scheduler still keeps), oldest first.
 
 ---
 
 ### Routing Jobs
+
+Every endpoint that takes a `{jobId}` answers a job that does not exist and a job of another profile the same way: **HTTP 404** with `{"error":"Job not found."}` (a stream endpoint closes the stream). A response never tells whether a job ID exists or shows another profile's session ID.
 
 - **Enqueue a Job**
 
@@ -263,7 +269,7 @@ If `Freerouting-Environment-Host` is absent or does not match the `<ToolName>/<V
   **Parameters:**
     - `jobId` *(required)*: The unique identifier of the job.
 
-  **Description:** Retrieves a JSON array of all log entries recorded for a specific job.
+  **Description:** Retrieves a JSON array of the log entries recorded for a specific job, oldest first. The server keeps the newest 2,000 entries of each job, at most 20,000 entries in total, and messages of up to 2,000 characters; the entries of a job are dropped when the job is removed (see `api_server.max_finished_jobs`). The console and file logs keep everything.
 
 - **Get log entries in real-time as a stream**
 
@@ -451,6 +457,8 @@ If `Freerouting-Environment-Host` is absent or does not match the `<ToolName>/<V
 
   **Description:** Generates and returns a KiCad-compatible DRC report for a routing job. The board is loaded from the stored DSN input on demand if not already in memory. Returns **HTTP 500** if the board cannot be loaded.
 
+  Only the most recently finished jobs keep their routed board in memory (`api_server.max_finished_job_boards`, default twice `max_parallel_jobs`, at least 4). For an older finished job this endpoint, `/drc/summary` and the KiCad JSON output generated for an SES job return **HTTP 410 Gone**; the job's status, statistics and output stay available. The server keeps at most `api_server.max_finished_jobs` finished jobs (default 200) and removes the oldest beyond that; queued and running jobs are never removed. See [settings](../settings.md).
+
   **Response body:** Contains the DRC report in KiCad DRC v1 JSON format.
 
   ```json
@@ -507,6 +515,8 @@ POST /v1/autoroute
 }
 ```
 
+Instead of the `*_content` fields, a client on the same machine can name local files with `file_path`, `rules_path` and `session_path`. The server reads them only while every `api_server.endpoints` entry is a loopback address, or, when `api_server.local_file_root` is set, only files under that directory (resolved with symbolic links, so `..` and links cannot leave it). Files larger than 100 MB are refused. A server reachable from the network without `local_file_root` answers **400** with an explanation; send the file content instead.
+
 **Response body:**
 
 ```json
@@ -562,6 +572,8 @@ MCP and A2A routes are explicitly wired into the OpenAPI generator so they appea
 | `POST /v1/mcp` | MCP JSON-RPC entry point (`initialize`, `tools/list`, `tools/call`) |
 | `GET /v1/mcp/events` | MCP activity stream over SSE |
 | `WS /v1/mcp/ws` | MCP activity stream over WebSocket (`ws://` or `wss://`) |
+
+The activity streams carry only the events of their own caller: the same `Freerouting-Profile-ID` and, with authentication enabled, the same API key. The WebSocket handshake therefore needs a `Freerouting-Profile-ID` UUID.
 
 `mcp_server.target_api_base_url` must point to the REST API base URL (for example
 `http://127.0.0.1:37864`) and must not target MCP endpoints (`/v1/mcp*` or `/.well-known/*`).

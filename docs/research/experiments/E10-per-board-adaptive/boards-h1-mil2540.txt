@@ -1,0 +1,4 @@
+# E10 stage 0 (H1): (resolution mil 2540): 500 units = 5 um.
+fixtures/Issue143-rpi_splitter.dsn
+fixtures/Issue143-rpi_splitter_mod.dsn
+fixtures/Issue270-non-ansi_bracket.dsn

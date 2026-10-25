@@ -82,7 +82,9 @@ The primary way to configure Freerouting is through a JSON settings file. This f
       "requests_per_window": 120,
       "window_seconds": 60
     },
-    "max_parallel_jobs": 5
+    "max_parallel_jobs": 5,
+    "max_finished_jobs": 200,
+    "max_finished_job_boards": 4
   },
   "mcp_server": {
     "enabled": false,
@@ -116,13 +118,16 @@ The primary way to configure Freerouting is through a JSON settings file. This f
 
 #### **`logging` Section**
 
+Like every other section, these values come from `freerouting.json`, `FREEROUTING__LOGGING__*` environment variables and `--logging.*` command-line arguments, in that order of precedence. Messages logged while the settings load go to the console only. Versions before 2.5.1 wrote this section without reading it, so the values in a file written by them are ignored.
+
 - **`console`**:
     - **`enabled`**: Enables or disables console logging. Default is `true`.
     - **`level`**: Sets the console log level (OFF, FATAL, ERROR, WARN, INFO, DEBUG, TRACE, ALL). Default is `INFO`.
 - **`file`**:
     - **`enabled`**: Enables or disables file logging. Default is `true`.
-    - **`level`**: Sets the file log level. Default is `INFO`.
-    - **`location`**: Directory path for the log file. If empty, defaults to the user data path.
+    - **`level`**: Sets the file log level. Default is `DEBUG`.
+    - **`location`**: The directory of `freerouting.log`, or the log file itself when it ends in `.log`. If empty, the log is written to the user data path when one is set, otherwise to the platform log directory.
+    - **`pattern`**: The Log4j pattern of the log lines. Default is `%d{yyyy-MM-dd HH:mm:ss.SSS} %-6level %msg%n`.
 
 #### **`gui` Section**
 
@@ -140,9 +145,8 @@ The primary way to configure Freerouting is through a JSON settings file. This f
   `FREEROUTING__ROUTER__MAX_PASSES`) still apply and warn until they are removed.
     - **`enabled`**: Whether the autorouter stage runs after fanout.
     - **`algorithm`**: Algorithm identifier (`freerouting-router` by default; legacy identifiers such as `freerouting-router-v19` safely normalize to `freerouting-router`).
-    - **`max_passes`**: Maximum autorouter passes. `0` means no limit.
+    - **`max_passes`**: Maximum autorouter passes. `0` means no limit; values above `9999` are capped at `9999`.
     - **`max_items`**: Maximum items attempted in the autorouter stage.
-    - **`save_intermediate_stages`**: Save board snapshots between passes.
     - **`ignore_net_classes`**: Net class names the autorouter should skip.
     - **`max_threads`**: Canonical CLI is `--router.autorouter.max_threads`. The autorouter pass
       does not read it. Fanout is also single-threaded. The optimizer pool uses
@@ -168,6 +172,7 @@ The primary way to configure Freerouting is through a JSON settings file. This f
   (`--router.scoring.start_ripup_costs`).
 - **`automatic_neckdown`**: Enables or disables automatic neckdown of traces. When enabled, a trace may narrow to enter a pad that is narrower than the trace, and a segment that does not fit at its class width may be retried at 3/4, 3/5 or 1/2 of that width, never below `min_trace_width_um` or `neck_width_um` when they are set. When disabled, neither happens, also during fanout.
 - **`min_trace_width_um`**: The narrowest trace width, in micrometres, that automatic narrowing may produce: neckdown into pads, the narrower retry of a segment, and the `neck_width_um` retries. Set it to the board's minimum track width (in KiCad, the board setup's minimum track width), because a Specctra DSN does not carry one. Default `0` (no minimum), which leaves routing unchanged. Example: `--router.min_trace_width_um=200`.
+- **`fallback_via_diameter_um`** and **`fallback_via_drill_um`**: The copper and drill diameter, in micrometres, of a through via that net classes get when the design gives them no usable via. KiCad writes the via of a net class whose via size is not set in the project as a padstack of size -0.001, which Freerouting does not read; a class left without any via cannot change layers. Set both (the diameter larger than the drill) to give such classes one through via; the via is named as KiCad names it (`Via[0-<last layer>]_<diameter>:<drill>_um`), so KiCad reads the drill back when it imports the session. Unset by default (no fallback via): Freerouting then logs one warning naming the dropped via padstacks and the affected net classes. Better still, set the via sizes in KiCad (Board Setup > Net Classes) and export again. Example: `--router.fallback_via_diameter_um=600 --router.fallback_via_drill_um=300`.
 - **`meander_min_amplitude_mm`**: Minimum excursion amplitude for trace length tuning meanders in millimeters. Default is `0.2`.
 - **`meander_max_amplitude_mm`**: Maximum excursion amplitude for trace length tuning meanders in millimeters. Default is `1.0`.
 - **`meander_spacing_mm`**: Spacing between parallel meander traces in millimeters. Default is `0.6` (for single track and diff-pair skew; diff-pair preset spacing is `1.0`).
@@ -200,8 +205,10 @@ The primary way to configure Freerouting is through a JSON settings file. This f
   Equations and a glossary for every symbol are in [docs/scoring.md](scoring.md).
 
 The router and optimizer versions are independent. CLI aliases are
-`--router-scoring-version=v1|v2`, `--optimizer-scoring-version=v1|v2`, and
-`--scoring-version=v1|v2` to select both.
+`--router.scoring.version=v1|v2` (or `--router-scoring-version`),
+`--optimizer.scoring.version=v1|v2` (or `--optimizer-scoring-version`), and
+`--scoring-version=v1|v2` to select both. The environment accepts the same names, for example
+`FREEROUTING__ROUTER__SCORING__VERSION=v1`.
 
 ##### **`optimizer` Sub-section**
 
@@ -227,9 +234,9 @@ Configures the optional route-optimization stage that runs after autorouting.
     - `3.5 – 5.0` (3.5% – 5.0%): Fast mode. Cuts optimizer time by ~45%, retaining ~65% via cuts.
     - `> 5.5` (> 5.5%): Rapid prototyping. Stops after 1–2 passes; not recommended for production boards.
 - **`enable_preflight_guards`**: Whether pre-flight optimization guards are evaluated before starting the
-  optimizer loop. If enabled, bypasses the optimizer stage when the board has unrouted connections, has no vias
-  to eliminate (with trace length already near optimal), has an initial score at or near theoretical maximum,
-  or all vias are mandatory layer transitions between SMD pins that cannot be eliminated. Default is `true`.
+  optimizer loop. If enabled, bypasses the optimizer stage when the board has unrouted connections, has an
+  initial score at or near theoretical maximum, has no vias above the via lower bound and a trace length or
+  score already near optimal, or has no unfixed via or trace to reroute. Default is `true`.
 - **`max_consecutive_failures`**: Maximum consecutive candidate failures allowed before concluding the
   current pass. Default is `50`.
 - **`max_consecutive_failures_pass1`**: Maximum consecutive candidate failures allowed in pass 1 before
@@ -247,6 +254,13 @@ Configures the optional route-optimization stage that runs after autorouting.
   keeps a runner-up only if it also raises the optimizer score. `best_prefix` commits in that order
   and then reverts the commits after the highest-scoring point. `all` keeps every runner-up that
   still reduces vias or trace length.
+- **`rework_imported_routing`**: Whether the routing of a session (`.ses`) file loaded with the
+  design (`-de board.dsn+board.ses`, or a session sent to the API) may be rerouted. `false`
+  (default): every imported wire and via is protected, so the router and the optimizer keep it
+  as it is. `true`: each wire and via keeps the fixed state its session states, as the wiring of a
+  DSN file does: routing without a `(type ...)` (what Freerouting writes for its own routing) is
+  ordinary routing that the optimizer may improve and the router may rip up, while
+  `(type protect)` stays fixed. Example: `--router.optimizer.rework_imported_routing=true`.
 
 ##### **`fanout` Sub-section**
 
@@ -255,7 +269,6 @@ Configures the SMD-pin fanout pre-pass stage.
 - **`enabled`**: Whether to run the fanout pre-pass at all. Default is `true`.
 - **`max_passes`**: Maximum number of fanout passes. Default is `20`.
 - **`timeout`**: Optional wall-clock budget for the fanout stage (`HH:MM:SS`). When unset, fanout has no stage timeout of its own. `router.job_timeout` still covers fanout, autorouting, and optimization together.
-- **`max_milliseconds_per_pin`**: Base search budget per SMD pin in pass 1, in nominal milliseconds. Scales with pass number. Default is `10000`. The budget counts search steps rather than clock time, so the result does not depend on machine speed or load.
 - **`ripup_allowed`**: Whether fanout can rip up existing traces. Default is `true`.
 - **`min_escape_length_mm`**: The minimum physical escape trace length in millimeters. Default is `2.5`. Landing vias and escape stubs are not placed closer than this distance from the pin center.
 - **`max_escape_length_mm`**: The maximum physical escape trace length in millimeters. Default is `4.5`. Enforced directly during maze expansion.
@@ -267,6 +280,8 @@ Configures the SMD-pin fanout pre-pass stage.
     - `"distance_to_closest_on_net"`: Pins are sorted by their distance to the closest item on the same net. Pins with closer targets are processed first.
     - `"surroundings_density"`: Measured by the count of SMD pins within a 20 mm proximity radius. Denser areas are processed first, allowing congested pins to escape before space is occupied.
     - `"unsorted"`: Pins are processed by pin number sequence.
+
+  Case, `_` and `-` are ignored, so the older `distanceToClosestOnNet` and `surroundingsDensity` spellings still work. An unknown value logs a warning and uses pin number sequence.
 
 #### **`usage_and_diagnostic_data` Section**
 
@@ -292,25 +307,37 @@ Configures the SMD-pin fanout pre-pass stage.
   - CLI: `--api_server.endpoints=http://0.0.0.0:37864,http://127.0.0.1:37864`
   - Env var: `FREEROUTING__API_SERVER__ENDPOINTS=http://0.0.0.0:37864,http://127.0.0.1:37864`
 - *`cors_origins`*: A comma-separated list of origins for the `Access-Control-Allow-Origin` CORS header. Set to `*` to accept all origins (this can be a security risk). When CORS is enabled, the server automatically allows the following request headers in preflight responses: `Content-Type`, `Accept`, `Origin`, `X-Requested-With`, `Authorization`, `Freerouting-Profile-ID`, `Freerouting-Profile-Email`, and `Freerouting-Environment-Host`. This ensures browser-based clients (e.g. EasyEDA at `https://pro.lceda.cn`) can authenticate successfully without being blocked by CORS preflight checks.
+- **`authentication`**: API-key authentication (`enabled`, `providers`, provider credentials). A key that the provider binds to a profile (Google Sheets: optional `Profile ID` column) acts only as that profile: a request naming another `Freerouting-Profile-ID` gets `403`, a request without the header acts as the key's profile. Unbound keys and disabled authentication keep using the header. See [API_authentication.md](API/API_authentication.md).
 - **`rate_limit`**: Fixed-window throttling for API requests.
   - `enabled`: Enable/disable API-side rate limiting.
-  - `requests_per_window`: Maximum accepted requests per identity in each window.
+  - `requests_per_window`: Maximum accepted requests per identity in each window. An authenticated request counts against its API key, any other request against its address. Failed API-key attempts (missing or invalid key) count separately against their address under the same limit: once they fill the window, further requests from that address get `429` without their key being checked, until the window ends.
   - `window_seconds`: Window duration in seconds.
+- **`local_file_root`**: Directory whose files clients may name by path in `POST /v1/autoroute` (`file_path`, `rules_path`, `session_path`). Unset (default): local paths are accepted only while every `endpoints` entry is a loopback address (`127.0.0.1`, `::1`, `localhost`), and refused when the server is reachable from the network. Set: only files under this directory are accepted, after resolving `..` and symbolic links. Files larger than 100 MB are always refused.
+  - CLI: `--api_server.local_file_root=/srv/boards`
+  - Env var: `FREEROUTING__API_SERVER__LOCAL_FILE_ROOT=/srv/boards`
 - **`max_parallel_jobs`**: Maximum number of routing jobs the scheduler runs concurrently (default: `CPU cores - 1`, minimum `1`). Setting to `0` or omitting triggers auto-detection. Useful for self-hosted instances that size job concurrency to their hardware and JVM heap.
   - Env var: `FREEROUTING__API_SERVER__MAX_PARALLEL_JOBS=10`
+- **`max_finished_jobs`**: Maximum number of finished routing jobs (completed, cancelled, timed out, terminated or invalid) the server keeps (default: `200`; `0`, negative values or omitting use the default). When more jobs have finished, the oldest are removed and their status, output and logs are no longer available through the API (`404`). Queued and running jobs are never removed and do not count, and neither do the jobs of the GUI session. A finished job holds its input and output files, so size this to the JVM heap and to how long clients may wait before they download a result.
+  - CLI: `--api_server.max_finished_jobs=500`
+  - Env var: `FREEROUTING__API_SERVER__MAX_FINISHED_JOBS=500`
+- **`max_finished_job_boards`**: Number of the most recently finished jobs that keep their routed board in memory (default: twice `max_parallel_jobs`, at least `4`; `0` keeps none, negative values or omitting use the default). The DRC endpoints (`/v1/jobs/{jobId}/drc`, `/v1/jobs/{jobId}/drc/summary`) and the KiCad JSON output generated for a job with SES output need that board; for an older finished job they answer `410 Gone`, while its output, status and statistics stay available. A routed board can take tens of MB for a large design. The CLI and `POST /v1/autoroute` keep the board of their own job until they have written their outputs.
+  - CLI: `--api_server.max_finished_job_boards=8`
+  - Env var: `FREEROUTING__API_SERVER__MAX_FINISHED_JOB_BOARDS=8`
 
 #### **`mcp_server` Section**
 
 - **`enabled`**: Enables or disables the dedicated MCP server.
 - **`http_allowed`**: Allows or disallows HTTP connections to the MCP server.
 - **`endpoints`**: A list of MCP listen endpoints (`[protocol]://[host]:[port]`).
-- **`authentication`**: API-key authentication settings specific to MCP (`enabled`, `providers`, provider credentials).
+- **`authentication`**: API-key authentication settings specific to MCP (`enabled`, `providers`, provider credentials). As for the REST API, a key that the provider binds to a profile (Google Sheets: optional `Profile ID` column) acts only as that profile; see [API_authentication.md](API/API_authentication.md).
 - **`cors_origins`**: Optional CORS allowlist for browser-hosted MCP clients.
 - **`target_api_base_url`**: Base URL of the REST API server used by MCP tools to execute operations.
   Must point to the REST API base URL (for example `http://127.0.0.1:37864`) and not to MCP paths such as `/v1/mcp` or `/.well-known/*`.
+- **`local_file_root`**: The same as `api_server.local_file_root`, for the MCP tools `upload_job_input_from_local_file` and `download_job_output_to_local_file` (stdio mode counts as loopback). See [MCP local file paths](API/MCP.md#local-file-paths).
+  - CLI: `--mcp_server.local_file_root=/srv/boards`
 - **`rate_limit`**: Fixed-window throttling for MCP HTTP requests (for example `/v1/mcp`).
   - `enabled`: Enable/disable MCP-side rate limiting.
-  - `requests_per_window`: Maximum accepted requests per identity in each window.
+  - `requests_per_window`: Maximum accepted requests per identity in each window. Failed API-key attempts are counted by address as for `api_server.rate_limit`.
   - `window_seconds`: Window duration in seconds.
 
 #### Recommended Rate-Limit Presets
@@ -335,6 +362,10 @@ Tuning guidance:
 
 Freerouting can also be configured using command-line arguments. These arguments override the settings specified in the JSON configuration file. You must use `--{property-name}={property-value}` format, where `property-name` is the hierarchical definition of the property you want to change and the `property-value` is its desired value. You can use `.`, `-` and `:` characters to separate the hierarchical levels in the `property-name` parameter.
 
+Boolean values accept `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off` (in any case). Any other value is rejected and logged, and the setting keeps the value it has from the lower-priority sources.
+
+Command-line arguments and `FREEROUTING__*` environment variables apply to that run only, for every section (for example `--router.autorouter.max_passes=3`, `-mt 1`, `--api_server.authentication.enabled=false` or `-di <dir>`). When the GUI saves its settings during the session, `freerouting.json` keeps its own values for them, so they do not become defaults for later runs. A value the user changes in the GUI during the session is still saved, even if it was first given on the command line. The one exception is the analytics opt-out (`-da`, `--usage_and_diagnostic_data.disable_analytics=true` or the matching environment variable): it is kept, so that opting out once is not undone by a later run. To make any other option permanent, put it in `freerouting.json`.
+
 **Scalar example:**
 
 ```bash
@@ -353,7 +384,7 @@ java -jar freerouting.jar --mcp_server.rate_limit.enabled=true --mcp_server.rate
 
 ### Environment Variables
 
-Environment variables provide another way to override settings. The environment variable names correspond to the keys in the JSON settings file, starting with `FREEROUTING__` and periods replaced by double underscores.
+Environment variables provide another way to override settings. The environment variable names correspond to the keys in the JSON settings file, starting with `FREEROUTING__` and periods replaced by double underscores. Like command-line arguments, they apply to the current process only and are not saved to `freerouting.json`.
 
 **Scalar example:**
 
@@ -418,7 +449,7 @@ You can override the base configuration/data root directory using `--user_data_p
 
 `RouterSettings` intentionally declares all its fields as nullable reference types (e.g. `Integer`, `Boolean`, `String`) **with no default initializers**. This is a deliberate architectural constraint required by the merge mechanism:
 
-`SettingsMerger.merge()` calls `RouterSettings.applyNewValuesFrom(source)`, which delegates to `ReflectionUtil.copyFields()`. That method copies a field from the incoming source into the accumulated result **only when the source field is non-null and differs from the Java language default for that type**.
+`SettingsMerger.merge()` calls `RouterSettings.applyNewValuesFrom(source)`, which delegates to `ReflectionUtil.copyFields()`. That method copies a field from the incoming source into the accumulated result **only when the source field is non-null**. A primitive field cannot be unset, so it is always copied; this is why every `RouterSettings` field is a nullable wrapper.
 
 If any field were initialised to a non-null value inside the `RouterSettings` constructor (e.g. `public Integer maxPasses = 9999;`), every source's settings object would carry that value, and the merger would incorrectly treat it as an explicit override. A low-priority source (such as the JSON file) would then silently win over a higher-priority source (such as the API) whenever the user left that field unspecified in the high-priority source.
 

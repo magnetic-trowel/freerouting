@@ -1,0 +1,154 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java b/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
+index 921ac7b1..93e1b8aa 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/BatchOptimizer.java
+@@ -153,6 +153,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
+     }
+   }
+ 
++  /**
++   * Experiment E11: {@code -Dfreerouting.exp.optimizer_score_floor=skip} skips the optimizer when
++   * the lower-bound optimizer score is already clamped at 0. Off by default.
++   */
++  private static final boolean EXP_SKIP_AT_SCORE_FLOOR =
++      "skip"
++          .equalsIgnoreCase(
++              System.getProperty("freerouting.exp.optimizer_score_floor", "clamp").trim());
++
+   /**
+    * Evaluates whether optimization can be safely bypassed before starting the batch loop.
+    *
+@@ -175,6 +184,13 @@ public final class BatchOptimizer extends NamedAlgorithm {
+ 
+     float initialScore = stats.getOptimizerScore(this.job.routerSettings);
+ 
++    // Experiment E11, skip arm: a V2/V3 score clamped at 0 cannot be raised by one candidate.
++    if (EXP_SKIP_AT_SCORE_FLOOR
++        && initialScore <= 0.0f
++        && stats.getOptimizerScore(this.job.routerSettings, 0, 0, 0) != null) {
++      return "the optimizer score is at its floor (0.00), so no candidate can raise it";
++    }
++
+     // Guard 2: Zero vias and optimal trace length
+     if (stats.vias.totalCount == 0) {
+       if (initialScore >= 950.0f) {
+diff --git a/src/main/java/app/freerouting/core/scoring/BoardStatistics.java b/src/main/java/app/freerouting/core/scoring/BoardStatistics.java
+index 7da56c02..1a77b35f 100644
+--- a/src/main/java/app/freerouting/core/scoring/BoardStatistics.java
++++ b/src/main/java/app/freerouting/core/scoring/BoardStatistics.java
+@@ -863,6 +863,39 @@ public class BoardStatistics implements Serializable {
+     return null;
+   }
+ 
++  /**
++   * Experiment E11: {@code -Dfreerouting.exp.optimizer_score_floor=soft} replaces the clamp of the
++   * V3 score at 0 with a tail that keeps ranking boards whose excess length exceeds the minimum
++   * length. The default {@code clamp} keeps the current score.
++   */
++  private static final boolean EXP_SOFT_SCORE_FLOOR =
++      "soft"
++          .equalsIgnoreCase(
++              System.getProperty("freerouting.exp.optimizer_score_floor", "clamp").trim());
++
++  /** Experiment E11: the score below which the soft floor's tail starts. */
++  private static final double EXP_SCORE_FLOOR_KNEE =
++      Math.min(
++          1000.0,
++          Math.max(
++              1.0,
++              Double.parseDouble(
++                  System.getProperty("freerouting.exp.optimizer_score_floor_knee", "50").trim())));
++
++  /**
++   * Returns {@code 1000 - penalty} down to {@code knee} and then a tail {@code knee^2 / (knee + t)},
++   * where {@code t} is the penalty beyond the knee. The tail has the value and the slope of the
++   * line at the knee, decreases strictly and stays positive, so a smaller penalty always scores
++   * higher; in the tail the relative score change equals the relative change of {@code knee + t}.
++   */
++  static double softFloorScore(double penalty, double knee) {
++    double kneePenalty = 1000.0 - knee;
++    if (penalty <= kneePenalty) {
++      return 1000.0 - penalty;
++    }
++    return knee * knee / (knee + (penalty - kneePenalty));
++  }
++
+   /**
+    * Calculates the V3 optimizer score: excess vias and bends are converted to the trace length that
+    * uses the same routing space, and the total excess length is measured against the lower bound.
+@@ -887,13 +920,14 @@ public class BoardStatistics implements Serializable {
+         Math.max(0.0, traceLengthMm - minTraceLength)
+             + viaLength * Math.max(0.0, viaCount - minViaCount)
+             + bendLength * Math.max(0.0, bendCount - minBendCount);
+-    return (float)
+-        Math.max(
+-            0.0,
+-            1000.0
+-                - valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
+-                    * excessLength
+-                    / Math.max(minTraceLength, lengthFloor));
++    double penalty =
++        valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
++            * excessLength
++            / Math.max(minTraceLength, lengthFloor);
++    if (EXP_SOFT_SCORE_FLOOR) {
++      return (float) softFloorScore(penalty, EXP_SCORE_FLOOR_KNEE);
++    }
++    return (float) Math.max(0.0, 1000.0 - penalty);
+   }
+ 
+   private float getV2OptimizerScore(
+diff --git a/src/test/java/app/freerouting/core/scoring/OptimizerScoreSoftFloorTest.java b/src/test/java/app/freerouting/core/scoring/OptimizerScoreSoftFloorTest.java
+new file mode 100644
+index 00000000..d11fd01c
+--- /dev/null
++++ b/src/test/java/app/freerouting/core/scoring/OptimizerScoreSoftFloorTest.java
+@@ -0,0 +1,48 @@
++package app.freerouting.core.scoring;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import org.junit.jupiter.api.Test;
++
++/** Tests the soft floor of experiment E11 ({@code freerouting.exp.optimizer_score_floor=soft}). */
++class OptimizerScoreSoftFloorTest {
++
++  @Test
++  void keepsTheLinearScoreAboveTheKnee() {
++    assertEquals(1000.0, BoardStatistics.softFloorScore(0.0, 50.0), 0.0);
++    assertEquals(400.0, BoardStatistics.softFloorScore(600.0, 50.0), 0.0);
++    assertEquals(50.0, BoardStatistics.softFloorScore(950.0, 50.0), 0.0);
++  }
++
++  @Test
++  void tailIsContinuousWithTheSameSlopeAtTheKnee() {
++    double knee = 50.0;
++    double epsilon = 1e-6;
++    double atKnee = BoardStatistics.softFloorScore(1000.0 - knee, knee);
++    double justBelow = BoardStatistics.softFloorScore(1000.0 - knee + epsilon, knee);
++    assertEquals(atKnee, justBelow, 1e-5);
++    assertEquals(-1.0, (justBelow - atKnee) / epsilon, 1e-3);
++  }
++
++  @Test
++  void tailStaysPositiveAndStrictlyDecreasing() {
++    double previous = Double.POSITIVE_INFINITY;
++    for (double penalty = 900.0; penalty <= 1.0e6; penalty *= 1.5) {
++      double score = BoardStatistics.softFloorScore(penalty, 50.0);
++      assertTrue(score > 0.0, "score at penalty " + penalty);
++      assertTrue(score < previous, "score must decrease at penalty " + penalty);
++      previous = score;
++    }
++  }
++
++  @Test
++  void tailRanksPenaltiesBeyondTheClampedFloor() {
++    // Both penalties score 0 with the clamp; the soft floor still prefers the smaller one.
++    double better = BoardStatistics.softFloorScore(2900.0, 50.0);
++    double worse = BoardStatistics.softFloorScore(3000.0, 50.0);
++    assertTrue(better > worse);
++    assertEquals(2500.0 / 2000.0, better, 1e-12);
++    assertEquals(2500.0 / 2100.0, worse, 1e-12);
++  }
++}

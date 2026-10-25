@@ -8,6 +8,12 @@ import java.math.BigInteger;
 /** Implements functionality for lines in the plane. */
 public class Line implements Comparable<Line>, Serializable {
 
+  /**
+   * Relative error bound of a polynomial of depth at most 8 evaluated in double: at most 8
+   * roundings of half an ulp each, doubled for safety.
+   */
+  private static final double SIGN_ERROR = 8 * Math.ulp(1.0);
+
   @SuppressWarnings("checkstyle:GoogleNonConstantFieldName")
   public final Point a;
 
@@ -150,17 +156,40 @@ public class Line implements Comparable<Line>, Serializable {
    * 3 lines intersect in exactly 1 point.
    */
   public Side sideOfIntersection(Line p1, Line p2) {
-
-    FloatPoint intersectionApprox = p1.intersectionApprox(p2);
-    Side result = this.sideOf(intersectionApprox, 1.0);
-    if (result == Side.COLLINEAR) {
-      // Previous calculation was with FloatPoints and a tolerance
-      // for performance reasons. Make an exact check for
-      // collinearity now with class Point instead of FloatPoint.
-      Point intersection = p1.intersection(p2);
-      result = this.sideOf(intersection);
+    // The intersection of p1 and p2 is (x / w, y / w) with integers x, y and w, so its side of this
+    // line is the sign of the integer dy * x - dx * y - c * w times the sign of w. Evaluated in
+    // double, each value has an error of at most a few ulps of the same expression taken with
+    // absolute values; outside that bound the sign is exact, inside it is computed exactly.
+    IntPoint a1 = (IntPoint) p1.a;
+    IntPoint b1 = (IntPoint) p1.b;
+    IntPoint a2 = (IntPoint) p2.a;
+    IntPoint b2 = (IntPoint) p2.b;
+    double d1x = (double) b1.x - a1.x;
+    double d1y = (double) b1.y - a1.y;
+    double d2x = (double) b2.x - a2.x;
+    double d2y = (double) b2.y - a2.y;
+    double det1 = (double) a1.x * b1.y - (double) a1.y * b1.x;
+    double det1Abs = Math.abs((double) a1.x * b1.y) + Math.abs((double) a1.y * b1.x);
+    double det2 = (double) a2.x * b2.y - (double) a2.y * b2.x;
+    double det2Abs = Math.abs((double) a2.x * b2.y) + Math.abs((double) a2.y * b2.x);
+    double w = d2x * d1y - d2y * d1x;
+    double boundW = Math.abs(d2x * d1y) + Math.abs(d2y * d1x);
+    double x = d2x * det1 - d1x * det2;
+    double boundX = Math.abs(d2x) * det1Abs + Math.abs(d1x) * det2Abs;
+    double y = d2y * det1 - d1y * det2;
+    double boundY = Math.abs(d2y) * det1Abs + Math.abs(d1y) * det2Abs;
+    IntPoint thisA = (IntPoint) a;
+    IntPoint thisB = (IntPoint) b;
+    double dx = (double) thisB.x - thisA.x;
+    double dy = (double) thisB.y - thisA.y;
+    double c = dy * thisA.x - dx * thisA.y;
+    double boundC = Math.abs(dy * thisA.x) + Math.abs(dx * thisA.y);
+    double d = dy * x - dx * y - c * w;
+    double boundD = Math.abs(dy) * boundX + Math.abs(dx) * boundY + boundC * boundW;
+    if (Math.abs(w) > SIGN_ERROR * boundW && Math.abs(d) > SIGN_ERROR * boundD) {
+      return (d > 0) == (w > 0) ? Side.ON_THE_LEFT : Side.ON_THE_RIGHT;
     }
-    return result;
+    return this.sideOf(p1.intersection(p2));
   }
 
   /** Looks, if all interior points of tile are on the right side of this line. */

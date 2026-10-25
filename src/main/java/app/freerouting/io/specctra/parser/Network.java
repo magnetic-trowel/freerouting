@@ -6,6 +6,7 @@ import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.core.library.LogicalPart;
 import app.freerouting.core.library.Package;
+import app.freerouting.core.library.Packages;
 import app.freerouting.core.library.Padstack;
 import app.freerouting.datastructures.IdentifierType;
 import app.freerouting.datastructures.IndentFileWriter;
@@ -284,10 +285,13 @@ public class Network extends ScopeKeyword {
         viaPadstack = board.library.getViaPadstack(padstackName.replaceAll("\\.\\d+", ""));
       }
       if (viaPadstack == null) {
-        // The padstack may not yet be inserted into the list of via padstacks
-        viaPadstack = board.library.padstacks.get(padstackName);
-        if (viaPadstack == null) {
-          viaPadstack = board.library.padstacks.get(padstackName.replaceAll("\\.\\d+", ""));
+        // The padstack may not yet be inserted into the list of via padstacks. The padstack list
+        // is null when the DSN file has no (library ...) scope.
+        if (board.library.padstacks != null) {
+          viaPadstack = board.library.padstacks.get(padstackName);
+          if (viaPadstack == null) {
+            viaPadstack = board.library.padstacks.get(padstackName.replaceAll("\\.\\d+", ""));
+          }
         }
         if (viaPadstack == null) {
           FRLogger.warn(
@@ -436,25 +440,61 @@ public class Network extends ScopeKeyword {
     return ruleOk;
   }
 
+  /**
+   * Inserts the classes of the network scope in two steps. The rules of every class come first,
+   * because the via infos and via rules made next take the clearance classes those rules give the
+   * classes: a typed clearance such as {@code (clearance 300 (type via_wire))} in the default
+   * class's rule gives its vias their own clearance class. The vias of each class come last.
+   */
   private static void insertNetClasses(
-      Collection<NetClass> netClasses, ReadScopeParameter scopeParameter) {
-    BasicBoard routingBoard = scopeParameter.boardHandling.getRoutingBoard();
+      Collection<NetClass> netClasses,
+      Collection<ViaInfo> viaInfos,
+      Collection<Collection<String>> viaRules,
+      ReadScopeParameter scopeParameter) {
+    RoutingBoard board = scopeParameter.boardHandling.getRoutingBoard();
+    List<app.freerouting.rules.NetClass> boardNetClasses = new ArrayList<>(netClasses.size());
     for (NetClass currentClass : netClasses) {
-      insertNetClass(
-          currentClass,
-          scopeParameter.layerStructure,
-          routingBoard,
-          scopeParameter.coordinateTransform,
-          scopeParameter.viaAtSmdAllowed);
+      boardNetClasses.add(
+          insertNetClassRules(
+              currentClass,
+              scopeParameter.layerStructure,
+              board,
+              scopeParameter.coordinateTransform));
+    }
+    insertViaInfos(viaInfos, board, scopeParameter.viaAtSmdAllowed);
+    insertViaRules(viaRules, board);
+    app.freerouting.rules.NetClass defaultClass = board.rules.getDefaultNetClass();
+    Iterator<app.freerouting.rules.NetClass> boardClassIt = boardNetClasses.iterator();
+    for (NetClass currentClass : netClasses) {
+      app.freerouting.rules.NetClass boardNetClass = boardClassIt.next();
+      if (boardNetClass != defaultClass) {
+        // A class starts with the vias the default class has when the class is read.
+        boardNetClass.setViaRule(defaultClass.getViaRule());
+      }
+      insertNetClassVias(currentClass, boardNetClass, board, scopeParameter.viaAtSmdAllowed);
     }
   }
 
+  /** Inserts a class into the board rules, or updates the class with that name. */
   public static void insertNetClass(
       NetClass netClass,
       LayerStructure layerStructure,
       BasicBoard board,
       CoordinateTransform coordinateTransform,
       boolean viaAtSmdAllowed) {
+    insertNetClassVias(
+        netClass,
+        insertNetClassRules(netClass, layerStructure, board, coordinateTransform),
+        board,
+        viaAtSmdAllowed);
+  }
+
+  /** Inserts everything of a class but its vias and returns the board class. */
+  private static app.freerouting.rules.NetClass insertNetClassRules(
+      NetClass netClass,
+      LayerStructure layerStructure,
+      BasicBoard board,
+      CoordinateTransform coordinateTransform) {
     app.freerouting.rules.NetClass boardNetClass =
         KiCadNetClassNames.isKiCadDefaultNetClassName(netClass.name)
             ? board.rules.getDefaultNetClass()
@@ -468,15 +508,6 @@ public class Network extends ScopeKeyword {
             "Network.insert_net_class: clearance class not found at '"
                 + boardNetClass.getName()
                 + "'");
-      }
-    }
-    if (netClass.viaRule != null) {
-      ViaRule viaRule = board.rules.getViaRule(netClass.viaRule);
-      if (viaRule != null) {
-        boardNetClass.setViaRule(viaRule);
-      } else {
-        FRLogger.warn(
-            "Network.insert_net_class: via rule not found at '" + boardNetClass.getName() + "'");
       }
     }
     if (netClass.maxTraceLength > 0) {
@@ -494,15 +525,12 @@ public class Network extends ScopeKeyword {
 
     // read the trace width and clearance rules.
 
-    boolean clearanceRuleFound = false;
-
     for (Rule currentRule : netClass.rules) {
       if (currentRule instanceof Rule.WidthRule rule1) {
         int traceHalfwidth = (int) Math.round(coordinateTransform.dsnToBoard(rule1.value / 2));
         boardNetClass.setTraceHalfWidth(traceHalfwidth);
       } else if (currentRule instanceof Rule.ClearanceRule rule) {
         addClearanceRule(board.rules.clearanceMatrix, boardNetClass, rule, -1, coordinateTransform);
-        clearanceRuleFound = true;
       } else if (currentRule instanceof Rule.LengthRule rule) {
         if (rule.maxLength > 0) {
           boardNetClass.setMaximumTraceLength(coordinateTransform.dsnToBoard(rule.maxLength));
@@ -538,7 +566,6 @@ public class Network extends ScopeKeyword {
           } else if (currentRule instanceof Rule.ClearanceRule rule) {
             addClearanceRule(
                 board.rules.clearanceMatrix, boardNetClass, rule, layerIndex, coordinateTransform);
-            clearanceRuleFound = true;
           } else {
             FRLogger.warn(
                 "Network.insert_net_class: layer rule type not yet implemented at '"
@@ -556,21 +583,62 @@ public class Network extends ScopeKeyword {
           netClass.circuit.toMeanderConstraint(
               app.freerouting.rules.MeanderPatternType.SINGLE_TRACK, coordinateTransform));
     }
-    boolean viaInfosCreated = false;
+    if (!netClass.useLayer.isEmpty()) {
+      createActiveTraceLayers(netClass.useLayer, layerStructure, boardNetClass);
+    }
+    return boardNetClass;
+  }
 
-    if (clearanceRuleFound && boardNetClass != board.rules.getDefaultNetClass()) {
+  /** Inserts the via infos and the via rule of a class whose rules are inserted. */
+  private static void insertNetClassVias(
+      NetClass netClass,
+      app.freerouting.rules.NetClass boardNetClass,
+      BasicBoard board,
+      boolean viaAtSmdAllowed) {
+    if (netClass.viaRule != null) {
+      ViaRule viaRule = board.rules.getViaRule(netClass.viaRule);
+      if (viaRule != null) {
+        boardNetClass.setViaRule(viaRule);
+      } else {
+        FRLogger.warn(
+            "Network.insert_net_class: via rule not found at '" + boardNetClass.getName() + "'");
+      }
+    }
+    // A class with its own clearance rule gets its own via infos, in its via clearance class.
+    boolean viaInfosCreated = false;
+    if (hasClearanceRule(netClass, board.layerStructure)
+        && boardNetClass != board.rules.getDefaultNetClass()) {
       createDefaultViaInfos(board, boardNetClass, viaAtSmdAllowed);
       viaInfosCreated = true;
     }
 
-    if (!netClass.useVia.isEmpty()) {
-      createViaRule(netClass.useVia, boardNetClass, board, viaAtSmdAllowed);
-    } else if (viaInfosCreated) {
+    // A class whose use_via names no via that could be read (KiCad exports an unset via size as a
+    // padstack with "(circle F.Cu -0.001)", which is not read) keeps the vias of the default rule,
+    // as a class without use_via does.
+    boolean viaRuleCreated =
+        !netClass.useVia.isEmpty() && createViaRule(netClass.useVia, boardNetClass, board);
+    if (!viaRuleCreated && viaInfosCreated) {
       board.rules.createDefaultViaRule(boardNetClass, boardNetClass.getName());
     }
-    if (!netClass.useLayer.isEmpty()) {
-      createActiveTraceLayers(netClass.useLayer, layerStructure, boardNetClass);
+  }
+
+  /** Whether the class has a clearance rule, on any layer of the board. */
+  private static boolean hasClearanceRule(
+      NetClass netClass, app.freerouting.board.model.structure.LayerStructure layerStructure) {
+    for (Rule currentRule : netClass.rules) {
+      if (currentRule instanceof Rule.ClearanceRule) {
+        return true;
+      }
     }
+    for (Rule.LayerRule currentLayerRule : netClass.layerRules) {
+      boolean onBoardLayer =
+          currentLayerRule.layerNames.stream().anyMatch(name -> layerStructure.getNo(name) >= 0);
+      if (onBoardLayer
+          && currentLayerRule.rules.stream().anyMatch(Rule.ClearanceRule.class::isInstance)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static void insertClassPairs(
@@ -711,11 +779,12 @@ public class Network extends ScopeKeyword {
     getClearanceClass(clearanceMatrix, netClass, "area");
   }
 
-  private static void createViaRule(
-      Collection<String> useVia,
-      app.freerouting.rules.NetClass netClass,
-      BasicBoard board,
-      boolean attachAllowed) {
+  /**
+   * Creates the via rule of a class from its use_via names. Returns false, and creates no rule, if
+   * none of the names is a via of the board.
+   */
+  private static boolean createViaRule(
+      Collection<String> useVia, app.freerouting.rules.NetClass netClass, BasicBoard board) {
     ViaRule newViaRule = new ViaRule(netClass.getName());
     int defaultViaClClass =
         netClass.defaultItemClearanceClasses.get(DefaultItemClearanceClasses.ItemClass.VIA);
@@ -733,8 +802,18 @@ public class Network extends ScopeKeyword {
         }
       }
     }
+    if (newViaRule.viaCount() == 0) {
+      FRLogger.warn(
+          "Network.create_via_rule: no via of use_via "
+              + useVia
+              + " found, class '"
+              + netClass.getName()
+              + "' keeps the default vias");
+      return false;
+    }
     board.rules.viaRules.add(newViaRule);
     netClass.setViaRule(newViaRule);
+    return true;
   }
 
   private static void createActiveTraceLayers(
@@ -765,21 +844,26 @@ public class Network extends ScopeKeyword {
     int currentClearance = (int) Math.round(coordinateTransform.dsnToBoard(rule.value));
     final String className = netClass.getName();
     int classNo = clearanceMatrix.getNo(className);
-    if (classNo < 0) {
-      // class not yet existing, create a new class
+    boolean newClass = classNo < 0;
+    if (newClass) {
       clearanceMatrix.appendClass(className);
       classNo = clearanceMatrix.getNo(className);
-      // set the clearance values of the new class to the maximum of currentClearance and
-      // the existing values.
+      netClass.defaultItemClearanceClasses.setAll(classNo);
+    }
+    if (newClass || layerIndex >= 0) {
+      // The clearance of the class to every class is the larger of currentClearance and the
+      // default class's clearance to it, on every layer or, for a layer rule, on its layer
+      // (where it replaces the class's general rule).
       for (int i = 1; i < clearanceMatrix.getClassCount(); i++) {
         for (int j = 0; j < clearanceMatrix.getLayerCount(); j++) {
-          int currentValue =
-              Math.max(clearanceMatrix.getValue(classNo, i, j, false), currentClearance);
+          if (layerIndex >= 0 && j != layerIndex) {
+            continue;
+          }
+          int currentValue = Math.max(clearanceMatrix.getValue(1, i, j, false), currentClearance);
           clearanceMatrix.setValue(classNo, i, j, currentValue);
           clearanceMatrix.setValue(i, classNo, j, currentValue);
         }
       }
-      netClass.defaultItemClearanceClasses.setAll(classNo);
     }
     netClass.setTraceClearanceClass(classNo);
     if (rule.clearanceClassPairs.isEmpty()) {
@@ -965,8 +1049,10 @@ public class Network extends ScopeKeyword {
       String libKey,
       ReadScopeParameter scopeParameter) {
     RoutingBoard routingBoard = scopeParameter.boardHandling.getRoutingBoard();
-    Package currentFrontPackage = routingBoard.library.packages.get(libKey, true);
-    Package currentBackPackage = routingBoard.library.packages.get(libKey, false);
+    // the packages are null when the DSN file has no (library ...) scope
+    Packages packages = routingBoard.library.packages;
+    Package currentFrontPackage = packages != null ? packages.get(libKey, true) : null;
+    Package currentBackPackage = packages != null ? packages.get(libKey, false) : null;
     if (currentFrontPackage == null || currentBackPackage == null) {
       FRLogger.warn(
           "Network.insert_component: component package not found at '"
@@ -982,6 +1068,15 @@ public class Network extends ScopeKeyword {
       exactLocation = null;
     }
     double rotationInDegree = location.rotation;
+    if (Math.abs(rotationInDegree) >= 360) {
+      // The board items normalize their rotation by adding or subtracting 360 degrees in a loop,
+      // which never ends for huge values. The remainder is exact, so it gives that loop's result
+      // for every value the loop could finish, including +0.0 for multiples of 360.
+      rotationInDegree %= 360;
+      if (rotationInDegree == 0) {
+        rotationInDegree = 0;
+      }
+    }
 
     app.freerouting.board.model.structure.Component newComponent =
         routingBoard.components.addPrecise(
@@ -1271,6 +1366,9 @@ public class Network extends ScopeKeyword {
 
   @Override
   public boolean readScope(ReadScopeParameter scopeParameter) {
+    if (scopeParameter.boardForScope("network") == null) {
+      return false;
+    }
     Collection<NetClass> classes = new LinkedList<>();
     Collection<NetClass.ClassClass> classClassList = new LinkedList<>();
     Collection<ViaInfo> viaInfos = new LinkedList<>();
@@ -1349,7 +1447,11 @@ public class Network extends ScopeKeyword {
 
     // Set the via padstacks after network parsing, so that named vias from both structure and
     // network DSN sections are properly instantiated .
-    if (scopeParameter.viaPadstackNames != null) {
+    if (scopeParameter.viaPadstackNames != null && board.library.padstacks == null) {
+      FRLogger.warn(
+          "Network.read_scope: via padstacks not found, because the (library ...) scope is"
+              + " missing or does not precede the (network ...) scope");
+    } else if (scopeParameter.viaPadstackNames != null) {
       Padstack[] viaPadstacks = new Padstack[scopeParameter.viaPadstackNames.size()];
       Iterator<String> it = scopeParameter.viaPadstackNames.iterator();
       int foundPadstackCount = 0;
@@ -1364,6 +1466,9 @@ public class Network extends ScopeKeyword {
           viaPadstacks[foundPadstackCount] = currentPadstack;
           ++foundPadstackCount;
         } else {
+          if (currentPadstackName != null) {
+            board.library.noteMissingViaPadstack(currentPadstackName);
+          }
           FRLogger.warn(
               "Library.read_scope: via padstack with name '"
                   + currentPadstackName
@@ -1381,11 +1486,9 @@ public class Network extends ScopeKeyword {
       board.library.setViaPadstacks(viaPadstacks);
     }
 
-    insertViaInfos(
-        viaInfos, scopeParameter.boardHandling.getRoutingBoard(), scopeParameter.viaAtSmdAllowed);
-    insertViaRules(viaRules, scopeParameter.boardHandling.getRoutingBoard());
-    insertNetClasses(classes, scopeParameter);
+    insertNetClasses(classes, viaInfos, viaRules, scopeParameter);
     insertClassPairs(classClassList, scopeParameter);
+    Structure.resolveDeferredClearanceClasses(scopeParameter);
     insertComponents(scopeParameter);
     insertLogicalParts(scopeParameter);
     return true;

@@ -1,0 +1,426 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/RoutingPipeline.java b/src/main/java/app/freerouting/autoroute/pipeline/RoutingPipeline.java
+index 31df0f52..0c7f32ff 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/RoutingPipeline.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/RoutingPipeline.java
+@@ -2,8 +2,10 @@ package app.freerouting.autoroute.pipeline;
+ 
+ import app.freerouting.autoroute.events.BoardUpdatedEventListener;
+ import app.freerouting.autoroute.events.TaskStateChangedEventListener;
++import app.freerouting.board.model.items.Item;
+ import app.freerouting.core.RoutingJob;
+ import app.freerouting.core.RoutingStage;
++import app.freerouting.settings.ExperimentFlags;
+ import app.freerouting.settings.RouterSettings;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -12,6 +14,14 @@ import java.util.function.Function;
+ /** Sequences the shared fanout, autoroute, and optimization stages for a routing job. */
+ public final class RoutingPipeline {
+ 
++  /**
++   * Experiment switch {@code -Dfreerouting.exp.final_tail_cleanup}: when {@code false}, leftover
++   * tails and orphan fanout vias are removed only by the pass loop itself, as before the final
++   * cleanup existed.
++   */
++  static final boolean FINAL_TAIL_CLEANUP_ENABLED =
++      ExperimentFlags.isEnabled("final_tail_cleanup", true);
++
+   /** Receives lifecycle callbacks between pipeline stages. */
+   public interface StageListener {
+     /** Invoked after fanout and autorouting have completed. */
+@@ -130,6 +140,7 @@ public final class RoutingPipeline {
+       if (RoutingSupervisor.explores(this.job.routerSettings)) {
+         this.autorouter = fallback.explore(this.job, this.autorouter);
+       }
++      removeLeftoverTails();
+     } else if (this.job.routerSettings.isFanoutEnabled()
+         && !this.job.thread.isStopAutoRouterRequested()) {
+       Integer originalMaxPasses = this.job.routerSettings.autorouter.maxPasses;
+@@ -147,6 +158,23 @@ public final class RoutingPipeline {
+     }
+   }
+ 
++  /**
++   * Removes trace tails and orphan fanout vias from the routing result. Between passes the pass
++   * loop keeps tails that end at a fanout via so later passes can still connect the pin, and it
++   * removes them itself only when it ends with no stop requested. A loop that stops at its pass
++   * limit, on stagnation or on timeout, and every fallback attempt, would otherwise hand them to
++   * the output as vias connected on one layer only. A job the user cancelled keeps its board as it
++   * is.
++   */
++  private void removeLeftoverTails() {
++    if (!FINAL_TAIL_CLEANUP_ENABLED
++        || this.job.isCancelledByUser()
++        || this.autorouter.board != this.job.board) {
++      return;
++    }
++    this.autorouter.removeTails(Item.StopConnectionOption.NONE);
++  }
++
+   private void runOptimizationStage() {
+     if (this.optimizer == null || this.job.thread.isStopRequested()) {
+       return;
+diff --git a/src/main/java/app/freerouting/io/specctra/parser/Wiring.java b/src/main/java/app/freerouting/io/specctra/parser/Wiring.java
+index 6c901072..c0d10074 100644
+--- a/src/main/java/app/freerouting/io/specctra/parser/Wiring.java
++++ b/src/main/java/app/freerouting/io/specctra/parser/Wiring.java
+@@ -5,6 +5,7 @@ import app.freerouting.board.facade.BasicBoard;
+ import app.freerouting.board.facade.RoutingBoard;
+ import app.freerouting.board.model.items.ConductionArea;
+ import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Pin;
+ import app.freerouting.board.model.items.Trace;
+ import app.freerouting.board.model.items.Via;
+ import app.freerouting.board.model.structure.FixedState;
+@@ -25,6 +26,7 @@ import app.freerouting.logger.FRLogger;
+ import app.freerouting.rules.BoardRules;
+ import app.freerouting.rules.DefaultItemClearanceClasses;
+ import app.freerouting.rules.NetClass;
++import app.freerouting.settings.ExperimentFlags;
+ import java.io.IOException;
+ import java.util.Collection;
+ import java.util.Iterator;
+@@ -39,6 +41,15 @@ import java.util.Set;
+ })
+ public class Wiring extends ScopeKeyword {
+ 
++  /** Largest distance, in microns, over which a wire end is moved onto a same-net pin centre. */
++  static final double PIN_CENTER_SNAP_UM = 1.0;
++
++  /**
++   * Experiment switch {@code -Dfreerouting.exp.wire_snap}: when {@code false}, wire ends are
++   * imported exactly as written, as before the pin centre snap existed.
++   */
++  static final boolean WIRE_SNAP_ENABLED = ExperimentFlags.isEnabled("wire_snap", true);
++
+   /** Creates a new instance of Wiring. */
+   public Wiring() {
+     super("wiring");
+@@ -510,6 +521,15 @@ public class Wiring extends ScopeKeyword {
+         }
+         corners[i] = currentCorner.round();
+       }
++      if (WIRE_SNAP_ENABLED) {
++        double snapTolerance =
++            scopeParameter.coordinateTransform.dsnToBoard(
++                app.freerouting.board.model.structure.Unit.scale(
++                    PIN_CENTER_SNAP_UM,
++                    app.freerouting.board.model.structure.Unit.UM,
++                    scopeParameter.unit));
++        snapEndsToPinCenters(board, corners, layerIndex, netNumbers, snapTolerance);
++      }
+ 
+       Polygon polygon = new Polygon(corners);
+ 
+@@ -576,6 +596,51 @@ public class Wiring extends ScopeKeyword {
+     return result;
+   }
+ 
++  /**
++   * Freerouting connects a trace to a pin only at the exact pin centre. Host tools write wire
++   * coordinates and pad positions with different rounding, so a track that ends on a pad centre in
++   * the host can miss it by a fraction of a micron in the DSN file and would be imported as an open
++   * that the router cannot repair when the wire is fixed. Moves the first and the last corner of a
++   * wire onto the centre of a pin of the wire's net on the wire's layer when the corner lies inside
++   * that pin and at most {@code tolerance} board units away from its centre.
++   */
++  static void snapEndsToPinCenters(
++      BasicBoard board, IntPoint[] corners, int layer, int[] netNumbers, double tolerance) {
++    if (corners.length < 2 || netNumbers.length == 0) {
++      return;
++    }
++    corners[0] = snapToPinCenter(board, corners[0], layer, netNumbers, tolerance);
++    int last = corners.length - 1;
++    corners[last] = snapToPinCenter(board, corners[last], layer, netNumbers, tolerance);
++  }
++
++  private static IntPoint snapToPinCenter(
++      BasicBoard board, IntPoint corner, int layer, int[] netNumbers, double tolerance) {
++    IntPoint result = corner;
++    double bestDistance = Double.MAX_VALUE;
++    for (Item item : board.pickItems(corner, layer, null)) {
++      if (!(item instanceof Pin pin) || !(pin.getCenter() instanceof IntPoint center)) {
++        continue;
++      }
++      boolean sameNet = false;
++      for (int netNumber : netNumbers) {
++        sameNet |= pin.containsNet(netNumber);
++      }
++      if (!sameNet) {
++        continue;
++      }
++      if (center.equals(corner)) {
++        return corner;
++      }
++      double distance = center.toFloat().distance(corner.toFloat());
++      if (distance <= tolerance && distance < bestDistance) {
++        bestDistance = distance;
++        result = center;
++      }
++    }
++    return result;
++  }
++
+   /**
+    * Maybe trace of type turret without net in Mentor design. Try to assign the net by calculating
+    * the overlaps.
+diff --git a/src/main/java/app/freerouting/settings/ExperimentFlags.java b/src/main/java/app/freerouting/settings/ExperimentFlags.java
+new file mode 100644
+index 00000000..b13b3e90
+--- /dev/null
++++ b/src/main/java/app/freerouting/settings/ExperimentFlags.java
+@@ -0,0 +1,54 @@
++package app.freerouting.settings;
++
++import app.freerouting.logger.FRLogger;
++
++/**
++ * Switches for code experiments that are measured side by side from one jar. A switch is the JVM
++ * system property {@code freerouting.exp.<name>}; callers read it once into a static constant when
++ * their class is initialised, so a run never changes arms halfway. The values {@code true} and
++ * {@code false} (any case) select an arm; a missing property keeps the default, and any other value
++ * keeps the default with a warning so that a typo in an experiment command line is visible.
++ */
++public final class ExperimentFlags {
++
++  /** Prefix of every experiment system property. */
++  public static final String PROPERTY_PREFIX = "freerouting.exp.";
++
++  private ExperimentFlags() {}
++
++  /**
++   * Reads the experiment switch {@code freerouting.exp.<name>}.
++   *
++   * @param name the switch name without the prefix, for example {@code wire_snap}
++   * @param defaultValue the value used when the property is missing or not a boolean
++   * @return whether the switch is on
++   */
++  public static boolean isEnabled(String name, boolean defaultValue) {
++    String key = PROPERTY_PREFIX + name;
++    String value = System.getProperty(key);
++    Boolean parsed = parse(value);
++    if (parsed == null) {
++      if (value != null) {
++        FRLogger.warn(
++            "Ignoring -D" + key + "=" + value + ": expected true or false; using " + defaultValue);
++      }
++      return defaultValue;
++    }
++    return parsed;
++  }
++
++  /** Returns the boolean a property value names, or {@code null} when it names none. */
++  static Boolean parse(String value) {
++    if (value == null) {
++      return null;
++    }
++    String trimmed = value.trim();
++    if ("true".equalsIgnoreCase(trimmed)) {
++      return Boolean.TRUE;
++    }
++    if ("false".equalsIgnoreCase(trimmed)) {
++      return Boolean.FALSE;
++    }
++    return null;
++  }
++}
+diff --git a/src/test/java/app/freerouting/io/specctra/WireEndPinSnapTest.java b/src/test/java/app/freerouting/io/specctra/WireEndPinSnapTest.java
+new file mode 100644
+index 00000000..553b26ae
+--- /dev/null
++++ b/src/test/java/app/freerouting/io/specctra/WireEndPinSnapTest.java
+@@ -0,0 +1,142 @@
++package app.freerouting.io.specctra;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertInstanceOf;
++import static org.junit.jupiter.api.Assertions.assertNotEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.junit.jupiter.api.Assumptions.assumeTrue;
++
++import app.freerouting.Freerouting;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Pin;
++import app.freerouting.board.model.items.Trace;
++import app.freerouting.drc.DesignRulesChecker;
++import app.freerouting.io.BoardReadResult;
++import app.freerouting.settings.GlobalSettings;
++import java.io.ByteArrayInputStream;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Path;
++import java.util.concurrent.TimeUnit;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++/**
++ * KiCad writes wire ends and pad positions with different rounding, so a fixed track that ends on a
++ * pad centre in KiCad can miss it by a fraction of a micron in the DSN (Issue269 caniot board: 0.2
++ * and 0.5 um). The import moves such an end onto the pin centre so the connection is kept.
++ */
++class WireEndPinSnapTest {
++
++  @BeforeEach
++  void setUp() {
++    Freerouting.globalSettings = new GlobalSettings();
++  }
++
++  private static String dsn(String secondPinX, String wirePath) {
++    return """
++        (pcb snap (resolution um 10) (unit um)
++          (structure (layer F.Cu (type signal)) (layer B.Cu (type signal))
++            (boundary (rect pcb -5000 -5000 20000 5000)) (via V) (rule (width 250) (clearance 200)))
++          (placement (component R (place R1 0 0 front 0)))
++          (library
++            (image R (pin P 1 0 0) (pin P 2 %s 0) (pin P 3 %s 3000))
++            (padstack P (shape (rect F.Cu -500 -500 500 500)) (attach off))
++            (padstack V (shape (circle F.Cu 600)) (shape (circle B.Cu 600)) (attach off)))
++          (network (net A (pins R1-1 R1-2)) (net B (pins R1-3)))
++          (wiring
++            (wire (path F.Cu 250  %s)(net A)(type route))))
++        """
++        .formatted(secondPinX, secondPinX, wirePath);
++  }
++
++  private static RoutingBoard load(String text) {
++    BoardReadResult result =
++        DsnReader.readBoard(
++            new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8)), null, null, "snap");
++    assertInstanceOf(BoardReadResult.Success.class, result);
++    return (RoutingBoard) ((BoardReadResult.Success) result).board();
++  }
++
++  private static Trace onlyTrace(RoutingBoard board) {
++    assertEquals(1, board.getTraces().size());
++    return board.getTraces().iterator().next();
++  }
++
++  private static Pin pin(RoutingBoard board, int pinIndex) {
++    return board.getPins().stream()
++        .filter(p -> p.getPinIndex() == pinIndex)
++        .findFirst()
++        .orElseThrow();
++  }
++
++  private static int incompletes(RoutingBoard board) {
++    DesignRulesChecker drc = new DesignRulesChecker(board, null);
++    drc.calculateAllIncompletes();
++    return drc.getIncompleteCount();
++  }
++
++  @Test
++  void wireEndHalfMicronOffPinCentreIsMovedOntoIt() {
++    // The last segment runs along x = 5001, so it does not pass through the centre at x = 5000.5.
++    RoutingBoard board = load(dsn("5000.5", "0 0  0 -2000  5001 -2000  5001 0"));
++    Trace trace = onlyTrace(board);
++    Pin second = pin(board, 1);
++
++    assertEquals(second.getCenter(), trace.lastCorner());
++    assertTrue(second.getNormalContacts().contains(trace));
++    assertEquals(0, incompletes(board));
++  }
++
++  @Test
++  void wireEndFurtherOffThePinCentreIsKept() {
++    // 3 um beside the centre: further than the snap tolerance, so it stays an open.
++    RoutingBoard board = load(dsn("5000", "0 0  0 -2000  5003 -2000  5003 0"));
++    Trace trace = onlyTrace(board);
++
++    assertNotEquals(pin(board, 1).getCenter(), trace.lastCorner());
++    assertEquals(1, incompletes(board));
++  }
++
++  /**
++   * With {@code -Dfreerouting.exp.wire_snap=false} the end keeps its DSN position. The switch is
++   * read once when the parser class is initialised, so the check runs in a fresh JVM.
++   */
++  @Test
++  void experimentSwitchOffKeepsTheWireEndAsWritten() throws Exception {
++    String classPath = System.getProperty("java.class.path");
++    assumeTrue(classPath != null && classPath.contains("test"), "test classpath not visible");
++    Path java = Path.of(System.getProperty("java.home"), "bin", "java");
++    Process process =
++        new ProcessBuilder(
++                java.toString(),
++                "-Dfreerouting.exp.wire_snap=false",
++                "-Dfreerouting.logging.file.enabled=false",
++                "-Dfreerouting.logging.console.enabled=false",
++                "-cp",
++                classPath,
++                WireEndPinSnapTest.class.getName())
++            .redirectErrorStream(true)
++            .start();
++    String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
++    assertTrue(process.waitFor(60, TimeUnit.SECONDS), output);
++    assertEquals(0, process.exitValue(), output);
++    assertTrue(output.contains("snapped=false incompletes=1"), output);
++  }
++
++  /** Child JVM entry point of {@link #experimentSwitchOffKeepsTheWireEndAsWritten()}. */
++  public static void main(String[] args) {
++    Freerouting.globalSettings = new GlobalSettings();
++    RoutingBoard board = load(dsn("5000.5", "0 0  0 -2000  5001 -2000  5001 0"));
++    boolean snapped = pin(board, 1).getCenter().equals(onlyTrace(board).lastCorner());
++    System.out.println("snapped=" + snapped + " incompletes=" + incompletes(board));
++  }
++
++  @Test
++  void wireEndIsNotMovedOntoForeignNetPin() {
++    // The wire of net A ends 0.7 um off the centre of R1-3, which belongs to net B.
++    RoutingBoard board = load(dsn("5000", "0 0  0 2000  5000.5 2000  5000.5 2999.5"));
++    Trace trace = onlyTrace(board);
++
++    assertNotEquals(pin(board, 2).getCenter(), trace.lastCorner());
++  }
++}
+diff --git a/src/test/java/app/freerouting/settings/ExperimentFlagsTest.java b/src/test/java/app/freerouting/settings/ExperimentFlagsTest.java
+new file mode 100644
+index 00000000..703d0b08
+--- /dev/null
++++ b/src/test/java/app/freerouting/settings/ExperimentFlagsTest.java
+@@ -0,0 +1,46 @@
++package app.freerouting.settings;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.Test;
++
++/** The experiment switches select an arm only for an explicit true or false. */
++class ExperimentFlagsTest {
++
++  private static final String NAME = "experiment_flags_test_switch";
++
++  @AfterEach
++  void clearProperty() {
++    System.clearProperty(ExperimentFlags.PROPERTY_PREFIX + NAME);
++  }
++
++  @Test
++  void missingPropertyKeepsTheDefault() {
++    assertTrue(ExperimentFlags.isEnabled(NAME, true));
++    assertFalse(ExperimentFlags.isEnabled(NAME, false));
++  }
++
++  @Test
++  void falseSwitchesTheExperimentOff() {
++    System.setProperty(ExperimentFlags.PROPERTY_PREFIX + NAME, " FALSE ");
++    assertFalse(ExperimentFlags.isEnabled(NAME, true));
++  }
++
++  @Test
++  void trueSwitchesTheExperimentOn() {
++    System.setProperty(ExperimentFlags.PROPERTY_PREFIX + NAME, "true");
++    assertTrue(ExperimentFlags.isEnabled(NAME, false));
++  }
++
++  @Test
++  void otherValuesKeepTheDefault() {
++    System.setProperty(ExperimentFlags.PROPERTY_PREFIX + NAME, "off");
++    assertTrue(ExperimentFlags.isEnabled(NAME, true));
++    assertNull(ExperimentFlags.parse("0"));
++    assertEquals(Boolean.FALSE, ExperimentFlags.parse("False"));
++  }
++}

@@ -1,11 +1,12 @@
 package app.freerouting.settings.sources;
 
 import app.freerouting.logger.FRLogger;
-import app.freerouting.settings.LegacyRouterSettingsBridge;
+import app.freerouting.settings.RouterPropertyNames;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.SettingsSource;
 import app.freerouting.util.ReflectionUtil;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -35,9 +36,8 @@ public class CliSettings implements SettingsSource {
     boolean hasDesignOutputArgument = false;
     boolean hasExplicitRouterEnabledArgument = false;
 
-    // Parse command-line arguments and populate only the specified settings
-    // This uses the same logic as GlobalSettings.applyCommandLineArguments
-    // but only for router-related settings
+    // Populate only the specified settings. This is the only reader of router options on the
+    // command line; GlobalSettings reads the other sections.
 
     for (int i = 0; i < args.length; i++) {
       String arg = args[i];
@@ -46,29 +46,11 @@ public class CliSettings implements SettingsSource {
         // Handle --property=value format
         if (arg.contains("=")) {
           String[] parts = arg.substring(2).split("=", 2);
-          String propertyName = parts[0];
-          String value = parts.length > 1 ? parts[1] : "";
-
-          if ("router.enabled".equals(propertyName)
-              || "router.autorouter.enabled".equals(propertyName)) {
+          List<String> fieldPaths = RouterPropertyNames.fieldPaths(parts[0]);
+          if (fieldPaths.contains("autorouter.enabled")) {
             hasExplicitRouterEnabledArgument = true;
           }
-
-          if ("scoring-version".equals(propertyName)) {
-            applyRouterSetting(settings, "router.scoring.version", value);
-            applyRouterSetting(settings, "optimizer.scoring.version", value);
-          } else if (propertyName.startsWith("router.")
-              || propertyName.startsWith("optimizer.")
-              || "router-scoring-version".equals(propertyName)
-              || "optimizer-scoring-version".equals(propertyName)) {
-            String normalizedProperty =
-                switch (propertyName) {
-                  case "router-scoring-version" -> "router.scoring.version";
-                  case "optimizer-scoring-version" -> "optimizer.scoring.version";
-                  default -> propertyName;
-                };
-            applyRouterSetting(settings, normalizedProperty, value);
-          }
+          applyRouterSetting(settings, parts[0], fieldPaths, parts[1]);
         }
       } else if (arg.startsWith("-")) {
         // Handle -flag value format
@@ -113,19 +95,9 @@ public class CliSettings implements SettingsSource {
           continue;
         }
 
-        // "-mt 0" disables the optimizer, as it did in v1.9 and as the CLI docs say. Other values
-        // set the thread count through router.max_threads.
-        if ("mt".equals(flag) && isZeroOrNegativeInteger(value)) {
-          applyRouterSetting(settings, "router.optimizer.enabled", "false");
-          continue;
-        }
-
         // Map short flags to router settings
         String propertyName = mapFlagToProperty(flag);
-        if (propertyName != null
-            && (propertyName.startsWith("router.")
-                || propertyName.startsWith("optimizer.")
-                || "scoring-version".equals(propertyName))) {
+        if (propertyName != null) {
           applyRouterSetting(settings, propertyName, value);
         }
       }
@@ -143,57 +115,24 @@ public class CliSettings implements SettingsSource {
     return settings;
   }
 
-  /**
-   * Maps the short scoring-version names ({@code v1}, {@code v2}, {@code v3}, {@code legacy},
-   * {@code continuous}, {@code lower_bound}, {@code equivalent_length}) to their enum constants for
-   * a {@code *.version} field path relative to the router settings; returns any other value
-   * unchanged. Shared with {@link app.freerouting.settings.GlobalSettings#setValue} so both
-   * command-line parsers accept the same values.
-   */
-  public static String normalizeRouterValue(String fieldPath, String value) {
-    if (value == null || !fieldPath.endsWith(".version")) {
-      return value;
-    }
-    return switch (value.trim().toLowerCase(Locale.ROOT)) {
-      case "v1", "legacy" -> "V1_LEGACY";
-      case "v2", "continuous" ->
-          fieldPath.startsWith("optimizer") ? "V2_LOWER_BOUND" : "V2_CONTINUOUS";
-      case "lower_bound", "lower-bound" -> "V2_LOWER_BOUND";
-      case "v3", "equivalent_length", "equivalent-length" -> "V3_EQUIVALENT_LENGTH";
-      default -> value;
-    };
+  private void applyRouterSetting(RouterSettings settings, String propertyName, String value) {
+    applyRouterSetting(settings, propertyName, RouterPropertyNames.fieldPaths(propertyName), value);
   }
 
-  private void applyRouterSetting(RouterSettings settings, String propertyName, String value) {
-    try {
-      if ("scoring-version".equals(propertyName)) {
-        applyRouterSetting(settings, "router.scoring.version", value);
-        applyRouterSetting(settings, "optimizer.scoring.version", value);
-        return;
+  private void applyRouterSetting(
+      RouterSettings settings, String propertyName, List<String> fieldPaths, String value) {
+    for (String fieldPath : fieldPaths) {
+      String normalizedValue = RouterPropertyNames.normalizeValue(fieldPath, value);
+      try {
+        ReflectionUtil.setFieldValue(settings, fieldPath, normalizedValue);
+        parsedArguments.put(propertyName, normalizedValue);
+        FRLogger.debug("Applied CLI router setting: " + propertyName + " = " + normalizedValue);
+      } catch (NoSuchFieldException e) {
+        FRLogger.warn("Unknown settings property: " + propertyName);
+      } catch (Exception e) {
+        FRLogger.warn(
+            "Failed to apply CLI router setting: " + propertyName + ": " + e.getMessage());
       }
-      // Remove "router." prefix if present
-      String fieldPath =
-          propertyName.startsWith("router.") ? propertyName.substring(7) : propertyName;
-      if ("scoring.version".equals(fieldPath)) {
-        fieldPath = "routerScoring.version";
-      } else if ("optimizer.scoring.version".equals(propertyName)) {
-        fieldPath = "optimizerScoring.version";
-      } else if (propertyName.startsWith("router.")) {
-        String relative = propertyName.substring("router.".length());
-        String canonical = LegacyRouterSettingsBridge.canonicalCliPath(relative);
-        if (LegacyRouterSettingsBridge.isDeprecatedFlatAutorouterPath(relative)) {
-          LegacyRouterSettingsBridge.warnDeprecatedPath(
-              "router." + relative, "router." + canonical);
-        }
-        fieldPath = canonical;
-      }
-      value = normalizeRouterValue(fieldPath, value);
-
-      ReflectionUtil.setFieldValue(settings, fieldPath, value);
-      parsedArguments.put(propertyName, value);
-      FRLogger.debug("Applied CLI router setting: " + propertyName + " = " + value);
-    } catch (Exception e) {
-      FRLogger.warn("Failed to apply CLI router setting: " + propertyName + ": " + e.getMessage());
     }
   }
 
@@ -227,10 +166,7 @@ public class CliSettings implements SettingsSource {
       case "mt" -> "router.max_threads";
       case "inc" -> "router.autorouter.ignore_net_classes";
       case "oit" -> "router.optimizer.improvement_threshold";
-      case "router-scoring-version" -> "router.scoring.version";
-      case "optimizer-scoring-version" -> "optimizer.scoring.version";
-      case "scoring-version" -> "scoring-version";
-      // Add more mappings as needed
+      case "router-scoring-version", "optimizer-scoring-version", "scoring-version" -> flag;
       default -> null;
     };
   }

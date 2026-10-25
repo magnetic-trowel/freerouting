@@ -40,11 +40,6 @@ public class AutorouterSettings implements Serializable, Cloneable {
   @Schema(description = "Maximum worker threads for the autorouter stage")
   public Integer maxThreads;
 
-  /** When true, intermediate board snapshots are saved between autorouter passes. */
-  @SerializedName("save_intermediate_stages")
-  @Schema(description = "When true, intermediate board snapshots are saved between passes")
-  public Boolean saveIntermediateStages;
-
   /** Net class names the autorouter should skip. */
   @SerializedName("ignore_net_classes")
   @Schema(

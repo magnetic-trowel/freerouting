@@ -1,0 +1,295 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java b/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
+index 48c77f14..14d6aaf4 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
+@@ -99,7 +99,15 @@ final class AutoroutePassRunner {
+       int notRouted = 0;
+       int routed = 0;
+       int skipped = 0;
+-      for (Item currentItem : autorouteItemList) {
++      final int queuedItemCount = autorouteItemList.size();
++      final SameNetRequeue requeue =
++          SameNetRequeue.ENABLED ? new SameNetRequeue(autorouteItemList) : null;
++      for (int itemIndex = 0; itemIndex < autorouteItemList.size(); itemIndex++) {
++        Item currentItem = autorouteItemList.get(itemIndex);
++        final boolean isRequeuedRetry = itemIndex >= queuedItemCount;
++        if (requeue != null) {
++          requeue.markProcessed(currentItem);
++        }
+         if (router.thread.isStopAutoRouterRequested()) {
+           break;
+         }
+@@ -162,6 +170,10 @@ final class AutoroutePassRunner {
+               || (autorouterResult.state == AutorouteAttemptState.NO_UNCONNECTED_NETS)
+               || (autorouterResult.state == AutorouteAttemptState.CONNECTED_TO_PLANE)) {
+             ++skipped;
++          } else if (isRequeuedRetry) {
++            // E05: a same-pass retry is a bonus attempt; the item's regular attempt in the next
++            // pass records its failure.
++            ++notRouted;
+           } else {
+             Net net = router.board.rules.nets.get(currentItem.getNetNumber(i));
+             String netName = net != null ? net.name : "net#" + currentItem.getNetNumber(i);
+@@ -195,6 +207,11 @@ final class AutoroutePassRunner {
+           }
+           --itemsToGoCount;
+           rippedItemCount += rippedItemList.size();
++          if (requeue != null
++              && autorouterResult.state == AutorouteAttemptState.ROUTED
++              && !rippedItemList.isEmpty()) {
++            itemsToGoCount += requeue.queueBrokenComponents(router.board, rippedItemList);
++          }
+           updateProgress(
+               routerCounters, itemsToGoCount, rippedItemCount, notRouted, routed, skipped);
+         }
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/SameNetRequeue.java b/src/main/java/app/freerouting/autoroute/pipeline/SameNetRequeue.java
+new file mode 100644
+index 00000000..82ba4baa
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/pipeline/SameNetRequeue.java
+@@ -0,0 +1,136 @@
++package app.freerouting.autoroute.pipeline;
++
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.ConductionArea;
++import app.freerouting.board.model.items.Connectable;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Pin;
++import app.freerouting.rules.Net;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.SortedSet;
++import java.util.TreeMap;
++import java.util.TreeSet;
++
++/**
++ * Experiment E05 (same-pass requeue): after a connection attempt routed and ripped other nets, one
++ * item per broken component of each ripped net is appended to the current pass's item list, so the
++ * victims are re-routed in the same pass instead of waiting for the next one. Each net is requeued
++ * at most {@link #MAX_REQUEUES_PER_NET_AND_PASS} times per pass. Off by default ({@code
++ * -Dfreerouting.exp.requeue_ripped=true} enables it); one instance serves one pass.
++ */
++final class SameNetRequeue {
++
++  /** System property that enables the requeue. */
++  static final String PROPERTY = "freerouting.exp.requeue_ripped";
++
++  /** Whether {@link #PROPERTY} is "true", read once at startup. */
++  static final boolean ENABLED = Boolean.getBoolean(PROPERTY);
++
++  static final int MAX_REQUEUES_PER_NET_AND_PASS = 2;
++
++  private final List<Item> passItems;
++  private final Set<Item> pendingItems;
++  private final Map<Integer, Integer> requeuesPerNet = new TreeMap<>();
++
++  /** {@code passItems} is the pass's item list; requeued items are appended to it. */
++  SameNetRequeue(List<Item> passItems) {
++    this.passItems = passItems;
++    this.pendingItems = new TreeSet<>(passItems);
++  }
++
++  /** Records that the pass loop reached {@code item}, so it may be queued again later. */
++  void markProcessed(Item item) {
++    this.pendingItems.remove(item);
++  }
++
++  /**
++   * Appends one item per broken component of every net of the ripped items to the pass's item list,
++   * skipping items still pending in the pass. Nets are handled in ascending net number, components
++   * in ascending item id. Returns the number of items appended.
++   */
++  int queueBrokenComponents(RoutingBoard board, Collection<Item> rippedItems) {
++    SortedSet<Integer> nets = new TreeSet<>();
++    for (Item ripped : rippedItems) {
++      for (int i = 0; i < ripped.netCount(); i++) {
++        nets.add(ripped.getNetNumber(i));
++      }
++    }
++    int added = 0;
++    for (int net : nets) {
++      int used = this.requeuesPerNet.getOrDefault(net, 0);
++      if (used >= MAX_REQUEUES_PER_NET_AND_PASS) {
++        continue;
++      }
++      List<Item> representatives = brokenComponentRepresentatives(board, net);
++      if (representatives.isEmpty()) {
++        continue;
++      }
++      this.requeuesPerNet.put(net, used + 1);
++      for (Item representative : representatives) {
++        if (this.pendingItems.add(representative)) {
++          this.passItems.add(representative);
++          added++;
++        }
++      }
++    }
++    return added;
++  }
++
++  /**
++   * One routable start item per connected component of the net, or an empty list when the net is
++   * connected (or unknown). The start item of a component is its pin with the lowest id, else its
++   * lowest-id connectable item that the autorouter starts from (not a trace). Components of a plane
++   * net that already touch the plane are skipped, as {@link BatchAutorouter#getAutorouteItems}
++   * does.
++   */
++  static List<Item> brokenComponentRepresentatives(RoutingBoard board, int netNumber) {
++    Net net = board.rules.nets.get(netNumber);
++    if (net == null) {
++      return List.of();
++    }
++    boolean plane = net.containsPlane();
++    List<Item> items = new ArrayList<>(board.getConnectableItems(netNumber));
++    items.sort(null);
++    Set<Item> assigned = new HashSet<>();
++    List<Item> representatives = new ArrayList<>();
++    int componentCount = 0;
++    for (Item item : items) {
++      if (assigned.contains(item)) {
++        continue;
++      }
++      SortedSet<Item> component = new TreeSet<>(item.getConnectedSet(netNumber));
++      component.add(item);
++      assigned.addAll(component);
++      componentCount++;
++      if (plane && component.stream().anyMatch(ConductionArea.class::isInstance)) {
++        continue;
++      }
++      Item representative = representative(component);
++      if (representative != null) {
++        representatives.add(representative);
++      }
++    }
++    return componentCount < 2 ? List.of() : representatives;
++  }
++
++  private static Item representative(SortedSet<Item> component) {
++    Item fallback = null;
++    for (Item item : component) {
++      if (!(item instanceof Connectable) || item.isRoutable() || item.hasIgnoredNets()) {
++        continue;
++      }
++      if (item instanceof Pin) {
++        return item;
++      }
++      if (fallback == null) {
++        fallback = item;
++      }
++    }
++    return fallback;
++  }
++}
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/SameNetRequeueTest.java b/src/test/java/app/freerouting/autoroute/pipeline/SameNetRequeueTest.java
+new file mode 100644
+index 00000000..aaecea38
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/SameNetRequeueTest.java
+@@ -0,0 +1,103 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertInstanceOf;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Pin;
++import app.freerouting.board.model.structure.FixedState;
++import app.freerouting.geometry.planar.Point;
++import app.freerouting.geometry.planar.Polyline;
++import app.freerouting.io.BoardReadResult;
++import app.freerouting.io.specctra.DsnReader;
++import java.io.ByteArrayInputStream;
++import java.nio.charset.StandardCharsets;
++import java.util.ArrayList;
++import java.util.List;
++import org.junit.jupiter.api.Test;
++
++/** Experiment E05: requeue picks one start item per broken component, bounded per net. */
++class SameNetRequeueTest {
++
++  private static final String DSN =
++      """
++      (pcb requeue (resolution um 1)
++        (structure (layer top (type signal))
++          (boundary (rect pcb 0 0 20000 10000))
++          (via V) (rule (width 400) (clearance 200)))
++        (placement (component C (place A 3000 3000 front 0) (place B 17000 3000 front 0)
++          (place D 10000 8000 front 0)))
++        (library (image C (pin S 1 0 0)) (padstack S (shape (circle top 800)))
++          (padstack V (shape (circle top 600)) (attach off)))
++        (network (net X (pins A-1 B-1 D-1))))
++      """;
++
++  @Test
++  void requeueIsOffByDefault() {
++    assertFalse(SameNetRequeue.ENABLED);
++  }
++
++  @Test
++  void oneStartItemPerBrokenComponentUntilTheNetIsConnected() {
++    RoutingBoard board = board();
++    int net = board.rules.nets.get("X").iterator().next().netNumber;
++    List<Item> pins = new ArrayList<>(board.getPins());
++    pins.sort(null);
++
++    assertEquals(pins, SameNetRequeue.brokenComponentRepresentatives(board, net));
++
++    connect(board, net, pins.get(0), pins.get(1));
++    List<Item> afterFirst = SameNetRequeue.brokenComponentRepresentatives(board, net);
++    assertEquals(List.of(pins.get(0), pins.get(2)), afterFirst);
++
++    connect(board, net, pins.get(1), pins.get(2));
++    assertTrue(SameNetRequeue.brokenComponentRepresentatives(board, net).isEmpty());
++  }
++
++  @Test
++  void queuesEachNetAtMostTwicePerPassAndSkipsPendingItems() {
++    RoutingBoard board = board();
++    int net = board.rules.nets.get("X").iterator().next().netNumber;
++    List<Item> pins = new ArrayList<>(board.getPins());
++    pins.sort(null);
++    Item ripped = connect(board, net, pins.get(0), pins.get(1));
++
++    List<Item> passItems = new ArrayList<>(List.of(pins.get(0)));
++    SameNetRequeue requeue = new SameNetRequeue(passItems);
++    // pins[0] is still pending in the pass, so only pins[2] is appended.
++    assertEquals(1, requeue.queueBrokenComponents(board, List.of(ripped)));
++    assertEquals(List.of(pins.get(0), pins.get(2)), passItems);
++
++    requeue.markProcessed(pins.get(0));
++    requeue.markProcessed(pins.get(2));
++    assertEquals(2, requeue.queueBrokenComponents(board, List.of(ripped)));
++    assertEquals(4, passItems.size());
++
++    requeue.markProcessed(pins.get(0));
++    requeue.markProcessed(pins.get(2));
++    assertEquals(0, requeue.queueBrokenComponents(board, List.of(ripped)));
++    assertEquals(4, passItems.size());
++  }
++
++  private static RoutingBoard board() {
++    BoardReadResult result =
++        DsnReader.readBoard(
++            new ByteArrayInputStream(DSN.getBytes(StandardCharsets.UTF_8)), null, null, "rq");
++    assertInstanceOf(BoardReadResult.Success.class, result);
++    return (RoutingBoard) ((BoardReadResult.Success) result).board();
++  }
++
++  private static Item connect(RoutingBoard board, int net, Item from, Item to) {
++    Point a = ((Pin) from).getCenter();
++    Point b = ((Pin) to).getCenter();
++    Item trace =
++        board.insertTraceWithoutCleaning(
++            new Polyline(new Point[] {a, b}), 0, 200, new int[] {net}, 1, FixedState.UNFIXED);
++    assertNotNull(trace);
++    return trace;
++  }
++}

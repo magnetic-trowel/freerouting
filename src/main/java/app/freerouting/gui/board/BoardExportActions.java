@@ -136,6 +136,8 @@ public class BoardExportActions {
       }
       java.nio.file.Files.writeString(
           outputFile.toPath(), json, java.nio.charset.StandardCharsets.UTF_8);
+      GuiBoardManager boardHandling = boardFrame.boardPanel.boardHandling;
+      boardHandling.setOriginalBoardChecksum(boardHandling.calculateCrc32());
     } catch (Exception e) {
       FRLogger.error("Unable to write KiCad JSON file", e);
       boardFrame.screenMessages.setStatusMessage(
@@ -188,8 +190,10 @@ public class BoardExportActions {
       fileChooser.setSelectedFile(output.getFile());
     }
 
-    fileChooser.showSaveDialog(boardFrame);
-    return fileChooser.getSelectedFile();
+    // getSelectedFile() still returns the pre-selected (or last clicked) file after Cancel or after
+    // closing the dialog, so only an approved dialog may yield a file to write.
+    int result = fileChooser.showSaveDialog(boardFrame);
+    return result == JFileChooser.APPROVE_OPTION ? fileChooser.getSelectedFile() : null;
   }
 
   public boolean saveRulesAs(File rulesFile, String designName, GuiBoardManager boardHandling) {

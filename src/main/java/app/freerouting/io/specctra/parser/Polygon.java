@@ -25,6 +25,9 @@ public class Polygon extends Shape {
   @Override
   public app.freerouting.geometry.planar.Shape transformToBoard(
       CoordinateTransform coordinateTransform) {
+    if (coor.length < 2) {
+      return Simplex.EMPTY;
+    }
     IntPoint[] corners = new IntPoint[coor.length / 2];
     double[] currentPoint = new double[2];
     for (int i = 0; i < corners.length; i++) {

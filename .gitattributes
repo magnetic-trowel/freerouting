@@ -20,3 +20,6 @@
 # Default behaviour for everything else
 *           text=auto eol=lf
 
+
+# Patch files keep the single-space context lines of their blank lines.
+docs/research/experiments/**/*.diff -whitespace

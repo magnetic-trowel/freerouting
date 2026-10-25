@@ -2,6 +2,7 @@ package app.freerouting.drc;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.items.ConductionArea;
+import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
@@ -10,6 +11,7 @@ import app.freerouting.board.model.structure.Component;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.constants.Constants;
 import app.freerouting.core.library.Package;
+import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.io.kicad.KiCadDrcPosition;
 import app.freerouting.io.kicad.KiCadDrcReport;
@@ -22,8 +24,12 @@ import app.freerouting.util.gson.GsonProvider;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -125,7 +131,9 @@ public class DesignRulesChecker {
 
         // Get the connected set for this item
         Collection<Item> connectedSet = item.getConnectedSet(netNumber);
-        java.util.Set<Item> setItems = new java.util.HashSet<>(connectedSet);
+        // Keep the connected set's id order: findRepresentativeItem() and the reported group items
+        // read this set in iteration order, which for a HashSet of items follows identity hashes.
+        java.util.Set<Item> setItems = new java.util.LinkedHashSet<>(connectedSet);
 
         // Only add items that are actually in this net
         setItems.retainAll(netItems);
@@ -185,6 +193,9 @@ public class DesignRulesChecker {
   /**
    * Checks for copper pour (conduction area) fragmentation, detecting isolated copper islands where
    * pins or vias are severed from the net's primary connected set, or dead floating copper islands.
+   * An island counts as connected to the primary island of its pour when copper or the fill islands
+   * of the net's pours on any layer join them, so a through-hole pin or via carries the connection
+   * between layers.
    *
    * @return Collection of detected zone island violations
    */
@@ -200,13 +211,18 @@ public class DesignRulesChecker {
             * board.communication.getResolution(Unit.MM)
             * board.communication.getResolution(Unit.MM);
 
+    Map<ConductionArea, List<java.awt.geom.Area>> islandsOf = new LinkedHashMap<>();
     for (ConductionArea ca : conductionAreas) {
       java.awt.geom.Area detailedFill = ca.getDetailedFillArea();
-      if (detailedFill == null || detailedFill.isEmpty()) {
-        continue;
+      if (detailedFill != null && !detailedFill.isEmpty()) {
+        islandsOf.put(ca, decomposeAreaIntoIslands(detailedFill));
       }
+    }
+    Map<Integer, Map<Item, Integer>> fillGroupsOfNet = new HashMap<>();
 
-      List<java.awt.geom.Area> islands = decomposeAreaIntoIslands(detailedFill);
+    for (Map.Entry<ConductionArea, List<java.awt.geom.Area>> entry : islandsOf.entrySet()) {
+      ConductionArea ca = entry.getKey();
+      List<java.awt.geom.Area> islands = entry.getValue();
       if (islands.size() <= 1) {
         continue; // Single continuous pour, no fragmentation
       }
@@ -230,17 +246,8 @@ public class DesignRulesChecker {
       for (java.awt.geom.Area island : islands) {
         List<Item> contained = new ArrayList<>();
         for (Item item : sameNetItemsOnLayer) {
-          Point center = null;
-          if (item instanceof app.freerouting.board.model.items.DrillItem drillItem) {
-            center = drillItem.getCenter();
-          } else if (item instanceof Trace trace) {
-            center = trace.firstCorner();
-          }
-          if (center != null) {
-            app.freerouting.geometry.planar.FloatPoint fp = center.toFloat();
-            if (island.contains(fp.x, fp.y)) {
-              contained.add(item);
-            }
+          if (liesIn(item, island)) {
+            contained.add(item);
           }
         }
         islandItems.add(contained);
@@ -265,14 +272,16 @@ public class DesignRulesChecker {
 
         if (!items.isEmpty()) {
           if (i != primaryIndex) {
-            // Check if any item in this island can reach the items in the primary island through
-            // traces/vias elsewhere on the board
+            // Check if any item in this island reaches the items in the primary island through
+            // copper or the fill of the net's pours elsewhere on the board
             boolean connectedToPrimary = false;
             if (primaryIndex >= 0 && !islandItems.get(primaryIndex).isEmpty()) {
-              Item repItemInPrimary = islandItems.get(primaryIndex).get(0);
-              Collection<Item> connectedSet = repItemInPrimary.getConnectedSet(netNumber, true);
+              Map<Item, Integer> fillGroups =
+                  fillGroupsOfNet.computeIfAbsent(
+                      netNumber, net -> fillConnectedGroups(net, islandsOf));
+              Integer primaryGroup = fillGroups.get(islandItems.get(primaryIndex).get(0));
               for (Item item : items) {
-                if (connectedSet.contains(item)) {
+                if (primaryGroup != null && primaryGroup.equals(fillGroups.get(item))) {
                   connectedToPrimary = true;
                   break;
                 }
@@ -306,13 +315,177 @@ public class DesignRulesChecker {
     return violations;
   }
 
-  /** Decomposes a potentially disjoint java.awt.geom.Area into separate contiguous island Areas. */
-  private List<java.awt.geom.Area> decomposeAreaIntoIslands(java.awt.geom.Area area) {
+  /** Returns true if the drill center or the first corner of a trace lies in the island. */
+  private static boolean liesIn(Item item, java.awt.geom.Area island) {
+    Point point = null;
+    if (item instanceof DrillItem drillItem) {
+      point = drillItem.getCenter();
+    } else if (item instanceof Trace trace) {
+      point = trace.firstCorner();
+    }
+    if (point == null) {
+      return false;
+    }
+    FloatPoint fp = point.toFloat();
+    return island.contains(fp.x, fp.y);
+  }
+
+  /**
+   * Groups the items of a net that are connected by copper without running through a pour polygon
+   * ({@link Item#getConnectedSet(int, boolean)}) or that lie in the same fill island of one of the
+   * net's pours, on any layer. Returns the group number of each item; pours have none.
+   */
+  private Map<Item, Integer> fillConnectedGroups(
+      int netNumber, Map<ConductionArea, List<java.awt.geom.Area>> islandsOf) {
+    List<Item> items = new ArrayList<>();
+    for (Item item : board.getConnectableItems(netNumber)) {
+      if (!isPour(item)) {
+        items.add(item);
+      }
+    }
+    items.sort(Comparator.comparingInt(Item::getId));
+    Map<Item, Integer> groupOf = new HashMap<>();
+    int groupCount = 0;
+    for (Item item : items) {
+      if (!groupOf.containsKey(item)) {
+        for (Item member : item.getConnectedSet(netNumber, true)) {
+          if (!isPour(member)) {
+            groupOf.put(member, groupCount);
+          }
+        }
+        groupCount++;
+      }
+    }
+    int[] parent = new int[groupCount];
+    for (int i = 0; i < groupCount; i++) {
+      parent[i] = i;
+    }
+    for (Map.Entry<ConductionArea, List<java.awt.geom.Area>> entry : islandsOf.entrySet()) {
+      ConductionArea pour = entry.getKey();
+      if (!isPour(pour) || !pour.containsNet(netNumber)) {
+        continue;
+      }
+      for (java.awt.geom.Area island : entry.getValue()) {
+        int firstGroup = -1;
+        for (Item item : items) {
+          if (item.sharesLayer(pour) && liesIn(item, island)) {
+            int group = find(parent, groupOf.get(item));
+            if (firstGroup < 0) {
+              firstGroup = group;
+            } else if (group != firstGroup) {
+              // the lower root wins, so the groups do not depend on the union order
+              parent[Math.max(group, firstGroup)] = Math.min(group, firstGroup);
+              firstGroup = Math.min(group, firstGroup);
+            }
+          }
+        }
+      }
+    }
+    Map<Item, Integer> result = new HashMap<>();
+    for (Map.Entry<Item, Integer> entry : groupOf.entrySet()) {
+      result.put(entry.getKey(), find(parent, entry.getValue()));
+    }
+    return result;
+  }
+
+  /** Returns true for a pour: a conduction area that does not belong to a component. */
+  private static boolean isPour(Item item) {
+    return item instanceof ConductionArea && item.getComponentId() <= 0;
+  }
+
+  private static int find(int[] parent, int i) {
+    while (parent[i] != i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  }
+
+  /**
+   * Decomposes a potentially disjoint java.awt.geom.Area into separate contiguous island Areas.
+   *
+   * <p>The contours of an Area do not cross, so each one is either the outline of an island or the
+   * outline of a hole: a contour inside an even number of other contours (none, or an island in a
+   * hole of another island) outlines an island, the others outline holes of the contour directly
+   * around them. Each island is built once from its outline and its holes. Merging contour by
+   * contour with Area operations took minutes on fills with thousands of holes.
+   */
+  public static List<java.awt.geom.Area> decomposeAreaIntoIslands(java.awt.geom.Area area) {
     List<java.awt.geom.Area> islands = new ArrayList<>();
     if (area == null || area.isEmpty()) {
       return islands;
     }
+    List<java.awt.geom.Path2D.Double> contours = contoursOf(area);
+    int count = contours.size();
+    java.awt.geom.Rectangle2D[] bounds = new java.awt.geom.Rectangle2D[count];
+    double[] areas = new double[count];
+    double[][] firstPoints = new double[count][];
+    for (int i = 0; i < count; i++) {
+      bounds[i] = contours.get(i).getBounds2D();
+      areas[i] = Math.abs(signedArea(contours.get(i)));
+      firstPoints[i] = firstPoint(contours.get(i));
+    }
+    // depth: the number of contours around a contour; parent: the smallest one of them.
+    int[] depth = new int[count];
+    int[] parent = new int[count];
+    for (int i = 0; i < count; i++) {
+      parent[i] = -1;
+      for (int j = 0; j < count; j++) {
+        if (j != i
+            && areas[j] > areas[i]
+            && bounds[j].contains(bounds[i])
+            && contours.get(j).contains(firstPoints[i][0], firstPoints[i][1])) {
+          depth[i]++;
+          if (parent[i] < 0 || areas[j] < areas[parent[i]]) {
+            parent[i] = j;
+          }
+        }
+      }
+    }
+    // Area cuts one connected region into bands that touch along an edge: outlines that share a
+    // stretch of border belong to the same island.
+    int[] group = new int[count];
+    List<List<double[]>> edges = new ArrayList<>(count);
+    for (int i = 0; i < count; i++) {
+      group[i] = i;
+      edges.add(depth[i] % 2 == 0 ? edgesOf(contours.get(i)) : null);
+    }
+    for (int i = 0; i < count; i++) {
+      for (int j = i + 1; j < count && depth[i] % 2 == 0; j++) {
+        if (depth[j] % 2 == 0
+            && touches(bounds[i], bounds[j])
+            && shareBorder(edges.get(i), edges.get(j), bounds[i].createIntersection(bounds[j]))) {
+          group[findGroup(group, j)] = findGroup(group, i);
+        }
+      }
+    }
+    java.util.Map<Integer, java.awt.geom.Path2D.Double> islandPaths = new java.util.TreeMap<>();
+    for (int i = 0; i < count; i++) {
+      if (depth[i] % 2 == 0) {
+        islandPaths
+            .computeIfAbsent(
+                findGroup(group, i),
+                g -> new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD))
+            .append(contours.get(i), false);
+      }
+    }
+    for (int i = 0; i < count; i++) {
+      if (depth[i] % 2 == 1 && parent[i] >= 0 && depth[parent[i]] % 2 == 0) {
+        islandPaths.get(findGroup(group, parent[i])).append(contours.get(i), false);
+      }
+    }
+    for (java.awt.geom.Path2D.Double path : islandPaths.values()) {
+      java.awt.geom.Area island = new java.awt.geom.Area(path);
+      if (!island.isEmpty()) {
+        islands.add(island);
+      }
+    }
+    return islands;
+  }
 
+  /** The closed contours of an Area, in path order. */
+  private static List<java.awt.geom.Path2D.Double> contoursOf(java.awt.geom.Area area) {
+    List<java.awt.geom.Path2D.Double> contours = new ArrayList<>();
     java.awt.geom.PathIterator it = area.getPathIterator(null);
     java.awt.geom.Path2D.Double currentPolygon = null;
     double[] coords = new double[6];
@@ -322,10 +495,7 @@ public class DesignRulesChecker {
       switch (segType) {
         case java.awt.geom.PathIterator.SEG_MOVETO -> {
           if (currentPolygon != null) {
-            java.awt.geom.Area piece = new java.awt.geom.Area(currentPolygon);
-            if (!piece.isEmpty()) {
-              mergeOrAddIsland(islands, piece);
-            }
+            contours.add(currentPolygon);
           }
           currentPolygon = new java.awt.geom.Path2D.Double();
           currentPolygon.moveTo(coords[0], coords[1]);
@@ -357,45 +527,138 @@ public class DesignRulesChecker {
     }
 
     if (currentPolygon != null) {
-      java.awt.geom.Area piece = new java.awt.geom.Area(currentPolygon);
-      if (!piece.isEmpty()) {
-        mergeOrAddIsland(islands, piece);
-      }
+      contours.add(currentPolygon);
     }
-
-    return islands;
+    return contours;
   }
 
-  private void mergeOrAddIsland(List<java.awt.geom.Area> islands, java.awt.geom.Area piece) {
-    // In java.awt.geom.Area path iteration, an Area can consist of outer contours (additive)
-    // and inner hole contours (subtractive).
-    // If piece is entirely contained within the bounding box/area of an existing island, it
-    // represents
-    // a hole that should be subtracted from that island rather than added as a separate copper
-    // island.
-    boolean incorporated = false;
-    for (int i = 0; i < islands.size(); i++) {
-      java.awt.geom.Area existing = islands.get(i);
-      java.awt.geom.Area intersection = new java.awt.geom.Area(existing);
-      intersection.intersect(piece);
-      if (!intersection.isEmpty()) {
-        // If the piece is contained within the existing island's outline, subtract the hole.
-        // Otherwise, xor or combine overlapping sub-paths belonging to the same component.
-        java.awt.geom.Area testSubtract = new java.awt.geom.Area(piece);
-        testSubtract.subtract(existing);
-        if (testSubtract.isEmpty()) {
-          // 'piece' is completely inside 'existing' -> hole contour, subtract it
-          existing.subtract(piece);
-        } else {
-          existing.exclusiveOr(piece);
-        }
-        incorporated = true;
-        break;
+  /** The signed area of a closed contour, from its flattened corners. */
+  private static double signedArea(java.awt.geom.Path2D path) {
+    java.awt.geom.PathIterator it = path.getPathIterator(null, 1.0);
+    double[] coords = new double[6];
+    double sum = 0;
+    double startX = 0;
+    double startY = 0;
+    double prevX = 0;
+    double prevY = 0;
+    while (!it.isDone()) {
+      int segType = it.currentSegment(coords);
+      if (segType == java.awt.geom.PathIterator.SEG_MOVETO) {
+        startX = coords[0];
+        startY = coords[1];
+        prevX = startX;
+        prevY = startY;
+      } else if (segType == java.awt.geom.PathIterator.SEG_LINETO) {
+        sum += prevX * coords[1] - coords[0] * prevY;
+        prevX = coords[0];
+        prevY = coords[1];
+      }
+      it.next();
+    }
+    sum += prevX * startY - startX * prevY;
+    return sum / 2;
+  }
+
+  private static int findGroup(int[] group, int index) {
+    while (group[index] != index) {
+      group[index] = group[group[index]];
+      index = group[index];
+    }
+    return index;
+  }
+
+  private static boolean touches(java.awt.geom.Rectangle2D a, java.awt.geom.Rectangle2D b) {
+    return a.getMinX() <= b.getMaxX()
+        && b.getMinX() <= a.getMaxX()
+        && a.getMinY() <= b.getMaxY()
+        && b.getMinY() <= a.getMaxY();
+  }
+
+  /** The straight edges of a closed contour as {x1, y1, x2, y2}, curves flattened. */
+  private static List<double[]> edgesOf(java.awt.geom.Path2D path) {
+    List<double[]> result = new ArrayList<>();
+    java.awt.geom.PathIterator it = path.getPathIterator(null, 1.0);
+    double[] coords = new double[6];
+    double startX = 0;
+    double startY = 0;
+    double prevX = 0;
+    double prevY = 0;
+    while (!it.isDone()) {
+      int segType = it.currentSegment(coords);
+      if (segType == java.awt.geom.PathIterator.SEG_MOVETO) {
+        startX = coords[0];
+        startY = coords[1];
+        prevX = startX;
+        prevY = startY;
+      } else if (segType == java.awt.geom.PathIterator.SEG_LINETO) {
+        result.add(new double[] {prevX, prevY, coords[0], coords[1]});
+        prevX = coords[0];
+        prevY = coords[1];
+      }
+      it.next();
+    }
+    if (prevX != startX || prevY != startY) {
+      result.add(new double[] {prevX, prevY, startX, startY});
+    }
+    return result;
+  }
+
+  /**
+   * Returns true if an edge of the first contour and an edge of the second lie on one line and
+   * overlap over a positive length. Only edges reaching into window, where the two contours'
+   * bounding boxes meet, can do so.
+   */
+  private static boolean shareBorder(
+      List<double[]> first, List<double[]> second, java.awt.geom.Rectangle2D window) {
+    double tolerance = 1e-9 * Math.max(1, Math.max(window.getMaxX(), window.getMaxY())) + 1e-9;
+    List<double[]> candidates = new ArrayList<>();
+    for (double[] edge : second) {
+      if (edgeReaches(edge, window, tolerance)) {
+        candidates.add(edge);
       }
     }
-    if (!incorporated) {
-      islands.add(piece);
+    if (candidates.isEmpty()) {
+      return false;
     }
+    for (double[] e : first) {
+      if (!edgeReaches(e, window, tolerance)) {
+        continue;
+      }
+      double dx = e[2] - e[0];
+      double dy = e[3] - e[1];
+      double length = Math.hypot(dx, dy);
+      if (length <= tolerance) {
+        continue;
+      }
+      for (double[] f : candidates) {
+        double offset1 = (dx * (f[1] - e[1]) - dy * (f[0] - e[0])) / length;
+        double offset2 = (dx * (f[3] - e[1]) - dy * (f[2] - e[0])) / length;
+        if (Math.abs(offset1) > tolerance || Math.abs(offset2) > tolerance) {
+          continue;
+        }
+        double t1 = (dx * (f[0] - e[0]) + dy * (f[1] - e[1])) / length;
+        double t2 = (dx * (f[2] - e[0]) + dy * (f[3] - e[1])) / length;
+        double overlap = Math.min(length, Math.max(t1, t2)) - Math.max(0, Math.min(t1, t2));
+        if (overlap > tolerance) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static boolean edgeReaches(
+      double[] edge, java.awt.geom.Rectangle2D window, double tolerance) {
+    return Math.max(edge[0], edge[2]) >= window.getMinX() - tolerance
+        && Math.min(edge[0], edge[2]) <= window.getMaxX() + tolerance
+        && Math.max(edge[1], edge[3]) >= window.getMinY() - tolerance
+        && Math.min(edge[1], edge[3]) <= window.getMaxY() + tolerance;
+  }
+
+  private static double[] firstPoint(java.awt.geom.Path2D path) {
+    double[] coords = new double[6];
+    path.getPathIterator(null).currentSegment(coords);
+    return new double[] {coords[0], coords[1]};
   }
 
   /**
@@ -558,10 +821,7 @@ public class DesignRulesChecker {
     items.add(new KiCadDrcViolationItem(secondItemDesc, secondItemPos, secondUuid));
 
     // Determine violation type
-    String type = "clearance";
-    if (isHole(violation.firstItem) || isHole(violation.secondItem)) {
-      type = "holeClearance";
-    }
+    String type = violation.holeClearance ? "holeClearance" : "clearance";
 
     // Create violation description
     String description;
@@ -709,15 +969,6 @@ public class DesignRulesChecker {
     String severity =
         "isolated_island_unconnected".equals(zoneViolation.type) ? "error" : "warning";
     return new KiCadDrcViolation(zoneViolation.type, description, severity, items);
-  }
-
-  private boolean isHole(Item item) {
-    if (item instanceof Via) {
-      return true;
-    }
-    // Pins are treated as holes for DRC classification to match expected output,
-    // although this might include SMT pins (DrillItem).
-    return item instanceof Pin;
   }
 
   /**
@@ -1129,6 +1380,7 @@ public class DesignRulesChecker {
     }
 
     // 1. Process clearance violations
+    double mmPerBoardUnit = board.communication.boardUnitSize(Unit.MM);
     for (ClearanceViolation v : violations) {
       String layerName =
           (v.layer >= 0 && v.layer < board.layerStructure.layers.length)
@@ -1138,9 +1390,10 @@ public class DesignRulesChecker {
       String item1Desc = formatItemWithContext(v.firstItem);
       String item2Desc = formatItemWithContext(v.secondItem);
 
-      double expectedMm = v.expectedClearance / 10000.0;
-      double actualMm = v.actualClearance / 10000.0;
-      double shortfallMm = Math.max(0.0, (v.expectedClearance - v.actualClearance) / 10000.0);
+      double expectedMm = v.expectedClearance * mmPerBoardUnit;
+      double actualMm = v.actualClearance * mmPerBoardUnit;
+      double shortfallMm =
+          Math.max(0.0, (v.expectedClearance - v.actualClearance) * mmPerBoardUnit);
 
       String explanation =
           String.format(
@@ -1327,6 +1580,7 @@ public class DesignRulesChecker {
       }
     }
 
+    double mmPerBoardUnit = board.communication.boardUnitSize(Unit.MM);
     boolean[] visited = new boolean[points.size()];
     for (int i = 0; i < points.size(); i++) {
       if (visited[i]) {
@@ -1334,8 +1588,8 @@ public class DesignRulesChecker {
       }
       visited[i] = true;
       Point p1 = points.get(i);
-      double p1Xmm = p1.toFloat().x / 10000.0;
-      double p1Ymm = p1.toFloat().y / 10000.0;
+      double p1Xmm = p1.toFloat().x * mmPerBoardUnit;
+      double p1Ymm = p1.toFloat().y * mmPerBoardUnit;
 
       int clusterCount = 1;
       double sumX = p1Xmm;
@@ -1346,8 +1600,8 @@ public class DesignRulesChecker {
           continue;
         }
         Point p2 = points.get(j);
-        double p2Xmm = p2.toFloat().x / 10000.0;
-        double p2Ymm = p2.toFloat().y / 10000.0;
+        double p2Xmm = p2.toFloat().x * mmPerBoardUnit;
+        double p2Ymm = p2.toFloat().y * mmPerBoardUnit;
         double dx = p1Xmm - p2Xmm;
         double dy = p1Ymm - p2Ymm;
         if (StrictMath.hypot(dx, dy) <= clusterRadiusMm) {
@@ -1387,8 +1641,9 @@ public class DesignRulesChecker {
 
     if (!violations.isEmpty()) {
       double maxShortfall = 0.0;
+      double mmPerBoardUnit = board.communication.boardUnitSize(Unit.MM);
       for (ClearanceViolation v : violations) {
-        double shortfall = (v.expectedClearance - v.actualClearance) / 10000.0;
+        double shortfall = (v.expectedClearance - v.actualClearance) * mmPerBoardUnit;
         if (shortfall > maxShortfall) {
           maxShortfall = shortfall;
         }

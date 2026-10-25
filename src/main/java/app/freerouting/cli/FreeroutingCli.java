@@ -35,9 +35,9 @@ public final class FreeroutingCli {
   public static void main(String[] args) {
     UserDataPathResolver.ResolvedUserDataPath userdataPath =
         UserDataPathResolver.resolveAndLock(args);
-
-    LoggingBootstrap.LoggingConfig loggingConfig =
-        LoggingBootstrap.initialize(args, userdataPath.path(), userdataPath.source());
+    LoggingBootstrap.initializeForStartup();
+    GlobalSettings globalSettings = GlobalSettingsBootstrap.loadSettings(args);
+    LoggingBootstrap.initialize(globalSettings, userdataPath.path(), userdataPath.source());
 
     FRLogger.traceEntry("FreeroutingCli.main()");
     FRLogger.info(
@@ -47,8 +47,7 @@ public final class FreeroutingCli {
             + Constants.FREEROUTING_BUILD_DATE
             + ")");
 
-    GlobalSettings globalSettings =
-        GlobalSettingsBootstrap.initialize(args, loggingConfig.fileLoggingLocation(), true);
+    GlobalSettingsBootstrap.recordRuntimeEnvironment(globalSettings, args, true);
 
     // Headless CLI explicitly disables GUI and server modes
     globalSettings.guiSettings.isEnabled = false;

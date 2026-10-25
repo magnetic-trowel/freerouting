@@ -1,0 +1,42 @@
+# E16 net ordering. Paths relative to the repository root.
+# Smoke boards (cheap, run first)
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue269-caniot-tiny-arm.dsn
+# Open connections at head in camp3 run1 (router unrouted > 0, or reload-DRC unconnected > 0)
+fixtures/Issue313-FastTest.dsn
+fixtures/Issue157-TeamAdapt-LinePCB.dsn
+fixtures/Issue110-Pajalnaja_stancija.dsn
+fixtures/Issue297-myboard.dsn
+fixtures/Issue508-DAC2020_bm04.dsn
+fixtures/Issue508-DAC2020_bm05.dsn
+fixtures/Issue684-Autorouter_PCB1_2026-5-8.dsn
+fixtures/Issue039-bug-design.dsn
+fixtures/Issue367-Charger.dsn
+fixtures/Issue093-interf_u.dsn
+fixtures/Issue153-wavefolder.dsn
+fixtures/Issue054-tairakb.dsn
+fixtures/Issue209-split05.dsn
+fixtures/Issue690-ecc83.dsn
+fixtures/Issue957-smoke-ldo-led.dsn
+fixtures/Issue676-ch32v-tx118s.dsn
+# Dense boards (fine-pitch parts)
+fixtures/Issue732-CM5_MINIMA_3.dsn
+# Clean at head and at v2.5.0: must not regress
+fixtures/Issue508-DAC2020_bm06.dsn
+fixtures/Issue508-DAC2020_bm07.dsn
+fixtures/Issue508-DAC2020_bm09.dsn
+fixtures/Issue508-DAC2020_bm10.dsn
+fixtures/Issue508-DAC2020_bm11.dsn
+fixtures/Issue034-Green14SegLED.dsn
+fixtures/Issue155-CH376_MCP795_Module.dsn
+fixtures/Issue558-dev-board.dsn
+fixtures/Issue733-kicad_complex_hierarchy_input_design.dsn
+fixtures/Issue217-8088sbc.dsn
+fixtures/Issue107-freq_teiler_200kHz_kicad.dsn
+fixtures/Issue110-RelayModule.dsn
+fixtures/PCBench-Box0-hv-analog-breakout.dsn
+fixtures/Issue102-Mars-64-revE-rot00.dsn
+# Expensive (about 8 minutes per arm at -mp 25); keep last
+fixtures/Issue508-DAC2020_bm01.dsn
+# Times out at 20 minutes at head; reported separately by the harness
+fixtures/Issue732-RoyalBlue54L-Feather.dsn

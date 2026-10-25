@@ -6,11 +6,7 @@ import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.BoardOutline;
-import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.datastructures.UndoableObjects;
-import app.freerouting.geometry.planar.IntBox;
-import app.freerouting.geometry.planar.IntPoint;
-import app.freerouting.geometry.planar.Point;
 import app.freerouting.logger.FRLogger;
 import java.util.Collection;
 import java.util.HashMap;
@@ -187,18 +183,6 @@ public final class BoardItemRepository {
     if (item == null) {
       return;
     }
-    if (FRLogger.isTraceEnabled() && isItemActivityDebugCandidate(item)) {
-      FRLogger.trace(
-          "ITEM_ACTIVITY action=INSERT"
-              + ", id="
-              + item.getId()
-              + ", type="
-              + item.getClass().getSimpleName()
-              + ", bounds="
-              + describeBounds(item.boundingBox())
-              + ", net0="
-              + firstNetOrNone(item));
-    }
 
     if (board.rules == null
         || board.rules.clearanceMatrix == null
@@ -214,7 +198,7 @@ public final class BoardItemRepository {
       board.communication.observers.notifyNew(item);
     }
     board.additionalUpdateAfterChange(item);
-    board.incrementRevision();
+    board.incrementRevision(item);
     board.routingLedger().noteInserted(item);
   }
 
@@ -237,21 +221,6 @@ public final class BoardItemRepository {
     if (item == null) {
       return;
     }
-    if (FRLogger.isTraceEnabled() && isItemActivityDebugCandidate(item)) {
-      FRLogger.trace(
-          "ITEM_ACTIVITY action=REMOVE"
-              + ", id="
-              + item.getId()
-              + ", type="
-              + item.getClass().getSimpleName()
-              + ", bounds="
-              + describeBounds(item.boundingBox())
-              + ", net0="
-              + firstNetOrNone(item));
-    }
-    if (item instanceof Trace trace && trace.netNumbers.length > 0 && trace.netNumbers[0] == 94) {
-      logTraceRemoval(trace);
-    }
     if (item.isDeletionForbidden() && !(forMove && item.getComponentId() > 0)) {
       return;
     }
@@ -261,7 +230,7 @@ public final class BoardItemRepository {
     if (board.communication != null && board.communication.observers != null) {
       board.communication.observers.notifyDeleted(item);
     }
-    board.incrementRevision();
+    board.incrementRevision(item);
     board.routingLedger().noteRemoved(item);
   }
 
@@ -290,67 +259,6 @@ public final class BoardItemRepository {
       if (currentItem instanceof Trace || currentItem instanceof Via) {
         board.itemList.delete(currentItem);
       }
-    }
-  }
-
-  private static boolean isItemActivityDebugCandidate(Item item) {
-    IntBox bounds = item.boundingBox();
-    IntBox debugWindow = new IntBox(1620000, -1105000, 1930000, -1003000);
-    return bounds != null && bounds.intersects(debugWindow);
-  }
-
-  private static String firstNetOrNone(Item item) {
-    return item.netCount() > 0 ? Integer.toString(item.getNetNumber(0)) : "none";
-  }
-
-  private static String describeBounds(IntBox bounds) {
-    if (bounds == null) {
-      return "null";
-    }
-    return "[(" + bounds.ll.x + "," + bounds.ll.y + ")..(" + bounds.ur.x + "," + bounds.ur.y + ")]";
-  }
-
-  private static void logTraceRemoval(Trace trace) {
-    if (trace instanceof PolylineTrace polylineTrace
-        && polylineTrace.cornerCount() == 2
-        && trace.firstCorner().equals(new IntPoint(1885928, -1097274))
-        && trace.lastCorner().equals(new IntPoint(1885928, -1098024))) {
-      FRLogger.trace(
-          "BasicBoard.remove_item",
-          "compare_trace_remove_item",
-          "REMOVE_ITEM called on trace [7,8]",
-          "Net #"
-              + trace.netNumbers[0]
-              + ",Trace #"
-              + trace.getId()
-              + ",Layer #"
-              + trace.getLayer(),
-          new Point[] {trace.firstCorner(), trace.lastCorner()});
-      for (StackTraceElement stackTraceElement : Thread.currentThread().getStackTrace()) {
-        FRLogger.trace(
-            "BasicBoard.remove_item",
-            "compare_trace_remove_item_stack",
-            stackTraceElement.toString(),
-            "Net #"
-                + trace.netNumbers[0]
-                + ",Trace #"
-                + trace.getId()
-                + ",Layer #"
-                + trace.getLayer(),
-            new Point[] {trace.firstCorner(), trace.lastCorner()});
-      }
-    } else {
-      FRLogger.trace(
-          "BasicBoard.remove_item",
-          "compare_trace_remove_item",
-          "REMOVE_ITEM called by " + Thread.currentThread().getStackTrace()[3],
-          "Net #"
-              + trace.netNumbers[0]
-              + ",Trace #"
-              + trace.getId()
-              + ",Layer #"
-              + trace.getLayer(),
-          new Point[] {trace.firstCorner(), trace.lastCorner()});
     }
   }
 }

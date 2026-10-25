@@ -8,8 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.Freerouting;
+import app.freerouting.analytics.FRAnalytics;
+import app.freerouting.core.RoutingJob;
+import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
+import app.freerouting.logger.FRLogger;
+import app.freerouting.management.jobs.RoutingJobScheduler;
 import app.freerouting.settings.GlobalSettings;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -79,8 +86,28 @@ public class SessionManagerTest {
     sessionManager.createSession(userId, "Freerouting/" + Freerouting.VERSION_NUMBER_STRING);
     sessionManager.createSession(userId, "Freerouting/" + Freerouting.VERSION_NUMBER_STRING);
 
-    String[] sessionIds = sessionManager.listSessionIds(userId);
+    String[] sessionIds = sessionManager.listSessionIds(userId, null);
     assertTrue(sessionIds.length >= 2, "Session ID list should contain at least two IDs.");
+  }
+
+  /**
+   * The profile id is a header the client chooses, so a session also belongs to the API key that
+   * created it: another valid key sending the same profile id does not reach it.
+   */
+  @Test
+  void sessionBelongsToItsProfileAndToTheKeyThatCreatedIt() {
+    SessionManager sessionManager = SessionManager.getInstance();
+    UUID userId = UUID.randomUUID();
+    Session session = sessionManager.createSession(userId, "Test/1.0", "hash-of-key-a");
+    String id = session.id.toString();
+
+    assertSame(session, sessionManager.getSession(id, userId, "hash-of-key-a"));
+    assertNull(sessionManager.getSession(id, userId, "hash-of-key-b"));
+    assertNull(sessionManager.getSession(id, UUID.randomUUID(), "hash-of-key-a"));
+    // Authentication disabled: the profile alone decides.
+    assertSame(session, sessionManager.getSession(id, userId, null));
+    assertEquals(0, sessionManager.listSessionIds(userId, "hash-of-key-b").length);
+    assertEquals(List.of(id), List.of(sessionManager.listSessionIds(userId, "hash-of-key-a")));
   }
 
   @Test
@@ -128,5 +155,117 @@ public class SessionManagerTest {
     org.junit.jupiter.api.Assertions.assertFalse(
         jobJson.contains(sampleHash),
         "Sample hash value must not be exposed in serialized job JSON.");
+  }
+
+  @Test
+  void fullRegistryEvictsTheOldestIdleSession() {
+    FRAnalytics.setEnabled(false);
+    RoutingJobScheduler scheduler = RoutingJobScheduler.getInstance();
+    SessionManager manager = new SessionManager(4);
+    Session primary = manager.createSession(UUID.randomUUID(), guiHost());
+    manager.setPrimarySession(primary.id);
+    Session oldestIdle = manager.createSession(UUID.randomUUID(), "Test/1.0");
+    Session busy = manager.createSession(UUID.randomUUID(), "Test/1.0");
+    Session idleWithResult = manager.createSession(UUID.randomUUID(), "Test/1.0");
+    RoutingJob queued = job(busy, RoutingJobState.QUEUED);
+    RoutingJob finished = job(idleWithResult, RoutingJobState.COMPLETED);
+    finished.logInfo("result of an idle session");
+    addJobs(scheduler, queued, finished);
+    try {
+      final Session first = manager.createSession(UUID.randomUUID(), "Test/1.0");
+
+      assertNull(manager.getSession(oldestIdle.id.toString()), "the oldest idle session goes");
+      assertNotNull(manager.getSession(primary.id.toString()), "the primary session stays");
+      assertNotNull(manager.getSession(busy.id.toString()), "a session with a queued job stays");
+      assertNotNull(manager.getSession(idleWithResult.id.toString()));
+      assertNotNull(manager.getSession(first.id.toString()));
+      assertEquals(4, manager.getActiveSessionsCount());
+
+      final Session second = manager.createSession(UUID.randomUUID(), "Test/1.0");
+
+      assertNull(manager.getSession(idleWithResult.id.toString()), "the next oldest idle goes");
+      assertNull(
+          scheduler.getJob(finished.id.toString()), "its finished jobs are no longer reachable");
+      assertEquals(
+          0,
+          FRLogger.getLogEntries().getEntries(null, finished.id).length,
+          "and their log entries are dropped");
+      assertSame(queued, scheduler.getJob(queued.id.toString()), "active jobs are never removed");
+      assertNotNull(manager.getSession(primary.id.toString()));
+      assertNotNull(manager.getSession(busy.id.toString()));
+      assertNotNull(manager.getSession(first.id.toString()));
+      assertNotNull(manager.getSession(second.id.toString()));
+      assertEquals(4, manager.getActiveSessionsCount());
+    } finally {
+      removeJobs(scheduler, queued, finished);
+    }
+  }
+
+  @Test
+  void fullRegistryOfActiveSessionsGrowsInsteadOfEvicting() {
+    FRAnalytics.setEnabled(false);
+    RoutingJobScheduler scheduler = RoutingJobScheduler.getInstance();
+    SessionManager manager = new SessionManager(2);
+    Session primary = manager.createSession(UUID.randomUUID(), guiHost());
+    manager.setPrimarySession(primary.id);
+    Session running = manager.createSession(UUID.randomUUID(), "Test/1.0");
+    RoutingJob job = job(running, RoutingJobState.RUNNING);
+    addJobs(scheduler, job);
+    try {
+      final Session extra = manager.createSession(UUID.randomUUID(), "Test/1.0");
+
+      assertEquals(3, manager.getActiveSessionsCount(), "no session may be evicted, so it grows");
+      assertNotNull(manager.getSession(primary.id.toString()));
+      assertNotNull(manager.getSession(running.id.toString()));
+      assertNotNull(manager.getSession(extra.id.toString()));
+
+      job.state = RoutingJobState.COMPLETED;
+      final Session afterIdle = manager.createSession(UUID.randomUUID(), "Test/1.0");
+
+      assertEquals(2, manager.getActiveSessionsCount(), "idle sessions bring it back to its limit");
+      assertNotNull(manager.getSession(primary.id.toString()));
+      assertNotNull(manager.getSession(afterIdle.id.toString()));
+      assertNull(manager.getSession(running.id.toString()));
+      assertNull(manager.getSession(extra.id.toString()));
+    } finally {
+      removeJobs(scheduler, job);
+    }
+  }
+
+  @Test
+  void evictionChoosesTheOldestSessionThatIsNeitherPrimaryNorActive() {
+    Session primary = new Session(UUID.randomUUID(), guiHost());
+    primary.isPrimary = true;
+    Session active = new Session(UUID.randomUUID(), "Test/1.0");
+    Session idle = new Session(UUID.randomUUID(), "Test/1.0");
+    Session newerIdle = new Session(UUID.randomUUID(), "Test/1.0");
+
+    assertSame(
+        idle,
+        SessionManager.selectSessionToEvict(
+            List.of(newerIdle, primary, idle, active), Set.of(active.id)));
+    assertNull(SessionManager.selectSessionToEvict(List.of(primary, active), Set.of(active.id)));
+  }
+
+  private static String guiHost() {
+    return "Freerouting/" + Freerouting.VERSION_NUMBER_STRING;
+  }
+
+  private static RoutingJob job(Session session, RoutingJobState state) {
+    RoutingJob job = new RoutingJob(session.id);
+    job.state = state;
+    return job;
+  }
+
+  private static void addJobs(RoutingJobScheduler scheduler, RoutingJob... jobs) {
+    synchronized (scheduler.jobs) {
+      scheduler.jobs.addAll(List.of(jobs));
+    }
+  }
+
+  private static void removeJobs(RoutingJobScheduler scheduler, RoutingJob... jobs) {
+    synchronized (scheduler.jobs) {
+      scheduler.jobs.removeAll(List.of(jobs));
+    }
   }
 }

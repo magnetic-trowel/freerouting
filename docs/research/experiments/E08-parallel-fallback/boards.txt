@@ -1,0 +1,17 @@
+# E08 boards. Common flags (paired_campaign --flags): -mt 4 -mp 25 --router.optimizer.enabled=false
+# (-mt caps the fallback workers: router.autorouter.max_threads, which the pass itself never reads.)
+#
+# Identity boards (smoke-tested): every variant must give the control's SES sha1.
+fixtures/Issue367-Charger.dsn
+fixtures/Issue313-FastTest.dsn
+fixtures/Issue508-DAC2020_bm06.dsn
+# Other boards that enter the fallback in SP/camp3/run1/master (wall-time gain expected).
+fixtures/Issue015-StackOverflow.dsn
+fixtures/Issue157-TeamAdapt-LinePCB.dsn
+fixtures/Issue684-Autorouter_PCB1_2026-5-8.dsn
+# No SMD fanout: zero alternatives, the workers never start (must be identical, no gain).
+fixtures/Issue110-Pajalnaja_stancija.dsn
+# No fallback (complete or pass limit): the experiment is inert here.
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue155-CH376_MCP795_Module.dsn
+fixtures/Issue508-DAC2020_bm05.dsn

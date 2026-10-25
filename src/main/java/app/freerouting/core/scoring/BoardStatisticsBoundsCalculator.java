@@ -5,6 +5,8 @@ import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.Connectable;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
+import app.freerouting.board.model.items.Via;
+import app.freerouting.board.model.structure.AngleRestriction;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.core.library.Padstack;
 import app.freerouting.datastructures.UndoableObjects;
@@ -65,6 +67,7 @@ final class BoardStatisticsBoundsCalculator {
     int minBendCount = 0;
     double boardUnitToMmFactor = board.communication.boardUnitSize(Unit.MM);
 
+    AngleRestriction angleRestriction = board.rules.getTraceAngleRestriction();
     Map<Integer, List<Item>> terminalItems = terminalItemsByNet(board);
     for (int netNumber = 1; netNumber <= board.rules.nets.maxNetNumber(); netNumber++) {
       Net net = board.rules.nets.get(netNumber);
@@ -74,14 +77,29 @@ final class BoardStatisticsBoundsCalculator {
 
       List<Terminal> terminals =
           getTerminals(board, terminalItems.getOrDefault(netNumber, List.of()));
-      if (terminals.size() < 2) {
+      // Fixed vias stay on the board; the vias the net needs besides them are counted with
+      // their layers joined, since a fixed via already changes layers.
+      int fixedViaCount = 0;
+      List<Terminal> pins = new ArrayList<>();
+      boolean hasPour = false;
+      for (Terminal terminal : terminals) {
+        switch (terminal.kind) {
+          case FIXED_VIA -> fixedViaCount++;
+          case POUR -> hasPour = true;
+          case PIN -> pins.add(terminal);
+        }
+      }
+      minViaCount += fixedViaCount;
+      if (terminals.size() - fixedViaCount < 2) {
         continue;
       }
-
-      MstResult mst = calculateMst(terminals);
-      minTraceLength += mst.length * boardUnitToMmFactor;
-      minBendCount += mst.bendCount;
       minViaCount += calculateMinimumViaCount(net, terminals);
+      // A pour connects the pins it reaches without any trace, so it gives no length bound.
+      if (!hasPour && pins.size() >= 2) {
+        TreeBound tree = calculateTreeBound(pins, angleRestriction);
+        minTraceLength += tree.length * boardUnitToMmFactor;
+        minBendCount += tree.bendCount;
+      }
     }
 
     result.minTraceLengthMm = (float) minTraceLength;
@@ -155,12 +173,14 @@ final class BoardStatisticsBoundsCalculator {
   private static Terminal toTerminal(BasicBoard board, Item item) {
     double x;
     double y;
+    TerminalKind kind;
     Set<Integer> signalLayers = new HashSet<>();
 
     if (item instanceof Pin pin) {
       FloatPoint center = pin.getCenter().toFloat();
       x = center.x;
       y = center.y;
+      kind = TerminalKind.PIN;
       for (int layer = pin.firstLayer(); layer <= pin.lastLayer(); layer++) {
         if (pin.getShape(layer - pin.firstLayer()) != null) {
           addSignalLayer(board, layer, signalLayers);
@@ -170,12 +190,22 @@ final class BoardStatisticsBoundsCalculator {
       FloatPoint center = area.getArea().getBorder().centreOfGravity();
       x = center.x;
       y = center.y;
+      kind = TerminalKind.POUR;
       addSignalLayer(board, area.getLayer(), signalLayers);
+    } else if (item instanceof Via via) {
+      // Only fixed vias get here: routable items are no terminals.
+      FloatPoint center = via.getCenter().toFloat();
+      x = center.x;
+      y = center.y;
+      kind = TerminalKind.FIXED_VIA;
+      for (int layer = via.firstLayer(); layer <= via.lastLayer(); layer++) {
+        addSignalLayer(board, layer, signalLayers);
+      }
     } else {
       return null;
     }
 
-    return new Terminal(x, y, signalLayers);
+    return new Terminal(x, y, signalLayers, kind);
   }
 
   private static void addSignalLayer(BasicBoard board, int layer, Set<Integer> signalLayers) {
@@ -186,40 +216,52 @@ final class BoardStatisticsBoundsCalculator {
     }
   }
 
-  private static MstResult calculateMst(List<Terminal> terminals) {
-    boolean[] used = new boolean[terminals.size()];
-    double[] distances = new double[terminals.size()];
-    int[] parents = new int[terminals.size()];
+  /**
+   * Returns a lower bound on the length of any tree of traces that connects the pins under the
+   * angle restriction. The tree holds a path between every two pins, so it is at least as long as
+   * their largest distance in the restriction's metric. It is also at least as long as the shortest
+   * Steiner tree, which is at least 2/3 of the rectilinear minimum spanning tree with 90 degree
+   * traces (Hwang 1976) and at least sqrt(3)/2 of the Euclidean one otherwise (Du and Hwang 1990):
+   * a 45 degree tree is no shorter than a Euclidean one. Two pins get their exact distance.
+   *
+   * <p>The bend bound counts the spanning tree's edges that no straight trace allowed by the
+   * restriction can follow.
+   */
+  static TreeBound calculateTreeBound(List<Terminal> pins, AngleRestriction angleRestriction) {
+    boolean rectilinear = angleRestriction == AngleRestriction.NINETY_DEGREE;
+    int count = pins.size();
+    boolean[] used = new boolean[count];
+    double[] distances = new double[count];
+    int[] parents = new int[count];
     Arrays.fill(distances, Double.POSITIVE_INFINITY);
     Arrays.fill(parents, -1);
     distances[0] = 0.0;
 
-    double length = 0.0;
+    double spanningTreeLength = 0.0;
+    double diameter = 0.0;
     int bendCount = 0;
-    for (int edge = 0; edge < terminals.size(); edge++) {
+    for (int edge = 0; edge < count; edge++) {
       int current = -1;
-      for (int index = 0; index < terminals.size(); index++) {
+      for (int index = 0; index < count; index++) {
         if (!used[index] && (current < 0 || distances[index] < distances[current])) {
           current = index;
         }
       }
-      if (current < 0) {
-        break;
-      }
-
       used[current] = true;
+      Terminal to = pins.get(current);
       if (parents[current] >= 0) {
-        Terminal from = terminals.get(parents[current]);
-        Terminal to = terminals.get(current);
-        length += distances[current];
-        if (from.x != to.x && from.y != to.y) {
+        spanningTreeLength += distances[current];
+        if (needsBend(pins.get(parents[current]), to, angleRestriction)) {
           bendCount++;
         }
       }
-
-      for (int index = 0; index < terminals.size(); index++) {
+      for (int index = 0; index < count; index++) {
+        Terminal other = pins.get(index);
+        diameter = Math.max(diameter, distance(to, other, angleRestriction));
         if (!used[index]) {
-          double distance = manhattanDistance(terminals.get(current), terminals.get(index));
+          double dx = Math.abs(to.x - other.x);
+          double dy = Math.abs(to.y - other.y);
+          double distance = rectilinear ? dx + dy : Math.hypot(dx, dy);
           if (distance < distances[index]) {
             distances[index] = distance;
             parents[index] = current;
@@ -227,11 +269,30 @@ final class BoardStatisticsBoundsCalculator {
         }
       }
     }
-    return new MstResult(length, bendCount);
+    double steinerRatio = rectilinear ? 2.0 / 3.0 : Math.sqrt(3.0) / 2.0;
+    return new TreeBound(Math.max(diameter, steinerRatio * spanningTreeLength), bendCount);
   }
 
-  private static double manhattanDistance(Terminal first, Terminal second) {
-    return Math.abs(first.x - second.x) + Math.abs(first.y - second.y);
+  /** The length of the shortest trace from one terminal to the other under the restriction. */
+  private static double distance(Terminal from, Terminal to, AngleRestriction angleRestriction) {
+    double dx = Math.abs(from.x - to.x);
+    double dy = Math.abs(from.y - to.y);
+    return switch (angleRestriction) {
+      case NINETY_DEGREE -> dx + dy;
+      case FORTYFIVE_DEGREE -> Math.max(dx, dy) + (Math.sqrt(2.0) - 1.0) * Math.min(dx, dy);
+      case NONE -> Math.hypot(dx, dy);
+    };
+  }
+
+  /** True if no straight trace the restriction allows runs from one terminal to the other. */
+  private static boolean needsBend(Terminal from, Terminal to, AngleRestriction angleRestriction) {
+    double dx = Math.abs(from.x - to.x);
+    double dy = Math.abs(from.y - to.y);
+    return switch (angleRestriction) {
+      case NINETY_DEGREE -> dx != 0 && dy != 0;
+      case FORTYFIVE_DEGREE -> dx != 0 && dy != 0 && dx != dy;
+      case NONE -> false;
+    };
   }
 
   private static int calculateMinimumViaCount(Net net, List<Terminal> terminals) {
@@ -278,9 +339,15 @@ final class BoardStatisticsBoundsCalculator {
     return viaCount;
   }
 
-  private record Terminal(double x, double y, Set<Integer> signalLayers) {}
+  enum TerminalKind {
+    PIN,
+    POUR,
+    FIXED_VIA
+  }
 
-  private record MstResult(double length, int bendCount) {}
+  record Terminal(double x, double y, Set<Integer> signalLayers, TerminalKind kind) {}
+
+  record TreeBound(double length, int bendCount) {}
 
   private record ViaSpan(int firstLayer, int lastLayer) {}
 

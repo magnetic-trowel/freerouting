@@ -25,6 +25,7 @@ import app.freerouting.board.state.Communication;
 import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.core.library.BoardLibrary;
 import app.freerouting.core.library.Padstack;
+import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.ShapeTree.TreeEntry;
 import app.freerouting.datastructures.UndoableObjects;
 import app.freerouting.drc.NetRoutingLedger;
@@ -45,9 +46,11 @@ import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.ConcurrentModificationException;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
@@ -106,6 +109,10 @@ public class BasicBoard implements Serializable {
 
   private transient Set<Integer> normalizeSuppressedNetNos = new HashSet<>();
   private transient int revision;
+
+  /** Insertions and removals of traces per net, counted into the revision as well. */
+  private transient Map<Integer, Integer> traceChangesOfNet;
+
   private transient long netAssignmentChangeCount;
   private transient BoardItemRepository itemRepository;
   private transient BoardConnectivityQueries connectivityQueries;
@@ -115,6 +122,15 @@ public class BasicBoard implements Serializable {
   public transient Set<Integer> ruleBlockedPins;
   public transient app.freerouting.drc.ClearanceBaseline clearanceBaseline;
   public transient CompletableFuture<Void> postLoadFuture;
+
+  /**
+   * The last statistics {@link #getStatistics} computed with and without clearance violations, with
+   * the board state they describe. Kept apart, so that cheap progress statistics taken while the
+   * board does not change do not drop the full ones.
+   */
+  private transient volatile StatisticsMemo fullStatisticsMemo;
+
+  private transient volatile StatisticsMemo statisticsWithoutViolationsMemo;
 
   /** Starts held post-load processing; set while a loader holds it, see awaitPostLoad. */
   public transient Runnable postLoadStarter;
@@ -180,6 +196,29 @@ public class BasicBoard implements Serializable {
     revision++;
   }
 
+  /** Increments the revision for an inserted or removed item. */
+  void incrementRevision(Item changedItem) {
+    revision++;
+    if (changedItem instanceof Trace) {
+      if (traceChangesOfNet == null) {
+        traceChangesOfNet = new HashMap<>();
+      }
+      for (int i = 0; i < changedItem.netCount(); i++) {
+        traceChangesOfNet.merge(changedItem.getNetNumber(i), 1, Integer::sum);
+      }
+    }
+  }
+
+  /**
+   * Returns a number that changes with the revision, except when a trace of the net is inserted or
+   * removed. The pours of the net ignore their own net's traces, so their fill keys on it.
+   */
+  public int revisionIgnoringTracesOf(int netNumber) {
+    return traceChangesOfNet == null
+        ? revision
+        : revision - traceChangesOfNet.getOrDefault(netNumber, 0);
+  }
+
   /**
    * Incremented whenever an item's nets change without a search-tree update (e.g. assignNetNo,
    * removeFromNet), for caches of net-dependent queries.
@@ -191,6 +230,11 @@ public class BasicBoard implements Serializable {
   public void noteNetAssignmentChanged() {
     netAssignmentChangeCount++;
     itemList.noteContentChange();
+    // The ledger files items under the nets they had when they were inserted. A net change in
+    // place (pin swap, net reduction of tie traces) leaves them under the old net.
+    if (routingLedger != null) {
+      routingLedger.invalidate();
+    }
   }
 
   /** Serialize. */
@@ -327,41 +371,6 @@ public class BasicBoard implements Serializable {
             fixedState,
             attachAllowed,
             this);
-    insertItem(newVia);
-    int fromLayer = padstack.fromLayer();
-    int toLayer = padstack.toLayer();
-    for (int i = fromLayer; i <= toLayer; i++) {
-      for (int currentNetNumber : netNumbers) {
-        splitTraces(center, i, currentNetNumber);
-      }
-    }
-    return newVia;
-  }
-
-  /**
-   * Inserts a special escape via into the board for the fanout escalation phase. An escape via sits
-   * directly on top of an SMD pin to provide a layer transition to an inner routing layer. On the
-   * SMD layer it uses SMD-to-SMD clearance rules (because its copper is inside the SMD pad
-   * footprint); on inner layers it uses normal via clearance.
-   *
-   * @param padstack The padstack describing the via geometry
-   * @param center The center point (at the SMD pin center)
-   * @param netNumbers The net numbers
-   * @param clearanceClassIndex The clearance class index to use
-   * @param fixedState The fixed state
-   * @param smdLayer The SMD layer where the pin lives (clearance exception layer)
-   */
-  public Via insertEscapeVia(
-      Padstack padstack,
-      Point center,
-      int[] netNumbers,
-      int clearanceClassIndex,
-      FixedState fixedState,
-      int smdLayer) {
-    Via newVia =
-        new Via(padstack, center, netNumbers, clearanceClassIndex, 0, 0, fixedState, true, this);
-    newVia.isEscapeVia = true;
-    newVia.escapeViaSmdLayer = smdLayer;
     insertItem(newVia);
     int fromLayer = padstack.fromLayer();
     int toLayer = padstack.toLayer();
@@ -1706,6 +1715,81 @@ public class BasicBoard implements Serializable {
     }
     return count;
   }
+
+  /** Returns the full statistics of this board: connections, clearance violations and so on. */
+  public BoardStatistics getStatistics() {
+    return getStatistics(true);
+  }
+
+  /**
+   * Returns the statistics of this board, with clearance violations only if {@code
+   * includeClearanceViolations} (otherwise they are counted as 0, which is much cheaper). The last
+   * result is kept and returned again until the board changes, so callers that ask for the same
+   * board twice pay once. Each call returns its own copy, which the caller may change.
+   */
+  public BoardStatistics getStatistics(boolean includeClearanceViolations) {
+    if (includeClearanceViolations) {
+      // It may still change the items and sets the pre-existing violations the stamp includes.
+      awaitPostLoad();
+    }
+    StatisticsStamp stamp = new StatisticsStamp(this);
+    StatisticsMemo memo =
+        includeClearanceViolations ? fullStatisticsMemo : statisticsWithoutViolationsMemo;
+    if (memo == null || !memo.stamp().equals(stamp)) {
+      // The stamp is taken first: a board that changes while the statistics are computed (another
+      // thread routing it) gets a new stamp and is measured again on the next call.
+      memo =
+          new StatisticsMemo(
+              stamp, new BoardStatistics(this, null, includeClearanceViolations, true));
+      if (includeClearanceViolations) {
+        fullStatisticsMemo = memo;
+      } else {
+        statisticsWithoutViolationsMemo = memo;
+      }
+    }
+    return memo.statistics().copy();
+  }
+
+  /**
+   * Drops the kept statistics and the cached score bounds. Call it after changing rules that the
+   * statistics read but that do not change the clearance matrix, such as trace widths and vias.
+   */
+  public void forgetStatistics() {
+    fullStatisticsMemo = null;
+    statisticsWithoutViolationsMemo = null;
+    BoardStatistics.forgetBounds(this);
+  }
+
+  /**
+   * Everything that the statistics of a board read and that can change after it is loaded: the
+   * items (insertions, deletions and every change in place, net assignments included), the
+   * clearance matrix, the hole clearance, the net and net class counts and the pre-existing
+   * clearance violations. Equal stamps of one board mean equal statistics.
+   */
+  private record StatisticsStamp(
+      long itemListVersion,
+      long itemContentVersion,
+      int clearanceMatrixChanges,
+      int holeClearance,
+      int netCount,
+      int netClassCount,
+      int preExistingClearanceViolations,
+      app.freerouting.drc.ClearanceBaseline clearanceBaseline) {
+
+    StatisticsStamp(BasicBoard board) {
+      this(
+          board.itemList.getVersion(),
+          board.itemList.getContentVersion(),
+          board.rules.clearanceMatrix.getModificationCount(),
+          board.rules.getHoleClearance(),
+          board.rules.nets.maxNetNumber(),
+          board.rules.netClasses.count(),
+          board.preExistingClearanceViolationsCount,
+          board.clearanceBaseline);
+    }
+  }
+
+  private record StatisticsMemo(StatisticsStamp stamp, BoardStatistics statistics) {}
 
   /**
    * Waits for any asynchronous post-load processing (such as initial DRC scans) to complete before

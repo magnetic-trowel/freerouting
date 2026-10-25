@@ -216,11 +216,13 @@ public abstract class Item
       return null;
     }
     TileShape[] precalculatedTreeShapes = this.getPrecalculatedTreeShapes(tree);
-    if (precalculatedTreeShapes == null || index < 0 || index >= precalculatedTreeShapes.length) {
-      this.clearDerivedData();
-      precalculatedTreeShapes = this.getPrecalculatedTreeShapes(tree);
+    if (index >= precalculatedTreeShapes.length) {
+      // The cache does not match the tree's entries: recalculate this tree's shapes only. Clearing
+      // all derived data here also dropped the autoroute info of an item a search may be using.
+      precalculatedTreeShapes = this.calculateTreeShapes((ShapeSearchTree) tree);
+      this.searchTreesInfo.setPrecalculatedTreeShapes(precalculatedTreeShapes, tree);
     }
-    if (precalculatedTreeShapes == null || index < 0 || index >= precalculatedTreeShapes.length) {
+    if (index < 0 || index >= precalculatedTreeShapes.length) {
       return null;
     }
     return precalculatedTreeShapes[index];
@@ -464,9 +466,29 @@ public abstract class Item
           }
 
           // Calculate the expected minimum clearance between these two shapes
-          double minimumClearance =
+          double copperClearance =
               board.rules.clearanceMatrix.getValue(
                   currentItem.clearanceClassIndex, this.clearanceClassIndex, shapeLayer(i), false);
+          // The tree inflates drill items so that the default class keeps the hole clearance.
+          // Measure from their copper instead and require the hole clearance of this pair.
+          double holeClearance = 0;
+          if (board.rules.getHoleClearance() > 0) {
+            if (this instanceof DrillItem drillItem) {
+              shape1 = drcTree.drillCopperTreeShape(drillItem, i);
+              holeClearance = drcTree.drillHoleClearance(drillItem, i);
+            }
+            if (currentItem instanceof DrillItem drillItem) {
+              shape2 = drcTree.drillCopperTreeShape(drillItem, currentEntry.shapeIndexInObject);
+              holeClearance =
+                  Math.max(
+                      holeClearance,
+                      drcTree.drillHoleClearance(drillItem, currentEntry.shapeIndexInObject));
+            }
+            if (shape1 == null || shape2 == null) {
+              continue;
+            }
+          }
+          double minimumClearance = Math.max(copperClearance, holeClearance);
 
           int clComp1 = (int) Math.round(0.5 * minimumClearance);
           int clComp2 = (int) Math.round(minimumClearance - clComp1);
@@ -507,14 +529,22 @@ public abstract class Item
                 smallestClearance = actualClearance;
               }
 
+              // A violation of the hole clearance only is reported as one: measured from the
+              // drill hole, against the hole clearance.
+              boolean holeViolation =
+                  holeClearance > copperClearance
+                      && (copperClearance - actualClearance) * boardUnitToUmFactor <= toleranceUm;
+              double holeOffset =
+                  holeViolation ? holeClearance - board.rules.getHoleClearance() : 0;
               ClearanceViolation currentViolation =
                   new ClearanceViolation(
                       this,
                       currentItem,
                       intersection,
                       shapeLayer(i),
-                      minimumClearance,
-                      actualClearance);
+                      minimumClearance - holeOffset,
+                      actualClearance - holeOffset,
+                      holeViolation);
               result.add(currentViolation);
             }
           }
@@ -1053,6 +1083,9 @@ public abstract class Item
     }
     clearanceClassIndex = index;
     this.clearDerivedData();
+    if (this.board != null) {
+      this.board.itemList.noteContentChange();
+    }
     if (this.board != null && this.board.searchTreeManager.isClearanceCompensationUsed()) {
       // reinsert the item into the search tree, because the compensated shape has changed.
       this.board.searchTreeManager.remove(this);

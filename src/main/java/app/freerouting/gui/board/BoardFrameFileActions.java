@@ -9,7 +9,6 @@ import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
 import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.IOException;
 import javax.swing.JOptionPane;
 
 /** Installs file-menu actions while keeping {@link BoardFrame} as the public GUI façade. */
@@ -30,6 +29,11 @@ public class BoardFrameFileActions {
 
   private void open(File selectedFile) {
     if (selectedFile == null) {
+      return;
+    }
+    // Opening a file replaces the current board, so offer to save unsaved changes first (the
+    // drag-and-drop path already asks; the menu path silently discarded them).
+    if (!boardFrame.confirmSaveBeforeLoad(boardFrame)) {
       return;
     }
 
@@ -57,22 +61,8 @@ public class BoardFrameFileActions {
             RoutingJobScheduler.getInstance().clearJobs(sessionId);
             RoutingJobScheduler.getInstance().enqueueJob(boardFrame.routingJob);
 
-            String oldInputDirectory = globalSettings.guiSettings.inputDirectory;
-            globalSettings.guiSettings.inputDirectory =
-                boardFrame.routingJob.input.getDirectoryPath();
-            if (!oldInputDirectory.equals(globalSettings.guiSettings.inputDirectory)) {
-              try {
-                GlobalSettings.saveAsJson(globalSettings);
-              } catch (IOException e) {
-                FRLogger.error("Couldn't save the global settings to the configuration file", e);
-              }
-            }
-            try {
-              GlobalSettings.setDefaultValue(
-                  "gui.input_directory", boardFrame.routingJob.input.getDirectoryPath());
-            } catch (Exception e) {
-              FRLogger.error("Couldn't update the input directory in the configuration file", e);
-            }
+            globalSettings.setDefaultValue(
+                "gui.input_directory", boardFrame.routingJob.input.getDirectoryPath());
           });
 
       if (boardFrame.boardPanel != null && boardFrame.boardPanel.boardHandling != null) {

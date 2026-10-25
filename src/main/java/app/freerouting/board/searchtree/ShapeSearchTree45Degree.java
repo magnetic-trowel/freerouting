@@ -7,7 +7,6 @@ import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.ObstacleArea;
 import app.freerouting.board.model.structure.BoardOutline;
-import app.freerouting.datastructures.ArrayStack;
 import app.freerouting.geometry.planar.FortyfiveDegreeBoundingDirections;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntOctagon;
@@ -20,6 +19,7 @@ import app.freerouting.logger.FRLogger;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedList;
+import java.util.PriorityQueue;
 import java.util.concurrent.locks.Lock;
 
 /**
@@ -162,19 +162,22 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
     int debugStep = 0;
     Collection<IncompleteFreeSpaceExpansionRoom> result = new ArrayList<>();
     result.add(new IncompleteFreeSpaceExpansionRoom(startShape, roomLayer, shapeToBeContained));
-    ArrayStack<TreeNode> stack = completeShapeStack.get();
-    // Only leaves on roomLayer can restrain the room; pruning other-layer subtrees keeps the
-    // relative DFS order of the remaining leaves.
+    // Obstacles restrain the room nearest first, so the room depends on the geometry and the
+    // item order only, not on the structure of the tree. Only leaves on roomLayer can restrain
+    // the room, so subtrees without that layer are skipped.
+    PriorityQueue<NearNode> queue = completeShapeQueue.get();
+    IntBox target = shapeToBeContained.boundingBox();
     final long roomLayerBits = debugAnchor ? -1L : layerBit(roomLayer);
-    stack.reset();
-    stack.push(this.root);
+    queue.clear();
+    queue.add(NearNode.of(this.root, target));
     TreeNode currentNode;
 
     for (; ; ) {
-      currentNode = stack.pop();
-      if (currentNode == null) {
+      NearNode next = queue.poll();
+      if (next == null) {
         break;
       }
+      currentNode = next.node();
       if (currentNode.boundingShape.intersects(boundingShape)) {
         if (currentNode instanceof Leaf currentLeaf) {
           SearchTreeObject currentObject = (SearchTreeObject) currentLeaf.object;
@@ -315,20 +318,20 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
           if (first != null
               && (first.layerMask & roomLayerBits) != 0
               && first.boundingShape.intersects(boundingShape)) {
-            stack.push(first);
+            queue.add(NearNode.of(first, target));
           }
           if (second != null
               && (second.layerMask & roomLayerBits) != 0
               && second.boundingShape.intersects(boundingShape)) {
-            stack.push(second);
+            queue.add(NearNode.of(second, target));
           }
         }
       }
     }
-    // The walk can stop before the stack is drained. Nodes left on this thread-local stack would
+    // The walk can stop before the queue is drained. Nodes left on this thread-local queue would
     // keep this tree, its board and the autoroute engine reachable from the thread for its whole
-    // life, because the stack is the value of a ThreadLocal that the tree itself holds.
-    stack.reset();
+    // life, because the queue is the value of a ThreadLocal that the tree itself holds.
+    queue.clear();
 
     result = divideLargeRoom(result, board.getBoundingBox());
     // remove rooms with shapes equal to the contained shape to prevent endless loop.

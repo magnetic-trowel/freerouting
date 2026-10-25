@@ -3,6 +3,7 @@ package app.freerouting.io.specctra.parser;
 import app.freerouting.datastructures.IdentifierType;
 import app.freerouting.datastructures.IndentFileWriter;
 import app.freerouting.geometry.planar.Area;
+import app.freerouting.geometry.planar.Limits;
 import app.freerouting.geometry.planar.PolylineArea;
 import app.freerouting.geometry.planar.PolylineShape;
 import app.freerouting.io.CoordinateTransform;
@@ -115,6 +116,13 @@ public abstract class Shape {
       // read the width and the corners of the path
       for (; ; ) {
         nextToken = scanner.nextToken();
+        if (nextToken == null) {
+          FRLogger.warn(
+              "PolylinePath.read_scope: unexpected end of file at '"
+                  + scanner.getScopeIdentifier()
+                  + "'");
+          return null;
+        }
         if (nextToken == Keyword.CLOSED_BRACKET) {
           break;
         }
@@ -220,7 +228,14 @@ public abstract class Shape {
         // a new scope is expected
         if (nextToken == Keyword.WINDOW && !skipWindowScopes) {
           Shape holeShape = Shape.readScope(scanner, layerStructure);
-          shapeList.add(holeShape);
+          if (holeShape != null) {
+            shapeList.add(holeShape);
+          } else {
+            FRLogger.warn(
+                "Shape.read_area_scope: window ignored, its shape could not be read at '"
+                    + scanner.getScopeIdentifier()
+                    + "'");
+          }
           // overread closing bracket
           try {
             nextToken = scanner.nextToken();
@@ -300,8 +315,12 @@ public abstract class Shape {
   /**
    * Reads a closed polygon scope from a Specctra dsn file. If layerStructure == null, only
    * Layer.PCB and Layer.Signal are expected, no individual layers.
+   *
+   * <p>A polygon with fewer than three points encloses no area; it is the line it draws with its
+   * aperture width (for example a pad {@code (polygon 1 0.01 0 -3.5 0 3.5)}), so it is read as that
+   * path.
    */
-  public static Polygon readPolygonScope(IJFlexScanner scanner, LayerStructure layerStructure) {
+  public static Shape readPolygonScope(IJFlexScanner scanner, LayerStructure layerStructure) {
     try {
       Layer polygonLayer = null;
       boolean layerOk = true;
@@ -339,8 +358,8 @@ public abstract class Shape {
         }
       }
 
-      // overread the aperture width
       nextToken = scanner.nextToken();
+      double apertureWidth = nextToken instanceof Number number ? number.doubleValue() : 0;
 
       Collection<Object> coorList = new LinkedList<>();
 
@@ -382,6 +401,9 @@ public abstract class Shape {
                   + "'");
           return null;
         }
+      }
+      if (coorArr.length >= 2 && coorArr.length < 6) {
+        return new PolygonPath(polygonLayer, apertureWidth, coorArr);
       }
       return new Polygon(polygonLayer, coorArr);
     } catch (IOException e) {
@@ -436,6 +458,17 @@ public abstract class Shape {
       if (circleLayer == null) {
         return null;
       }
+      if (DsnFile.isUnsetSize(circleCoor[0])) {
+        // KiCad exports "(circle F.Cu -0.001)" for the via of a net class whose via size is not
+        // set. There is no shape without a diameter, so a padstack does not get a tiny circle.
+        FRLogger.warn(
+            "Shape.read_circle_scope: ignoring circle with unset diameter "
+                + circleCoor[0]
+                + " at '"
+                + scanner.getScopeIdentifier()
+                + "'");
+        return null;
+      }
       return new Circle(circleLayer, circleCoor);
     } catch (IOException e) {
       FRLogger.error("Shape.read_rectangle_scope: IO error scanning file", e);
@@ -446,6 +479,15 @@ public abstract class Shape {
   /** Reads an object of type Path from the dsn-file. */
   public static PolygonPath readPolygonPathScope(
       IJFlexScanner scanner, LayerStructure layerStructure) {
+    return readPolygonPathScope(scanner, layerStructure, 2);
+  }
+
+  /**
+   * Reads an object of type Path with at least {@code minimumCorners} corners. A session wire may
+   * have one: point copper, as v2.5.0 wrote it.
+   */
+  public static PolygonPath readPolygonPathScope(
+      IJFlexScanner scanner, LayerStructure layerStructure, int minimumCorners) {
     try {
       String layerName = scanner.nextString();
       Layer layer = getLayer(layerStructure, layerName);
@@ -460,6 +502,13 @@ public abstract class Shape {
           ScopeKeyword.skipScope(scanner);
           nextToken = scanner.nextToken();
         }
+        if (nextToken == null) {
+          FRLogger.warn(
+              "Shape.read_polygon_path_scope: unexpected end of file at '"
+                  + scanner.getScopeIdentifier()
+                  + "'");
+          return null;
+        }
         if (nextToken == Keyword.CLOSED_BRACKET) {
           break;
         }
@@ -467,11 +516,12 @@ public abstract class Shape {
       }
 
       // cornerList contains width + coordinate pairs
-      if (cornerList.size() < 5) {
-        // Single-point paths are not valid traces, skip them
+      if (cornerList.size() < 1 + 2 * minimumCorners) {
         FRLogger.debug(
             "Shape.read_polygon_path_scope: skipping path with too few coordinates "
-                + "(need at least 2 points) at '"
+                + "(need at least "
+                + minimumCorners
+                + " points) at '"
                 + scanner.getScopeIdentifier()
                 + "'");
         return null;
@@ -526,6 +576,9 @@ public abstract class Shape {
       FRLogger.warn("Shape.transform_area_to_board: area.size() > 0 expected");
       return null;
     }
+    if (!isInBoardRange(area, coordinateTransform)) {
+      return null;
+    }
     Iterator<Shape> it = area.iterator();
     Shape boundary = it.next();
     app.freerouting.geometry.planar.Shape boundaryShape =
@@ -565,6 +618,9 @@ public abstract class Shape {
       FRLogger.warn("Shape.transform_area_to_board_rel: area.size() > 0 expected");
       return null;
     }
+    if (!isInBoardRange(area, coordinateTransform)) {
+      return null;
+    }
     Iterator<Shape> it = area.iterator();
     Shape boundary = it.next();
     app.freerouting.geometry.planar.Shape boundaryShape =
@@ -591,6 +647,33 @@ public abstract class Shape {
       result = new PolylineArea(border, holes);
     }
     return result;
+  }
+
+  /**
+   * Returns false, after a warning, when a shape of the area reaches beyond the board coordinate
+   * range. Board coordinates are rounded to int, which wraps around for such values, and the
+   * geometry needs them below {@link Limits#CRIT_INT}; a wrapped-around area could need billions of
+   * search tree sections.
+   */
+  private static boolean isInBoardRange(
+      Collection<Shape> area, CoordinateTransform coordinateTransform) {
+    for (Shape shape : area) {
+      if (shape instanceof Polygon polygon && polygon.coor.length < 2) {
+        continue; // no corners, so the bounding box is not meaningful
+      }
+      Rectangle box = shape.boundingBox();
+      if (box == null) {
+        continue;
+      }
+      for (double value : box.coor) {
+        if (!(Math.abs(coordinateTransform.dsnToBoard(value)) < Limits.CRIT_INT)) {
+          FRLogger.warn(
+              "Shape.transform_area_to_board: area ignored, its coordinates are out of range");
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   /** Writes a shape scope to a Specctra dsn file. */

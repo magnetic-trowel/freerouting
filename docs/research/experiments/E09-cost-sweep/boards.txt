@@ -1,0 +1,71 @@
+# E09 boards. Column 1: fixture path relative to the repository root. Optional extra flags follow.
+# Comment after each line: family | master (head-like) result at -mp 25 in SP/camp3/run1
+# (router unrouted / reload-DRC unconnected / vias / CPU s, measured on a loaded machine). Families: 2L-SMD = 2 signal layers and
+# SMD pin fraction >= 0.6; 2L-MIX = 2 signal layers, SMD fraction < 0.6; ML = >= 4 signal layers.
+# A KiCad "power" layer without a (plane ...) is routed as a signal layer.
+#
+# --- Targets: open connections in the master arm (router unrouted > 0) ---
+fixtures/Issue508-DAC2020_bm04.dsn
+# ML | 2/2/57/211 s; oscillating
+fixtures/Issue508-DAC2020_bm05.dsn
+# 2L-SMD | 9/9/37/116 s; oscillating
+fixtures/Issue039-bug-design.dsn
+# 2L-SMD | 9/7/218/292 s; oscillating
+fixtures/Issue313-FastTest.dsn
+# 2L-MIX | 2/2/24/40 s (40 violations come from the input)
+fixtures/Issue110-Pajalnaja_stancija.dsn
+# 2L-MIX | 2/2/9/69 s
+fixtures/Issue157-TeamAdapt-LinePCB.dsn
+# 2L-SMD | 4/4/52/124 s
+fixtures/Issue684-Autorouter_PCB1_2026-5-8.dsn
+# ML | 4/4/2/322 s (5 hole-clearance violations come from the input)
+fixtures/Issue367-Charger.dsn
+# 2L-SMD | 6/31/15/16 s (summary.jsonl shows null: the final line says "1 violation")
+#
+# --- Plane boards: router complete but reload DRC reports unconnected items ---
+fixtures/Issue093-interf_u.dsn
+# 2L-MIX | 0/26/84/12 s
+fixtures/Issue153-wavefolder.dsn
+# 2L-MIX | 0/14/13/8 s
+fixtures/Issue054-tairakb.dsn
+# 2L-SMD | 0/12/149/33 s
+fixtures/Issue209-split05.dsn
+# 2L-MIX | 0/8/40/36 s
+fixtures/Issue957-smoke-ldo-led.dsn
+# 2L-SMD | 0/5/14/5 s
+fixtures/Issue690-ecc83.dsn
+# 2L-MIX | 0/4/0/5 s
+fixtures/Issue676-ch32v-tx118s.dsn
+# 2L-MIX | 0/1/6/5 s (resolution 1 nm: pull-tight 500 units = 0.5 um)
+#
+# --- Regression guards: complete in the master arm ---
+fixtures/Issue508-DAC2020_bm02.dsn
+# 2L-MIX | 0/0/16/8 s (smoke board)
+fixtures/Issue508-DAC2020_bm06.dsn
+# 2L-SMD | 0/0/26/82 s
+fixtures/Issue508-DAC2020_bm07.dsn
+# 2L-SMD | 0/0/31/12 s
+fixtures/Issue508-DAC2020_bm09.dsn
+# ML | 0/0/0/13 s (through-hole only)
+fixtures/Issue508-DAC2020_bm10.dsn
+# ML | 0/0/143/41 s
+fixtures/Issue508-DAC2020_bm11.dsn
+# ML | 0/0/56/40 s
+fixtures/Issue034-Green14SegLED.dsn
+# 2L-MIX | 0/0/50/35 s
+fixtures/Issue110-RelayModule.dsn
+# 2L-MIX | 0/0/40/41 s
+fixtures/Issue155-CH376_MCP795_Module.dsn
+# 2L-MIX | 0/0/16/12 s
+fixtures/Issue558-dev-board.dsn
+# 2L-SMD | 0/0/36/14 s
+fixtures/Issue102-Mars-64-revE-rot00.dsn
+# 2L-SMD | 0/0/157/101 s (64 hole-clearance violations come from the input)
+fixtures/Issue217-8088sbc.dsn
+# 2L-MIX | 0/0/25/43 s
+fixtures/PCBench-Box0-hv-analog-breakout.dsn
+# 2L-SMD | 0/0/17/12 s (B.Cu is a power layer without a plane: routed as a signal layer)
+fixtures/Issue733-kicad_complex_hierarchy_input_design.dsn
+# 2L-MIX | 0/0/0/9 s (B.Cu is a power layer without a plane: routed as a signal layer)
+fixtures/Issue269-caniot-tiny-arm.dsn
+# 2L-SMD | not in camp3; smoke board (B.Cu power layer without a plane, routed as signal)

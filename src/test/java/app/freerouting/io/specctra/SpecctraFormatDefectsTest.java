@@ -324,10 +324,11 @@ class SpecctraFormatDefectsTest {
     RoutingBoard board = loadBoard(dsn);
     BoardStatistics stats = new BoardStatistics(board, Unit.MM, false, false);
     IntBox bb = board.getBoundingBox();
+    double mm = board.communication.boardUnitSize(Unit.MM);
 
-    assertEquals((float) bb.ll.x, stats.board.boundingBox.x, 1e-3);
-    assertEquals((float) bb.ll.y, stats.board.boundingBox.y, 1e-3);
-    assertEquals((float) (bb.ur.x - bb.ll.x), stats.board.boundingBox.width, 1e-3);
-    assertEquals((float) (bb.ur.y - bb.ll.y), stats.board.boundingBox.height, 1e-3);
+    assertEquals(bb.ll.x * mm, stats.board.boundingBox.x, 1e-3);
+    assertEquals(bb.ll.y * mm, stats.board.boundingBox.y, 1e-3);
+    assertEquals((bb.ur.x - bb.ll.x) * mm, stats.board.boundingBox.width, 1e-3);
+    assertEquals((bb.ur.y - bb.ll.y) * mm, stats.board.boundingBox.height, 1e-3);
   }
 }

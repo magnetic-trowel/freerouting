@@ -8,17 +8,31 @@ import jakarta.ws.rs.sse.SseEventSink;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Broadcasts MCP activity events to both SSE and WebSocket subscribers. */
+/**
+ * Pushes MCP activity events to the SSE and WebSocket subscribers of the caller that caused them.
+ *
+ * <p>Every subscriber is registered with its owner: the caller's profile id and, when the request
+ * was authenticated, the hash of its API key (as for sessions, see {@code Session.isOwnedBy}). An
+ * event reaches only the subscribers of the same owner, so one client does not see which tools
+ * another client calls.
+ */
 public final class McpRealtimeBridge {
 
-  private static final Map<SseEventSink, Sse> SSE_CLIENTS = new ConcurrentHashMap<>();
-  private static final Map<Session, Boolean> WS_CLIENTS = new ConcurrentHashMap<>();
+  private record SseClient(Sse sse, String owner) {}
+
+  private static final Map<SseEventSink, SseClient> SSE_CLIENTS = new ConcurrentHashMap<>();
+  private static final Map<Session, String> WS_CLIENTS = new ConcurrentHashMap<>();
 
   private McpRealtimeBridge() {}
 
-  /** Registers an SSE client event sink. */
-  public static void registerSseClient(SseEventSink sink, Sse sse) {
-    SSE_CLIENTS.put(sink, sse);
+  /** Returns the owner key of a caller. */
+  static String owner(java.util.UUID profileId, String apiKeyHash) {
+    return profileId + "/" + (apiKeyHash == null ? "" : apiKeyHash);
+  }
+
+  /** Registers an SSE client event sink of the given owner. */
+  public static void registerSseClient(SseEventSink sink, Sse sse, String owner) {
+    SSE_CLIENTS.put(sink, new SseClient(sse, owner));
   }
 
   /** Removes an SSE client event sink. */
@@ -26,9 +40,9 @@ public final class McpRealtimeBridge {
     SSE_CLIENTS.remove(sink);
   }
 
-  /** Registers a WebSocket session client. */
-  public static void registerWsClient(Session session) {
-    WS_CLIENTS.put(session, Boolean.TRUE);
+  /** Registers a WebSocket session client of the given owner. */
+  public static void registerWsClient(Session session, String owner) {
+    WS_CLIENTS.put(session, owner);
   }
 
   /** Removes a WebSocket session client. */
@@ -36,22 +50,27 @@ public final class McpRealtimeBridge {
     WS_CLIENTS.remove(session);
   }
 
-  /** Broadcasts an event name and payload JSON to all connected clients. */
-  public static void broadcast(String eventName, JsonObject payload) {
+  /** Sends an event name and payload JSON to the connected clients of the given owner. */
+  public static void broadcast(String owner, String eventName, JsonObject payload) {
     JsonObject envelope = new JsonObject();
     envelope.addProperty("event", eventName);
     envelope.add("payload", payload);
     String json = envelope.toString();
 
     SSE_CLIENTS.forEach(
-        (sink, sse) -> {
+        (sink, client) -> {
           if (sink.isClosed()) {
             SSE_CLIENTS.remove(sink);
             return;
           }
+          if (!client.owner().equals(owner)) {
+            return;
+          }
 
           OutboundSseEvent event =
-              sse.newEventBuilder()
+              client
+                  .sse()
+                  .newEventBuilder()
                   .name(eventName)
                   .mediaType(jakarta.ws.rs.core.MediaType.APPLICATION_JSON_TYPE)
                   .data(json)
@@ -60,12 +79,14 @@ public final class McpRealtimeBridge {
         });
 
     WS_CLIENTS.forEach(
-        (session, present) -> {
+        (session, sessionOwner) -> {
           if (!session.isOpen()) {
             WS_CLIENTS.remove(session);
             return;
           }
-          session.getAsyncRemote().sendText(json);
+          if (sessionOwner.equals(owner)) {
+            session.getAsyncRemote().sendText(json);
+          }
         });
   }
 }

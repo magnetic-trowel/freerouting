@@ -66,11 +66,13 @@ class KiCadDrcViolationRoutingTest extends RoutingFixtureTest {
 
   @Test
   void issue5754HoleClearanceViolations() throws Exception {
-    assertDrcOnLoadedBoard("Issue575-drc_dev-board_4_hole_clearance_violations.dsn", 3, 0);
+    // KiCad: no unconnected items (3 before wire ends inside same-net pads were joined).
+    assertDrcOnLoadedBoard("Issue575-drc_dev-board_4_hole_clearance_violations.dsn", 0, 0);
   }
 
   @Test
   void issue5757UnconnectedItems() throws Exception {
-    assertDrcOnLoadedBoard("Issue575-drc_Natural_Tone_Preamp_7_unconnected_items.dsn", 122, 0);
+    // KiCad: 7 unconnected items; 122 before wire ends inside same-net pads were joined.
+    assertDrcOnLoadedBoard("Issue575-drc_Natural_Tone_Preamp_7_unconnected_items.dsn", 8, 0);
   }
 }

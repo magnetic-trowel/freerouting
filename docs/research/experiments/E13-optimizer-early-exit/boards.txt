@@ -1,0 +1,14 @@
+# E13 boards. Common flags: -mt 1 -mp 25 --router.optimizer.enabled=true
+# --router.optimizer.max_threads=1
+#
+# Floor boards (the rule should fire on every pass; the result must be byte-identical).
+fixtures/Issue957-smoke-ldo-led.dsn
+fixtures/Issue676-ch32v-tx118s.dsn
+fixtures/Issue093-interf_u.dsn -mp 6
+# Boards where the exact rule must never fire (SES must be byte-identical, CPU unchanged).
+fixtures/Issue508-DAC2020_bm01.dsn --router.optimizer.max_passes=2
+fixtures/Issue155-CH376_MCP795_Module.dsn
+fixtures/Issue558-dev-board.dsn
+fixtures/Issue029-hw48na.dsn --router.max_items=150 --router.optimizer.max_passes=1
+# Optimizer only, two passes: the margin variant's target (pass 2 gains little and costs most).
+fixtures/Issue103-Board-Routed.dsn --router.optimizer.enable_preflight_guards=false --router.optimizer.max_passes=2

@@ -1,0 +1,39 @@
+# Rip-up experiment boards (E04, E05, E06). Common flags (paired_campaign --flags):
+# -mt 1 -mp 25 --router.optimizer.enabled=false. Per-board flags after the path override them.
+# Router counts and wall times below are head-like master in SP/camp3/run1 (25 passes, 1 thread).
+#
+# Oscillating boards: the pass loop alternates between board states and finally restores its best
+# board (bm04: 2 <-> 12 open; bm05 9 open; Issue039 9 open; BBD Mars-64 4 open in 513 s).
+fixtures/Issue508-DAC2020_bm04.dsn
+fixtures/Issue508-DAC2020_bm05.dsn
+fixtures/Issue039-bug-design.dsn
+fixtures/Issue555-BBD_Mars-64.dsn -mp 12
+# Other boards that end with open connections today.
+fixtures/Issue313-FastTest.dsn
+fixtures/Issue110-Pajalnaja_stancija.dsn
+fixtures/Issue157-TeamAdapt-LinePCB.dsn
+fixtures/Issue684-Autorouter_PCB1_2026-5-8.dsn
+fixtures/Issue297-myboard.dsn -mp 10
+fixtures/Issue732-RoyalBlue54L-Feather.dsn -mp 6
+# Boards whose reload DRC reports design-blocked opens while the router reports 0 (must not change
+# their router counts or violations).
+fixtures/Issue153-wavefolder.dsn
+fixtures/Issue957-smoke-ldo-led.dsn
+fixtures/Issue676-ch32v-tx118s.dsn
+fixtures/Issue054-tairakb.dsn
+fixtures/Issue093-interf_u.dsn
+# Regression boards that complete today (completion must not drop, violations must not grow).
+fixtures/Issue508-DAC2020_bm02.dsn
+fixtures/Issue508-DAC2020_bm06.dsn
+fixtures/Issue508-DAC2020_bm07.dsn
+fixtures/Issue508-DAC2020_bm09.dsn
+fixtures/Issue508-DAC2020_bm10.dsn
+fixtures/Issue508-DAC2020_bm11.dsn
+fixtures/Issue034-Green14SegLED.dsn
+fixtures/Issue110-RelayModule.dsn
+fixtures/Issue155-CH376_MCP795_Module.dsn
+fixtures/Issue558-dev-board.dsn
+fixtures/Issue102-Mars-64-revE-rot00.dsn
+fixtures/Issue217-8088sbc.dsn -mp 12
+fixtures/Issue508-DAC2020_bm01.dsn -mp 10
+fixtures/PCBench-Box0-hv-analog-breakout.dsn

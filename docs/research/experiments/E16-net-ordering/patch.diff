@@ -1,0 +1,636 @@
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java b/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
+index 48c77f14..826021c8 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutoroutePassRunner.java
+@@ -41,8 +41,12 @@ final class AutoroutePassRunner {
+   private int previousIncompleteCount = -1;
+   private int stagnationCount = 0;
+ 
++  /** Experimental item order (E16), or null for the router's own order. */
++  private final RouteOrder routeOrder;
++
+   AutoroutePassRunner(BatchAutorouter router) {
+     this.router = router;
++    this.routeOrder = RouteOrder.MODE == null ? null : new RouteOrder(RouteOrder.MODE);
+   }
+ 
+   boolean runSingleThread(int passNo) {
+@@ -63,7 +67,18 @@ final class AutoroutePassRunner {
+         return false;
+       }
+ 
+-      if (passNo > 1) {
++      if (this.routeOrder != null && !appliesPermutation(passNo)) {
++        this.routeOrder.apply(
++            autorouteItemList, router.board, item -> router.isPlaneItem(item, router.board));
++        router.job.logDebug(
++            "Pass #"
++                + passNo
++                + ": experimental route order '"
++                + this.routeOrder.mode().key
++                + "' applied to "
++                + autorouteItemList.size()
++                + " items.");
++      } else if (passNo > 1) {
+         reorderSingleThreadItems(autorouteItemList, passNo);
+       }
+ 
+@@ -195,11 +210,18 @@ final class AutoroutePassRunner {
+           }
+           --itemsToGoCount;
+           rippedItemCount += rippedItemList.size();
++          if (this.routeOrder != null) {
++            this.routeOrder.recordAttempt(
++                currentItem.getNetNumber(i), autorouterResult.state, rippedItemList);
++          }
+           updateProgress(
+               routerCounters, itemsToGoCount, rippedItemCount, notRouted, routed, skipped);
+         }
+       }
+ 
++      if (this.routeOrder != null) {
++        this.routeOrder.endPass();
++      }
+       logTailRemoval(passNo, true);
+       if (router.removeUnconnectedVias) {
+         router.removeTails(Item.StopConnectionOption.NONE);
+@@ -321,6 +343,16 @@ final class AutoroutePassRunner {
+     autorouteItemList.addAll(signalItems);
+   }
+ 
++  /**
++   * True when {@link #reorderSingleThreadItems} would apply its deterministic permutation in this
++   * pass; the experimental order leaves that anti-oscillation step unchanged.
++   */
++  private boolean appliesPermutation(int passNo) {
++    Integer orderSeed =
++        router.settings.autorouter != null ? router.settings.autorouter.itemOrderSeed : null;
++    return passNo > 1 && (this.stagnationCount >= 2 || orderSeed != null);
++  }
++
+   void resetAntiOscillationState() {
+     this.previousIncompleteNets = Collections.emptySet();
+     this.previousIncompleteCount = -1;
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/RouteOrder.java b/src/main/java/app/freerouting/autoroute/pipeline/RouteOrder.java
+new file mode 100644
+index 00000000..1d15f156
+--- /dev/null
++++ b/src/main/java/app/freerouting/autoroute/pipeline/RouteOrder.java
+@@ -0,0 +1,367 @@
++package app.freerouting.autoroute.pipeline;
++
++import app.freerouting.autoroute.AutorouteAttemptState;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.DrillItem;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Pin;
++import app.freerouting.board.model.items.Trace;
++import app.freerouting.board.model.structure.Unit;
++import app.freerouting.geometry.planar.FloatPoint;
++import app.freerouting.geometry.planar.IntBox;
++import app.freerouting.logger.FRLogger;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.Comparator;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Locale;
++import java.util.Map;
++import java.util.Set;
++import java.util.TreeMap;
++import java.util.function.Predicate;
++
++/**
++ * Experimental orders for the signal items of an autoroute pass (experiment E16), selected with the
++ * JVM system property {@value #PROPERTY}. When the property is unset the pass runner keeps its own
++ * order and never creates an instance of this class.
++ *
++ * <p>Every order is a stable sort on a numeric key with the net number and the item id as tie
++ * breaks, so it is deterministic and independent of hash order, elapsed time and the time budget.
++ * Plane items keep their place in front of the signal items. History-based orders (failed first,
++ * learned difficulty) fall back to the net and id order while there is no history yet.
++ */
++final class RouteOrder {
++
++  static final String PROPERTY = "freerouting.exp.route_order";
++  static final String FINE_PITCH_PROPERTY = "freerouting.exp.route_order.fine_pitch_um";
++  static final String DENSITY_RADIUS_PROPERTY = "freerouting.exp.route_order.density_radius_um";
++
++  /** Learned-difficulty weight of one failed connection, relative to one ripped item. */
++  static final int FAILURE_WEIGHT = 8;
++
++  private static final double DEFAULT_FINE_PITCH_UM = 650.0;
++  private static final double DEFAULT_DENSITY_RADIUS_UM = 1500.0;
++
++  /** The selectable orders; the key is the value of the system property. */
++  enum Mode {
++    NET_ID("net_id"),
++    SHORT_FIRST("short_first"),
++    LONG_FIRST("long_first"),
++    CONSTRAINED_FIRST("constrained_first"),
++    FINE_PITCH_FIRST("fine_pitch_first"),
++    FAILED_FIRST("failed_first"),
++    LEARNED("learned");
++
++    final String key;
++
++    Mode(String key) {
++      this.key = key;
++    }
++  }
++
++  /** The order selected at startup, or null for the router's own order. */
++  static final Mode MODE = parseMode(System.getProperty(PROPERTY));
++
++  /** One signal item with its sort key. */
++  record Keyed(Item item, double key, int net, int id) {}
++
++  private static final Comparator<Keyed> KEYED_ORDER =
++      Comparator.comparingDouble(Keyed::key)
++          .thenComparingInt(Keyed::net)
++          .thenComparingInt(Keyed::id);
++
++  private final Mode mode;
++  private final double finePitchUm;
++  private final double densityRadiusUm;
++  private Map<Integer, Integer> failuresThisPass = new TreeMap<>();
++  private Map<Integer, Integer> failuresLastPass = new TreeMap<>();
++  private final Map<Integer, Integer> difficultyThisPass = new TreeMap<>();
++  private final Map<Integer, Integer> difficulty = new TreeMap<>();
++
++  RouteOrder(Mode mode) {
++    this(
++        mode,
++        doubleProperty(FINE_PITCH_PROPERTY, DEFAULT_FINE_PITCH_UM),
++        doubleProperty(DENSITY_RADIUS_PROPERTY, DEFAULT_DENSITY_RADIUS_UM));
++  }
++
++  RouteOrder(Mode mode, double finePitchUm, double densityRadiusUm) {
++    this.mode = mode;
++    this.finePitchUm = finePitchUm;
++    this.densityRadiusUm = densityRadiusUm;
++  }
++
++  Mode mode() {
++    return mode;
++  }
++
++  /** Returns the mode for a property value; null, blank and "default" mean the router's order. */
++  static Mode parseMode(String value) {
++    if (value == null) {
++      return null;
++    }
++    String normalized = value.trim().toLowerCase(Locale.ROOT);
++    if (normalized.isEmpty() || "default".equals(normalized)) {
++      return null;
++    }
++    for (Mode candidate : Mode.values()) {
++      if (candidate.key.equals(normalized)) {
++        return candidate;
++      }
++    }
++    FRLogger.warn(
++        "Unknown value '" + value + "' for " + PROPERTY + "; the router keeps its own item order.");
++    return null;
++  }
++
++  private static double doubleProperty(String name, double defaultValue) {
++    String value = System.getProperty(name);
++    if (value == null || value.isBlank()) {
++      return defaultValue;
++    }
++    try {
++      return Double.parseDouble(value.trim());
++    } catch (NumberFormatException e) {
++      FRLogger.warn("Ignoring non-numeric " + name + "='" + value + "'.");
++      return defaultValue;
++    }
++  }
++
++  /**
++   * Reorders {@code items} in place: plane items first in their current order, then the signal
++   * items sorted by this order's key.
++   */
++  void apply(List<Item> items, RoutingBoard board, Predicate<Item> isPlaneItem) {
++    List<Item> planeItems = new ArrayList<>();
++    List<Item> signalItems = new ArrayList<>();
++    for (Item item : items) {
++      if (isPlaneItem.test(item)) {
++        planeItems.add(item);
++      } else {
++        signalItems.add(item);
++      }
++    }
++    Map<Integer, Integer> pinDensity =
++        mode == Mode.CONSTRAINED_FIRST ? pinDensities(board) : Map.of();
++    Map<Integer, Double> netPitch = mode == Mode.FINE_PITCH_FIRST ? finePitchNets(board) : Map.of();
++    List<Keyed> keyed = new ArrayList<>(signalItems.size());
++    for (Item item : signalItems) {
++      int net = item.netCount() > 0 ? item.getNetNumber(0) : 0;
++      keyed.add(new Keyed(item, key(item, net, pinDensity, netPitch), net, item.getId()));
++    }
++    items.clear();
++    items.addAll(planeItems);
++    for (Keyed entry : sorted(keyed)) {
++      items.add(entry.item());
++    }
++  }
++
++  /** Returns the entries sorted by key, then net number, then item id. */
++  static List<Keyed> sorted(List<Keyed> entries) {
++    List<Keyed> result = new ArrayList<>(entries);
++    result.sort(KEYED_ORDER);
++    return result;
++  }
++
++  private double key(
++      Item item, int net, Map<Integer, Integer> pinDensity, Map<Integer, Double> netPitch) {
++    return switch (mode) {
++      case NET_ID -> 0.0;
++      case SHORT_FIRST -> airlineSquare(item, net);
++      case LONG_FIRST -> -airlineSquare(item, net);
++      case CONSTRAINED_FIRST -> -maxPinDensity(item, net, pinDensity);
++      case FINE_PITCH_FIRST -> netPitch.getOrDefault(net, Double.MAX_VALUE);
++      case FAILED_FIRST -> -failuresLastPass.getOrDefault(net, 0);
++      case LEARNED -> -difficulty.getOrDefault(net, 0);
++    };
++  }
++
++  /** Records the outcome of one connection attempt of the current pass. */
++  void recordAttempt(int netNo, AutorouteAttemptState state, Collection<Item> rippedItems) {
++    if (isFailure(state)) {
++      failuresThisPass.merge(netNo, 1, Integer::sum);
++      difficultyThisPass.merge(netNo, FAILURE_WEIGHT, Integer::sum);
++    }
++    if (!rippedItems.isEmpty()) {
++      difficultyThisPass.merge(netNo, rippedItems.size(), Integer::sum);
++      for (Item ripped : rippedItems) {
++        for (int i = 0; i < ripped.netCount(); i++) {
++          difficultyThisPass.merge(ripped.getNetNumber(i), 1, Integer::sum);
++        }
++      }
++    }
++  }
++
++  /** Closes the current pass: its failures become the last pass, difficulty halves and adds up. */
++  void endPass() {
++    failuresLastPass = failuresThisPass;
++    failuresThisPass = new TreeMap<>();
++    difficulty.replaceAll((net, value) -> value / 2);
++    difficultyThisPass.forEach((net, value) -> difficulty.merge(net, value, Integer::sum));
++    difficultyThisPass.clear();
++    difficulty.values().removeIf(value -> value == 0);
++  }
++
++  int failuresLastPass(int netNo) {
++    return failuresLastPass.getOrDefault(netNo, 0);
++  }
++
++  int difficulty(int netNo) {
++    return difficulty.getOrDefault(netNo, 0);
++  }
++
++  static boolean isFailure(AutorouteAttemptState state) {
++    return state != AutorouteAttemptState.ROUTED
++        && state != AutorouteAttemptState.ALREADY_CONNECTED
++        && state != AutorouteAttemptState.NO_UNCONNECTED_NETS
++        && state != AutorouteAttemptState.CONNECTED_TO_PLANE;
++  }
++
++  /** Squared distance between the closest anchor points of the item's group and the rest. */
++  private static double airlineSquare(Item item, int net) {
++    if (net <= 0) {
++      return 0.0;
++    }
++    Set<Item> unconnected = item.getUnconnectedSet(net);
++    if (unconnected.isEmpty()) {
++      return 0.0;
++    }
++    List<FloatPoint> from = anchors(item.getConnectedSet(net));
++    List<FloatPoint> to = anchors(unconnected);
++    double best = Double.MAX_VALUE;
++    for (FloatPoint a : from) {
++      for (FloatPoint b : to) {
++        best = Math.min(best, a.distanceSquare(b));
++      }
++    }
++    return best == Double.MAX_VALUE ? 0.0 : best;
++  }
++
++  private static List<FloatPoint> anchors(Collection<Item> items) {
++    List<FloatPoint> result = new ArrayList<>();
++    for (Item item : items) {
++      if (item instanceof DrillItem drillItem) {
++        result.add(drillItem.getCenter().toFloat());
++      } else if (item instanceof Trace trace) {
++        result.add(trace.firstCorner().toFloat());
++        result.add(trace.lastCorner().toFloat());
++      } else {
++        IntBox box = item.boundingBox();
++        result.add(new FloatPoint((box.ll.x + box.ur.x) / 2.0, (box.ll.y + box.ur.y) / 2.0));
++      }
++    }
++    return result;
++  }
++
++  private static int maxPinDensity(Item item, int net, Map<Integer, Integer> pinDensity) {
++    if (net <= 0) {
++      return 0;
++    }
++    int best = 0;
++    for (Item member : item.getConnectedSet(net)) {
++      if (member instanceof Pin) {
++        best = Math.max(best, pinDensity.getOrDefault(member.getId(), 0));
++      }
++    }
++    return best;
++  }
++
++  /** Number of other pin centres within the density radius, by pin id. */
++  private Map<Integer, Integer> pinDensities(RoutingBoard board) {
++    List<Pin> pins = new ArrayList<>(board.getPins());
++    List<FloatPoint> centres = new ArrayList<>(pins.size());
++    for (Pin pin : pins) {
++      centres.add(pin.getCenter().toFloat());
++    }
++    double radius = densityRadiusUm * board.communication.getResolution(Unit.UM);
++    int[] counts = neighbourCounts(centres, radius);
++    Map<Integer, Integer> result = new HashMap<>();
++    for (int i = 0; i < pins.size(); i++) {
++      result.put(pins.get(i).getId(), counts[i]);
++    }
++    return result;
++  }
++
++  /** For every point, the number of other points within {@code radius}, using a uniform grid. */
++  static int[] neighbourCounts(List<FloatPoint> points, double radius) {
++    int[] counts = new int[points.size()];
++    if (points.isEmpty() || radius <= 0) {
++      return counts;
++    }
++    Map<Long, List<Integer>> grid = new HashMap<>();
++    for (int i = 0; i < points.size(); i++) {
++      grid.computeIfAbsent(cell(points.get(i), radius), k -> new ArrayList<>()).add(i);
++    }
++    double radiusSquare = radius * radius;
++    for (int i = 0; i < points.size(); i++) {
++      FloatPoint p = points.get(i);
++      long cx = (long) Math.floor(p.x / radius);
++      long cy = (long) Math.floor(p.y / radius);
++      int count = 0;
++      for (long dx = -1; dx <= 1; dx++) {
++        for (long dy = -1; dy <= 1; dy++) {
++          List<Integer> bucket = grid.get(cellKey(cx + dx, cy + dy));
++          if (bucket == null) {
++            continue;
++          }
++          for (int j : bucket) {
++            if (j != i && p.distanceSquare(points.get(j)) <= radiusSquare) {
++              count++;
++            }
++          }
++        }
++      }
++      counts[i] = count;
++    }
++    return counts;
++  }
++
++  private static long cell(FloatPoint p, double size) {
++    return cellKey((long) Math.floor(p.x / size), (long) Math.floor(p.y / size));
++  }
++
++  private static long cellKey(long cx, long cy) {
++    return (cx << 32) ^ (cy & 0xffffffffL);
++  }
++
++  /** The finest pitch of a fine-pitch component on each net, in micrometres. */
++  private Map<Integer, Double> finePitchNets(RoutingBoard board) {
++    double unitsPerUm = board.communication.getResolution(Unit.UM);
++    Map<Integer, List<Pin>> pinsByComponent = new TreeMap<>();
++    for (Pin pin : board.getPins()) {
++      pinsByComponent.computeIfAbsent(pin.getComponentId(), k -> new ArrayList<>()).add(pin);
++    }
++    Map<Integer, Double> result = new HashMap<>();
++    for (List<Pin> componentPins : pinsByComponent.values()) {
++      List<FloatPoint> centres = new ArrayList<>(componentPins.size());
++      for (Pin pin : componentPins) {
++        centres.add(pin.getCenter().toFloat());
++      }
++      double pitchUm = minPitch(centres) / unitsPerUm;
++      if (pitchUm > finePitchUm) {
++        continue;
++      }
++      for (Pin pin : componentPins) {
++        for (int i = 0; i < pin.netCount(); i++) {
++          result.merge(pin.getNetNumber(i), pitchUm, Math::min);
++        }
++      }
++    }
++    return result;
++  }
++
++  /** Smallest distance between two distinct points, or {@link Double#MAX_VALUE} if none. */
++  static double minPitch(List<FloatPoint> points) {
++    double best = Double.MAX_VALUE;
++    for (int i = 0; i < points.size(); i++) {
++      for (int j = i + 1; j < points.size(); j++) {
++        double distance = points.get(i).distance(points.get(j));
++        if (distance > 0) {
++          best = Math.min(best, distance);
++        }
++      }
++    }
++    return best;
++  }
++}
+diff --git a/src/test/java/app/freerouting/autoroute/pipeline/RouteOrderTest.java b/src/test/java/app/freerouting/autoroute/pipeline/RouteOrderTest.java
+new file mode 100644
+index 00000000..f17eb612
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/pipeline/RouteOrderTest.java
+@@ -0,0 +1,184 @@
++package app.freerouting.autoroute.pipeline;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertInstanceOf;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import app.freerouting.autoroute.AutorouteAttemptState;
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Pin;
++import app.freerouting.geometry.planar.FloatPoint;
++import app.freerouting.io.BoardReadResult;
++import app.freerouting.io.specctra.DsnReader;
++import java.io.FileInputStream;
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Random;
++import java.util.Set;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.EnumSource;
++
++class RouteOrderTest {
++
++  @Test
++  void unsetBlankAndDefaultKeepTheRouterOrder() {
++    assertNull(RouteOrder.parseMode(null));
++    assertNull(RouteOrder.parseMode(""));
++    assertNull(RouteOrder.parseMode("  default "));
++    assertNull(RouteOrder.parseMode("no_such_order"));
++  }
++
++  @Test
++  void everyModeParsesFromItsKey() {
++    for (RouteOrder.Mode mode : RouteOrder.Mode.values()) {
++      assertEquals(mode, RouteOrder.parseMode(mode.key));
++      assertEquals(mode, RouteOrder.parseMode(" " + mode.key.toUpperCase() + " "));
++    }
++  }
++
++  @Test
++  void sortsByKeyThenNetThenId() {
++    List<RouteOrder.Keyed> entries =
++        List.of(
++            new RouteOrder.Keyed(null, 2.0, 1, 10),
++            new RouteOrder.Keyed(null, 1.0, 5, 30),
++            new RouteOrder.Keyed(null, 1.0, 5, 20),
++            new RouteOrder.Keyed(null, 1.0, 3, 40),
++            new RouteOrder.Keyed(null, -1.0, 9, 50));
++    List<Integer> ids = new ArrayList<>();
++    for (RouteOrder.Keyed entry : RouteOrder.sorted(entries)) {
++      ids.add(entry.id());
++    }
++    assertEquals(List.of(50, 40, 20, 30, 10), ids);
++  }
++
++  @Test
++  void historyRecordsFailuresAndHalvesDifficultyEachPass() {
++    RouteOrder order = new RouteOrder(RouteOrder.Mode.LEARNED, 650.0, 1500.0);
++    order.recordAttempt(7, AutorouteAttemptState.FAILED, List.of());
++    order.recordAttempt(7, AutorouteAttemptState.ROUTED, List.of());
++    order.recordAttempt(8, AutorouteAttemptState.ALREADY_CONNECTED, List.of());
++    assertEquals(0, order.failuresLastPass(7));
++    order.endPass();
++    assertEquals(1, order.failuresLastPass(7));
++    assertEquals(0, order.failuresLastPass(8));
++    assertEquals(RouteOrder.FAILURE_WEIGHT, order.difficulty(7));
++    order.endPass();
++    assertEquals(0, order.failuresLastPass(7));
++    assertEquals(RouteOrder.FAILURE_WEIGHT / 2, order.difficulty(7));
++  }
++
++  @Test
++  void failureStatesMatchThePassRunner() {
++    assertTrue(RouteOrder.isFailure(AutorouteAttemptState.FAILED));
++    assertTrue(RouteOrder.isFailure(AutorouteAttemptState.INSERT_ERROR));
++    assertEquals(false, RouteOrder.isFailure(AutorouteAttemptState.ROUTED));
++    assertEquals(false, RouteOrder.isFailure(AutorouteAttemptState.ALREADY_CONNECTED));
++    assertEquals(false, RouteOrder.isFailure(AutorouteAttemptState.NO_UNCONNECTED_NETS));
++    assertEquals(false, RouteOrder.isFailure(AutorouteAttemptState.CONNECTED_TO_PLANE));
++  }
++
++  @Test
++  void gridNeighbourCountsMatchBruteForce() {
++    Random random = new Random(42);
++    List<FloatPoint> points = new ArrayList<>();
++    for (int i = 0; i < 400; i++) {
++      points.add(new FloatPoint(random.nextInt(20000) - 10000, random.nextInt(20000) - 10000));
++    }
++    double radius = 1500.0;
++    int[] counts = RouteOrder.neighbourCounts(points, radius);
++    for (int i = 0; i < points.size(); i++) {
++      int expected = 0;
++      for (int j = 0; j < points.size(); j++) {
++        if (i != j && points.get(i).distance(points.get(j)) <= radius) {
++          expected++;
++        }
++      }
++      assertEquals(expected, counts[i], "point " + i);
++    }
++  }
++
++  @Test
++  void minPitchIgnoresCoincidentPoints() {
++    List<FloatPoint> points =
++        List.of(
++            new FloatPoint(0, 0),
++            new FloatPoint(0, 0),
++            new FloatPoint(500, 0),
++            new FloatPoint(500, 2000));
++    assertEquals(500.0, RouteOrder.minPitch(points), 1e-9);
++    assertEquals(Double.MAX_VALUE, RouteOrder.minPitch(List.of(new FloatPoint(1, 1))));
++  }
++
++  @ParameterizedTest
++  @EnumSource(RouteOrder.Mode.class)
++  void orderIsPermutationIndependentOfInputOrder(RouteOrder.Mode mode) throws IOException {
++    RoutingBoard board = loadCaniot();
++    List<Item> pins = new ArrayList<>(board.getPins());
++    RouteOrder order = new RouteOrder(mode, 650.0, 1500.0);
++
++    List<Item> forward = new ArrayList<>(pins);
++    order.apply(forward, board, item -> false);
++    List<Item> shuffled = new ArrayList<>(pins);
++    Collections.shuffle(shuffled, new Random(7));
++    order.apply(shuffled, board, item -> false);
++
++    assertEquals(pins.size(), forward.size());
++    assertEquals(new HashSet<>(pins), new HashSet<>(forward));
++    assertEquals(ids(forward), ids(shuffled));
++  }
++
++  @Test
++  void planeItemsStayInFrontInTheirOrder() throws IOException {
++    RoutingBoard board = loadCaniot();
++    List<Item> pins = new ArrayList<>(board.getPins());
++    Item firstPlane = pins.get(pins.size() - 1);
++    Item secondPlane = pins.get(0);
++    Set<Item> planes = Set.of(firstPlane, secondPlane);
++    List<Item> items = new ArrayList<>(pins);
++    Collections.swap(items, 0, items.size() - 1);
++    new RouteOrder(RouteOrder.Mode.LONG_FIRST, 650.0, 1500.0).apply(items, board, planes::contains);
++    assertEquals(firstPlane, items.get(0));
++    assertEquals(secondPlane, items.get(1));
++  }
++
++  @Test
++  void finePitchFirstStartsWithTheLqfpNets() throws IOException {
++    RoutingBoard board = loadCaniot();
++    List<Item> items = new ArrayList<>(board.getPins());
++    new RouteOrder(RouteOrder.Mode.FINE_PITCH_FIRST, 650.0, 1500.0)
++        .apply(items, board, item -> false);
++    Pin first = (Pin) items.get(0);
++    Set<Integer> u1Nets = new HashSet<>();
++    for (Pin pin : board.getPins()) {
++      if ("U1".equals(board.components.get(pin.getComponentId()).name)) {
++        for (int i = 0; i < pin.netCount(); i++) {
++          u1Nets.add(pin.getNetNumber(i));
++        }
++      }
++    }
++    assertTrue(u1Nets.contains(first.getNetNumber(0)), "first item is on a U1 net");
++  }
++
++  private static List<Integer> ids(List<Item> items) {
++    List<Integer> result = new ArrayList<>();
++    for (Item item : items) {
++      result.add(item.getId());
++    }
++    return result;
++  }
++
++  private static RoutingBoard loadCaniot() throws IOException {
++    try (FileInputStream in = new FileInputStream("fixtures/Issue269-caniot-tiny-arm.dsn")) {
++      BoardReadResult result = DsnReader.readBoard(in, null, null, "caniot");
++      assertInstanceOf(BoardReadResult.Success.class, result);
++      return (RoutingBoard) ((BoardReadResult.Success) result).board();
++    }
++  }
++}

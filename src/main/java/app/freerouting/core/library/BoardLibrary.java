@@ -4,6 +4,7 @@ import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.datastructures.UndoableObjects;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
@@ -23,6 +24,13 @@ public class BoardLibrary implements Serializable {
    */
   private List<Padstack> viaPadstacks;
 
+  /**
+   * Names of via padstacks the design asks for that the library does not contain, for example
+   * because their size was unset and they could not be read. Only meaningful right after reading a
+   * design, so it is not saved with the board.
+   */
+  private transient List<String> missingViaPadstacks;
+
   /** Creates a new instance of BoardLibrary. */
   public BoardLibrary(Padstacks padstacks, Packages packages) {
     this.padstacks = padstacks;
@@ -32,6 +40,21 @@ public class BoardLibrary implements Serializable {
 
   /** Creates a new instance of BoardLibrary. */
   public BoardLibrary() {}
+
+  /** Notes a via padstack the design asks for that the library does not contain. */
+  public void noteMissingViaPadstack(String name) {
+    if (this.missingViaPadstacks == null) {
+      this.missingViaPadstacks = new ArrayList<>();
+    }
+    if (!this.missingViaPadstacks.contains(name)) {
+      this.missingViaPadstacks.add(name);
+    }
+  }
+
+  /** The via padstacks the design asks for that the library does not contain, in reading order. */
+  public List<String> getMissingViaPadstacks() {
+    return this.missingViaPadstacks == null ? List.of() : List.copyOf(this.missingViaPadstacks);
+  }
 
   /** The count of padstacks from this.padstacks, which can be used in routing. */
   public int viaPadstackCount() {

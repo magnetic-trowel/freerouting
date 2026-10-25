@@ -8,6 +8,7 @@ import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.BoardOutline;
+import app.freerouting.board.model.structure.Unit;
 import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.util.TextManager;
 import java.util.ArrayList;
@@ -42,6 +43,12 @@ public class ClearanceViolation implements ItemInfoPrinter.Printable {
   public final double expectedClearance;
   public final double actualClearance;
 
+  /**
+   * True if only the hole clearance is violated: one item comes too close to the drill hole of the
+   * other although it keeps the copper clearance. The clearances are then measured from the hole.
+   */
+  public final boolean holeClearance;
+
   /** Creates a new instance of ClearanceViolation. */
   public ClearanceViolation(
       Item firstItem,
@@ -50,12 +57,25 @@ public class ClearanceViolation implements ItemInfoPrinter.Printable {
       int layer,
       double expectedClearance,
       double actualClearance) {
+    this(firstItem, secondItem, shape, layer, expectedClearance, actualClearance, false);
+  }
+
+  /** Creates a new instance of ClearanceViolation, of the hole clearance if holeClearance. */
+  public ClearanceViolation(
+      Item firstItem,
+      Item secondItem,
+      ConvexShape shape,
+      int layer,
+      double expectedClearance,
+      double actualClearance,
+      boolean holeClearance) {
     this.firstItem = firstItem;
     this.secondItem = secondItem;
     this.shape = shape;
     this.layer = layer;
     this.expectedClearance = expectedClearance;
     this.actualClearance = actualClearance;
+    this.holeClearance = holeClearance;
   }
 
   /**
@@ -165,11 +185,15 @@ public class ClearanceViolation implements ItemInfoPrinter.Printable {
     secondItem.printInfo(printer, locale);
     printer.newline();
     printer.indent();
+    double mmPerBoardUnit =
+        firstItem.board != null && firstItem.board.communication != null
+            ? firstItem.board.communication.boardUnitSize(Unit.MM)
+            : 1.0 / 10000.0;
     String clearanceViolationInfoExpectedClearance =
         tm.getText(
             "clearanceViolationInfoExpectedClearance",
-            "%.4f".formatted(this.expectedClearance / 10000.0),
-            "%.4f".formatted(this.actualClearance / 10000.0));
+            "%.4f".formatted(this.expectedClearance * mmPerBoardUnit),
+            "%.4f".formatted(this.actualClearance * mmPerBoardUnit));
     printer.append(clearanceViolationInfoExpectedClearance);
   }
 }

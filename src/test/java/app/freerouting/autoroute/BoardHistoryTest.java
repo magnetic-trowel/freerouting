@@ -4,18 +4,21 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.board.actions.ItemIdGenerator;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.state.BoardObserverAdaptor;
 import app.freerouting.core.RoutingJob;
+import app.freerouting.drc.ClearanceBaseline;
 import app.freerouting.io.BoardReadResult;
 import app.freerouting.management.HeadlessBoardManager;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.DefaultSettings;
 import java.io.FileInputStream;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -63,6 +66,19 @@ class BoardHistoryTest {
         board1.getHash(),
         restoredBoard.getHash(),
         "Restored board should be functionally identical to the original");
+  }
+
+  @Test
+  void restoredBoardKeepsTheClearanceBaseline() {
+    // The baseline is transient: without it every pre-existing violation counts as new on the
+    // restored board, which sent the fallback runner after violations that were in the input.
+    ClearanceBaseline baseline = new ClearanceBaseline(List.of());
+    board1.clearanceBaseline = baseline;
+    BoardHistory history = new BoardHistory(routerSettings);
+    history.add(board1);
+
+    assertSame(baseline, history.restoreBestBoard().clearanceBaseline);
+    assertSame(baseline, history.restoreLastAdded().clearanceBaseline);
   }
 
   @Test
@@ -139,5 +155,36 @@ class BoardHistoryTest {
         best.getHash(),
         "The better-scoring board (board1) must be retained when a worse board is added at "
             + "capacity");
+  }
+
+  @Test
+  void restoreLastAddedReturnsTheLastBoardEvenWhenAnEarlierOneScoresBetter() {
+    BoardHistory history = new BoardHistory(routerSettings);
+    history.add(board1);
+    history.add(board2);
+
+    RoutingBoard last = history.restoreLastAdded();
+
+    assertNotNull(last);
+    assertEquals(board2.getHash(), last.getHash());
+  }
+
+  @Test
+  void restoreLastAddedFindsABoardThatWasAlreadyInTheHistory() {
+    BoardHistory history = new BoardHistory(routerSettings);
+    history.add(board2);
+    history.add(board1);
+    history.add(board2);
+
+    assertEquals(board2.getHash(), history.restoreLastAdded().getHash());
+  }
+
+  @Test
+  void restoreLastAddedIsNullWhenTheHistoryDidNotKeepTheBoard() {
+    BoardHistory history = new BoardHistory(routerSettings, 1);
+    history.add(board1);
+    history.add(board2);
+
+    assertEquals(null, history.restoreLastAdded());
   }
 }

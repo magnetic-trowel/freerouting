@@ -28,7 +28,6 @@ import java.awt.Dimension;
 import java.awt.Toolkit;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
@@ -493,10 +492,6 @@ public class Freerouting {
         .collect(Collectors.toSet());
   }
 
-  private static Path resolveLogPath(String input, Path defaultDir) {
-    return app.freerouting.startup.LoggingBootstrap.resolveLogPath(input, defaultDir);
-  }
-
   private static boolean compareBoardFiles(String file1Path, String file2Path) {
     return app.freerouting.cli.BenchmarkAndCompareCommands.compareBoardFiles(file1Path, file2Path);
   }
@@ -529,12 +524,14 @@ public class Freerouting {
       System.setOut(System.err);
     }
 
-    // Set up user-data path and logging configuration BEFORE any logging occurs
+    // Set up the user-data path, then load the settings (logging to the console only), then
+    // configure logging from them.
     UserDataPathResolver.ResolvedUserDataPath userdataPath =
         UserDataPathResolver.resolveAndLock(args);
-
-    LoggingBootstrap.LoggingConfig loggingConfig =
-        LoggingBootstrap.initialize(args, userdataPath.path(), userdataPath.source());
+    LoggingBootstrap.initializeForStartup();
+    globalSettings = GlobalSettingsBootstrap.loadSettings(args);
+    final LoggingBootstrap.LoggingConfig loggingConfig =
+        LoggingBootstrap.initialize(globalSettings, userdataPath.path(), userdataPath.source());
 
     // NOW we can start logging - log4j2 will initialize with our configuration
     FRLogger.traceEntry("MainApplication.main()");
@@ -559,7 +556,7 @@ public class Freerouting {
     FRLogger.debug("[startup] log file       : " + loggingConfig.fileLoggingLocation());
     Thread.setDefaultUncaughtExceptionHandler(new DefaultExceptionHandler());
 
-    globalSettings = GlobalSettingsBootstrap.initialize(args, loggingConfig.fileLoggingLocation());
+    GlobalSettingsBootstrap.recordRuntimeEnvironment(globalSettings, args, false);
 
     // Warn if mcp_server.stdio was set in freerouting.json but not via CLI/env.
     if (!isStdioMode
@@ -639,10 +636,15 @@ public class Freerouting {
     }
 
     // Disable GUI and API if in DRC-only mode
+    // Runtime state below (modes, whether a server started, derived addresses) is for this
+    // process only and must not be saved to freerouting.json by a later GUI save.
     if (globalSettings.drcReportFile != null) {
-      globalSettings.guiSettings.isEnabled = false;
-      globalSettings.apiServerSettings.isEnabled = false;
-      globalSettings.mcpServerSettings.isEnabled = false;
+      globalSettings.applyProcessOnly(
+          () -> {
+            globalSettings.guiSettings.isEnabled = false;
+            globalSettings.apiServerSettings.isEnabled = false;
+            globalSettings.mcpServerSettings.isEnabled = false;
+          });
     }
 
     // Create the settings merger prototype based on the sources that will not change at runtime
@@ -656,7 +658,9 @@ public class Freerouting {
     // Initialize the API server
     if (globalSettings.apiServerSettings.isEnabled) {
       apiServer = initializeAPI(globalSettings.apiServerSettings);
-      globalSettings.apiServerSettings.isEnabled = apiServer != null;
+      boolean apiStarted = apiServer != null;
+      globalSettings.applyProcessOnly(
+          () -> globalSettings.apiServerSettings.isEnabled = apiStarted);
       globalSettings.apiServerSettings.isRunning = apiServer != null;
 
       if (apiServer != null
@@ -670,14 +674,18 @@ public class Freerouting {
           if (port <= 0) {
             port = connector.getPort();
           }
-          globalSettings.mcpServerSettings.targetApiBaseUrl = "http://127.0.0.1:" + port;
+          String targetApiBaseUrl = "http://127.0.0.1:" + port;
+          globalSettings.applyProcessOnly(
+              () -> globalSettings.mcpServerSettings.targetApiBaseUrl = targetApiBaseUrl);
         }
       }
     }
 
     if (globalSettings.mcpServerSettings.isEnabled) {
       mcpServer = initializeMCP(globalSettings.mcpServerSettings);
-      globalSettings.mcpServerSettings.isEnabled = mcpServer != null;
+      boolean mcpStarted = mcpServer != null;
+      globalSettings.applyProcessOnly(
+          () -> globalSettings.mcpServerSettings.isEnabled = mcpStarted);
       globalSettings.mcpServerSettings.isRunning = mcpServer != null;
 
       if (mcpServer != null && Boolean.TRUE.equals(globalSettings.mcpServerSettings.isStdioMode)) {
@@ -689,7 +697,7 @@ public class Freerouting {
     if (globalSettings.guiSettings.isEnabled) {
       if (!GuiManager.initializeGUI(globalSettings)) {
         FRLogger.error("Couldn't initialize the GUI", null);
-        globalSettings.guiSettings.isEnabled = false;
+        globalSettings.applyProcessOnly(() -> globalSettings.guiSettings.isEnabled = false);
       } else {
         globalSettings.guiSettings.isRunning = true;
       }

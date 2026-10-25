@@ -11,8 +11,8 @@ import app.freerouting.management.jobs.ThreadActionListener;
 import app.freerouting.settings.GlobalSettings;
 import java.awt.Graphics;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Abstract base class for running long-running interactive actions in background threads.
@@ -121,7 +121,8 @@ public abstract class InteractiveActionThread extends StoppableThread {
    *   <li>Autorouter aborted
    * </ul>
    */
-  protected List<ThreadActionListener> listeners = new ArrayList<>();
+  // Listeners may be added by the EDT after start() while the worker iterates them.
+  protected final List<ThreadActionListener> listeners = new CopyOnWriteArrayList<>();
 
   /**
    * Creates a new interactive action thread for the specified session port and run.

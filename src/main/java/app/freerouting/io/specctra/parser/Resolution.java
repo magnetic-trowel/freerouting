@@ -36,15 +36,18 @@ public class Resolution extends ScopeKeyword {
                 + "'");
         return false;
       }
-      scopeParameter.unit =
+      // Keep the previous unit when this one is unknown: DsnReader.readMetadata reads on after a
+      // failed resolution scope and must not build a board without a unit.
+      app.freerouting.board.model.structure.Unit unit =
           app.freerouting.board.model.structure.Unit.fromString((String) nextToken);
-      if (scopeParameter.unit == null) {
+      if (unit == null) {
         FRLogger.warn(
             "Resolution.read_scope: unit mil, inch or mm expected at '"
                 + scopeParameter.scanner.getScopeIdentifier()
                 + "'");
         return false;
       }
+      scopeParameter.unit = unit;
       // read the scale factor
       nextToken = scopeParameter.scanner.nextToken();
       if (!(nextToken instanceof Integer)) {
@@ -53,6 +56,10 @@ public class Resolution extends ScopeKeyword {
                 + scopeParameter.scanner.getScopeIdentifier()
                 + "'");
         return false;
+      }
+      if ((Integer) nextToken <= 0) {
+        return scopeParameter.parseError(
+            "the (resolution ...) scope needs a positive number of units, found " + nextToken);
       }
       scopeParameter.resolution = (Integer) nextToken;
       // overread the closing bracket

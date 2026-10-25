@@ -1,0 +1,19 @@
+control head
+thr0 head --router.optimizer.improvement_threshold=0
+thr1 head --router.optimizer.improvement_threshold=1.0
+thr5 head --router.optimizer.improvement_threshold=5.0
+mp1 head --router.optimizer.max_passes=1
+mp2 head --router.optimizer.max_passes=2
+mp4 head --router.optimizer.max_passes=4
+dir_always head -Dfreerouting.exp.optimizer_preferred_directions=always
+dir_never head -Dfreerouting.exp.optimizer_preferred_directions=never
+dir_inverted head -Dfreerouting.exp.optimizer_preferred_directions=inverted
+ripup_increased_only head -Dfreerouting.exp.optimizer_ripup_phase=increased_only
+ripup_normal_only head -Dfreerouting.exp.optimizer_ripup_phase=normal_only
+sel_all head --router.optimizer.commit_selection=all
+sel_best_prefix head --router.optimizer.commit_selection=best_prefix
+sel_score_gated head --router.optimizer.commit_selection=score_gated
+commits1 head --router.optimizer.max_commits_per_pass=1
+commits8 head --router.optimizer.max_commits_per_pass=8
+failures12 head --router.optimizer.max_consecutive_failures=12
+failures25 head --router.optimizer.max_consecutive_failures=25

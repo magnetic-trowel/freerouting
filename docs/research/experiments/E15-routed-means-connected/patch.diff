@@ -1,0 +1,307 @@
+diff --git a/src/main/java/app/freerouting/autoroute/maze/AutorouteEngine.java b/src/main/java/app/freerouting/autoroute/maze/AutorouteEngine.java
+index d203da7a..cc05d2aa 100644
+--- a/src/main/java/app/freerouting/autoroute/maze/AutorouteEngine.java
++++ b/src/main/java/app/freerouting/autoroute/maze/AutorouteEngine.java
+@@ -17,6 +17,8 @@ import app.freerouting.autoroute.path.FoundConnectionInserter;
+ import app.freerouting.autoroute.path.FoundConnectionLocator;
+ import app.freerouting.board.facade.RoutingBoard;
+ import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Trace;
++import app.freerouting.board.model.items.Via;
+ import app.freerouting.board.searchtree.SearchTreeObject;
+ import app.freerouting.board.searchtree.ShapeSearchTree;
+ import app.freerouting.datastructures.Stoppable;
+@@ -35,12 +37,25 @@ import java.util.Map;
+ import java.util.Set;
+ import java.util.SortedSet;
+ import java.util.TreeSet;
++import java.util.concurrent.atomic.AtomicLong;
+ 
+ /** Temporary autoroute data stored on the RoutingBoard. */
+ public class AutorouteEngine {
+ 
+   public static final int TRACE_WIDTH_TOLERANCE = 2;
+ 
++  /**
++   * Experiment E15 ({@code -Dfreerouting.exp.verify_connection=true}): a connection counts as
++   * routed only if its start and destination sets are connected after the insertion; otherwise the
++   * new traces and vias of the net are removed and the attempt reports FAILED. Off by default.
++   */
++  static final boolean VERIFY_CONNECTION = Boolean.getBoolean("freerouting.exp.verify_connection");
++
++  private static final AtomicLong VERIFIED_CONNECTIONS = new AtomicLong();
++  private static final AtomicLong UNCONNECTED_CONNECTIONS = new AtomicLong();
++  private static final AtomicLong UNVERIFIABLE_CONNECTIONS = new AtomicLong();
++  private static final AtomicLong VERIFY_NANOS = new AtomicLong();
++
+   /**
+    * The current search tree used in autorouting. It depends on the trac clearance class used in the
+    * autoroute algorithm.
+@@ -223,6 +238,8 @@ public class AutorouteEngine {
+           "No new connections were made between " + describeConnection(startSet, destSet) + ".");
+     }
+ 
++    final int maxItemIdBeforeInsert =
++        VERIFY_CONNECTION ? board.communication.idGenerator.maxGeneratedId() : 0;
+     // Delete the ripped connections while observers see the insert that follows.
+     boolean observersActivated = !this.board.observersActive();
+     if (observersActivated) {
+@@ -243,9 +260,113 @@ public class AutorouteEngine {
+               + ", because the new connection could not be inserted.");
+     }
+ 
++    if (VERIFY_CONNECTION) {
++      AutorouteAttemptResult unconnected =
++          verifyInsertedConnection(startSet, destSet, maxItemIdBeforeInsert);
++      if (unconnected != null) {
++        return unconnected;
++      }
++    }
+     return new AutorouteAttemptResult(AutorouteAttemptState.ROUTED);
+   }
+ 
++  /**
++   * Returns null if some start item still on the board is now connected to some destination item
++   * still on the board, or if no such pair is left to check. Otherwise removes the traces and vias
++   * of the net that the insertion created (ids above {@code maxItemIdBefore}) and returns FAILED.
++   */
++  private AutorouteAttemptResult verifyInsertedConnection(
++      Set<Item> startSet, Set<Item> destSet, int maxItemIdBefore) {
++    long start = System.nanoTime();
++    try {
++      Boolean connected = connectionState(startSet, destSet, this.netNumber);
++      if (connected == null) {
++        UNVERIFIABLE_CONNECTIONS.incrementAndGet();
++        return null;
++      }
++      if (connected) {
++        VERIFIED_CONNECTIONS.incrementAndGet();
++        return null;
++      }
++      UNCONNECTED_CONNECTIONS.incrementAndGet();
++      List<Item> newItems = new ArrayList<>();
++      for (Item currentItem : board.getConnectableItems(this.netNumber)) {
++        if (currentItem.getId() > maxItemIdBefore
++            && (currentItem instanceof Trace || currentItem instanceof Via)) {
++          newItems.add(currentItem);
++        }
++      }
++      board.removeItems(newItems);
++      FRLogger.trace(
++          "AutorouteEngine.verify_inserted_connection",
++          "unconnected_after_insert",
++          "removed_new_items=" + newItems.size() + ", " + describeConnection(startSet, destSet),
++          "Net #" + this.netNumber,
++          null);
++      return new AutorouteAttemptResult(
++          AutorouteAttemptState.FAILED,
++          "Failed to route connection between "
++              + describeConnection(startSet, destSet)
++              + ", because the inserted path does not connect them.");
++    } finally {
++      VERIFY_NANOS.addAndGet(System.nanoTime() - start);
++    }
++  }
++
++  /**
++   * Returns TRUE if some item of {@code startSet} still on the board is connected to some item of
++   * {@code destSet} still on the board, FALSE if not, and null if one of the sets has no item left
++   * on the board. The start set may hold several components (the unconnected rest of a net), so
++   * each component is visited once.
++   */
++  static Boolean connectionState(Set<Item> startSet, Set<Item> destSet, int netNumber) {
++    boolean anyDest = false;
++    for (Item destItem : destSet) {
++      if (destItem.isOnTheBoard()) {
++        anyDest = true;
++        break;
++      }
++    }
++    if (!anyDest) {
++      return null;
++    }
++    boolean anyStart = false;
++    Set<Item> visited = new TreeSet<>();
++    for (Item startItem : startSet) {
++      if (!startItem.isOnTheBoard() || visited.contains(startItem)) {
++        continue;
++      }
++      anyStart = true;
++      Set<Item> component = startItem.getConnectedSet(netNumber);
++      for (Item member : component) {
++        if (destSet.contains(member)) {
++          return Boolean.TRUE;
++        }
++      }
++      visited.addAll(component);
++    }
++    return anyStart ? Boolean.FALSE : null;
++  }
++
++  /**
++   * Returns a one-line summary of experiment E15 for the log, or null when it is off. The counts
++   * are cumulative for the JVM.
++   */
++  public static String verifyConnectionSummary() {
++    if (!VERIFY_CONNECTION) {
++      return null;
++    }
++    return "Experiment verify_connection: "
++        + VERIFIED_CONNECTIONS.get()
++        + " connection(s) verified, "
++        + UNCONNECTED_CONNECTIONS.get()
++        + " reported routed but unconnected (now FAILED), "
++        + UNVERIFIABLE_CONNECTIONS.get()
++        + " not verifiable, "
++        + String.format(java.util.Locale.US, "%.3f", VERIFY_NANOS.get() / 1e9)
++        + " s spent checking.";
++  }
++
+   /**
+    * Removes the connections of {@code rippedItems} the same way a commit does after the maze.
+    * Returns the nets whose tails were removed.
+diff --git a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+index 4a0812e2..2651ef81 100644
+--- a/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
++++ b/src/main/java/app/freerouting/autoroute/pipeline/AutorouteBatchLoop.java
+@@ -14,6 +14,7 @@ import static app.freerouting.autoroute.pipeline.BatchAutorouter.STOP_AT_PASS_MO
+ import app.freerouting.autoroute.BoardHistory;
+ import app.freerouting.autoroute.PerformanceProfiler;
+ import app.freerouting.autoroute.events.TaskStateChangedEvent;
++import app.freerouting.autoroute.maze.AutorouteEngine;
+ import app.freerouting.board.facade.RoutingBoard;
+ import app.freerouting.board.model.items.Item;
+ import app.freerouting.core.RouterCounters;
+@@ -692,6 +693,11 @@ final class AutorouteBatchLoop {
+               + " did not route.");
+     }
+ 
++    String verifyConnectionSummary = AutorouteEngine.verifyConnectionSummary();
++    if (verifyConnectionSummary != null && !isOptimizerAutorouter) {
++      job.logInfo(verifyConnectionSummary);
++    }
++
+     // Print all profiling results at the end of session
+     PerformanceProfiler.printResults();
+     PerformanceProfiler.reset();
+diff --git a/src/test/java/app/freerouting/autoroute/maze/AutorouteEngineConnectionStateTest.java b/src/test/java/app/freerouting/autoroute/maze/AutorouteEngineConnectionStateTest.java
+new file mode 100644
+index 00000000..7b11bf69
+--- /dev/null
++++ b/src/test/java/app/freerouting/autoroute/maze/AutorouteEngineConnectionStateTest.java
+@@ -0,0 +1,115 @@
++package app.freerouting.autoroute.maze;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNull;
++
++import app.freerouting.board.facade.RoutingBoard;
++import app.freerouting.board.model.items.Item;
++import app.freerouting.board.model.items.Via;
++import app.freerouting.board.model.structure.FixedState;
++import app.freerouting.board.model.structure.Layer;
++import app.freerouting.board.model.structure.LayerStructure;
++import app.freerouting.board.state.Communication;
++import app.freerouting.core.library.Padstack;
++import app.freerouting.geometry.planar.ConvexShape;
++import app.freerouting.geometry.planar.IntBox;
++import app.freerouting.geometry.planar.IntPoint;
++import app.freerouting.geometry.planar.Point;
++import app.freerouting.geometry.planar.PolylineShape;
++import app.freerouting.geometry.planar.TileShape;
++import app.freerouting.rules.BoardRules;
++import app.freerouting.rules.ClearanceMatrix;
++import app.freerouting.rules.Net;
++import app.freerouting.rules.ViaRule;
++import java.util.Set;
++import java.util.TreeSet;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++/** Tests the connection check of experiment E15 ({@code freerouting.exp.verify_connection}). */
++class AutorouteEngineConnectionStateTest {
++
++  private RoutingBoard board;
++  private Net net;
++  private Padstack viaPadstack;
++
++  @BeforeEach
++  void setUp() {
++    LayerStructure layerStructure =
++        new LayerStructure(new Layer[] {new Layer("Top", true), new Layer("Bottom", true)});
++    BoardRules boardRules =
++        new BoardRules(layerStructure, ClearanceMatrix.getDefaultInstance(layerStructure, 10));
++    boardRules.createDefaultNetClass();
++    ViaRule viaRule = new ViaRule("defaultViaRule");
++    boardRules.viaRules.add(viaRule);
++    boardRules.getDefaultNetClass().setViaRule(viaRule);
++    board =
++        new RoutingBoard(
++            new IntBox(0, 0, 10000000, 10000000),
++            layerStructure,
++            new PolylineShape[] {TileShape.getInstance(0, 0, 10000000, 10000000)},
++            0,
++            boardRules,
++            new Communication());
++    net = board.rules.nets.add("N1", 1, false);
++    board.library.padstacks = new app.freerouting.core.library.Padstacks(layerStructure);
++    ConvexShape square = TileShape.getInstance(-100000, -100000, 100000, 100000);
++    viaPadstack =
++        board.library.padstacks.add("TestVia", new ConvexShape[] {square, square}, true, false);
++  }
++
++  private Via via(int x, int y) {
++    return board.insertVia(
++        viaPadstack, new IntPoint(x, y), new int[] {net.netNumber}, 0, FixedState.UNFIXED, true);
++  }
++
++  private static Set<Item> setOf(Item... items) {
++    Set<Item> result = new TreeSet<>();
++    for (Item item : items) {
++      result.add(item);
++    }
++    return result;
++  }
++
++  @Test
++  void connectedWhenTraceJoinsStartAndDestination() {
++    Via a = via(1000000, 1000000);
++    Via b = via(3000000, 1000000);
++    board.insertTrace(
++        new Point[] {new IntPoint(1000000, 1000000), new IntPoint(3000000, 1000000)},
++        0,
++        50000,
++        new int[] {net.netNumber},
++        0,
++        FixedState.UNFIXED);
++
++    assertEquals(Boolean.TRUE, AutorouteEngine.connectionState(setOf(a), setOf(b), net.netNumber));
++  }
++
++  @Test
++  void notConnectedWhenTheTraceStopsShort() {
++    Via a = via(1000000, 1000000);
++    Via b = via(3000000, 1000000);
++    Via c = via(5000000, 1000000);
++    board.insertTrace(
++        new Point[] {new IntPoint(1000000, 1000000), new IntPoint(2500000, 1000000)},
++        0,
++        50000,
++        new int[] {net.netNumber},
++        0,
++        FixedState.UNFIXED);
++
++    // The start set may hold several components; none of them reaches b.
++    assertEquals(
++        Boolean.FALSE, AutorouteEngine.connectionState(setOf(a, c), setOf(b), net.netNumber));
++  }
++
++  @Test
++  void unverifiableWhenTheDestinationLeftTheBoard() {
++    Via a = via(1000000, 1000000);
++    Via b = via(3000000, 1000000);
++    board.removeItem(b);
++
++    assertNull(AutorouteEngine.connectionState(setOf(a), setOf(b), net.netNumber));
++  }
++}

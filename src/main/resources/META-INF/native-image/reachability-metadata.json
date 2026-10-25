@@ -61,10 +61,6 @@
       "type": "app.freerouting.analytics.dto.Traits"
     },
     {
-      "type": "app.freerouting.autoroute.RoutingFailureLog",
-      "serializable": true
-    },
-    {
       "type": "app.freerouting.board.actions.ItemIdGenerator",
       "serializable": true
     },
@@ -1015,6 +1011,15 @@
           "name": "isRunning"
         },
         {
+          "name": "localFileRoot"
+        },
+        {
+          "name": "maxFinishedJobBoards"
+        },
+        {
+          "name": "maxFinishedJobs"
+        },
+        {
           "name": "maxParallelJobs"
         },
         {
@@ -1049,9 +1054,6 @@
         },
         {
           "name": "maxThreads"
-        },
-        {
-          "name": "saveIntermediateStages"
         }
       ],
       "methods": [
@@ -1124,9 +1126,6 @@
         },
         {
           "name": "maxItems"
-        },
-        {
-          "name": "maxMillisecondsPerPin"
         },
         {
           "name": "maxPasses"
@@ -1434,6 +1433,9 @@
         },
         {
           "name": "isStdioMode"
+        },
+        {
+          "name": "localFileRoot"
         },
         {
           "name": "rateLimit"

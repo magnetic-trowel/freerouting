@@ -7,7 +7,6 @@ import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.BoardImage;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
-import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.Unit;
@@ -19,6 +18,9 @@ import app.freerouting.core.StoppableThread;
 import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.datastructures.UndoableObjects;
+import app.freerouting.drc.ClearanceBaseline;
+import app.freerouting.drc.ClearanceViolation;
+import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.RouterSettings;
@@ -28,7 +30,9 @@ import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -49,7 +53,6 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class BatchOptimizer extends NamedAlgorithm {
 
   protected final ProgressThrottler progressThrottler = new ProgressThrottler(1000);
-  protected ReadSortedRouteItems sortedRouteItems;
   // In the first passes the ripup costs are increased for better performance.
   protected boolean useIncreasedRipupCosts;
   // The minimum cumulative trace length that was reached during the optimization
@@ -58,6 +61,10 @@ public final class BatchOptimizer extends NamedAlgorithm {
   protected int totalItemsOptimized;
   protected Long deadlineMs;
   protected boolean isTimedOut;
+
+  /** Why the last {@link #runBatchLoop()} stopped; null before it ran. */
+  public StopReason lastStopReason;
+
   protected RoutingBoard bestBoard;
   protected float bestScore;
   protected int bestIncompleteCount;
@@ -66,6 +73,12 @@ public final class BatchOptimizer extends NamedAlgorithm {
   protected final AtomicLong workerCpuNanos = new AtomicLong(0);
   protected final AtomicLong workerAllocBytes = new AtomicLong(0);
   protected volatile FloatPoint currentPosition = null;
+
+  /**
+   * The clearance violations of the board the optimizer started on. A candidate, commit or pass is
+   * rejected if it has a violation that is not one of them.
+   */
+  private ClearanceBaseline startViolations = new ClearanceBaseline(List.of());
 
   /** The commits after the best one in the last pass, in the order they were made. */
   private final List<ChangeSet> passCommits = new ArrayList<>();
@@ -107,6 +120,21 @@ public final class BatchOptimizer extends NamedAlgorithm {
               + "' will be used instead.");
       job.routerSettings.optimizer.algorithm = optimizer.getId();
     }
+  }
+
+  /** Why {@link #runBatchLoop()} stopped. */
+  public enum StopReason {
+    /** A pre-flight guard found nothing to optimize; no pass ran. */
+    SKIPPED,
+    MAX_PASSES,
+    MAX_ITEMS,
+    /** A pass improved the score by no more than the improvement threshold. */
+    NO_IMPROVEMENT,
+    /** The optimizer timeout or the job timeout. */
+    TIMED_OUT,
+    CANCELLED,
+    /** A pass ran out of memory; the best accepted board was kept. */
+    ERROR
   }
 
   /** Returns true if timed out. */
@@ -175,8 +203,18 @@ public final class BatchOptimizer extends NamedAlgorithm {
 
     float initialScore = stats.getOptimizerScore(this.job.routerSettings);
 
-    // Guard 2: Zero vias and optimal trace length
-    if (stats.vias.totalCount == 0) {
+    // Guard 2: Score ceiling / theoretical optimum
+    if (initialScore >= 995.0f) {
+      return String.format(
+          Locale.US,
+          "the initial optimizer score (%.2f) is already at or near theoretical maximum (995.00)",
+          initialScore);
+    }
+
+    // Guard 3: No via above the via bound and a near-optimal trace length
+    int minViaCount =
+        stats.bounds != null && stats.bounds.minViaCount != null ? stats.bounds.minViaCount : 0;
+    if (stats.vias.totalCount <= minViaCount) {
       if (initialScore >= 950.0f) {
         return String.format(
             Locale.US,
@@ -196,89 +234,12 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
     }
 
-    // Guard 3: Score ceiling / theoretical optimum
-    if (initialScore >= 995.0f) {
-      return String.format(
-          Locale.US,
-          "the initial optimizer score (%.2f) is already at or near theoretical maximum (995.00)",
-          initialScore);
-    }
-    if (stats.bounds != null
-        && stats.bounds.minTraceLengthMm != null
-        && stats.bounds.minTraceLengthMm > 0
-        && stats.traces.totalLengthMm != null
-        && stats.traces.totalLengthMm <= stats.bounds.minTraceLengthMm * 1.02f
-        && (stats.bounds.minViaCount == null
-            || stats.vias.totalCount <= stats.bounds.minViaCount)) {
-      return String.format(
-          Locale.US,
-          "total trace length (%.2f mm) is already within 2%% of the theoretical minimum (%.2f mm)",
-          stats.traces.totalLengthMm,
-          stats.bounds.minTraceLengthMm);
-    }
-
-    // Guard 4: All vias mandatory layer transitions
-    if (this.board != null && areAllViasMandatoryLayerTransitions(this.board)) {
-      return "all vias on the board are mandatory layer transitions between SMD pins that cannot be eliminated";
+    // Guard 4: Nothing to reroute
+    if (this.board != null && candidates(this.board).isEmpty()) {
+      return "the board has no unfixed via or trace to reroute";
     }
 
     return null;
-  }
-
-  /**
-   * Checks if all vias on the board are mandatory layer transitions between SMD pins on different
-   * layers, with no alternative routing possible.
-   */
-  public static boolean areAllViasMandatoryLayerTransitions(RoutingBoard routingBoard) {
-    Collection<Via> vias = routingBoard.getVias();
-    if (vias.isEmpty()) {
-      return false;
-    }
-    for (Via via : vias) {
-      if (via.isUserFixed()) {
-        continue;
-      }
-      if (via.netCount() == 0) {
-        return false;
-      }
-      int netNo = via.getNetNumber(0);
-      Set<Item> connected = via.getConnectedSet(netNo, true);
-      List<Pin> smdPins = new ArrayList<>();
-      boolean onlySmdPinsAndTraces = true;
-      for (Item item : connected) {
-        if (item instanceof Pin pin) {
-          if (pin.firstLayer() == pin.lastLayer()) {
-            smdPins.add(pin);
-          } else {
-            onlySmdPinsAndTraces = false;
-            break;
-          }
-        } else if (item instanceof Via v) {
-          if (v != via) {
-            onlySmdPinsAndTraces = false;
-            break;
-          }
-        } else if (!(item instanceof Trace)) {
-          onlySmdPinsAndTraces = false;
-          break;
-        }
-      }
-      if (!onlySmdPinsAndTraces || smdPins.size() < 2) {
-        return false;
-      }
-      int firstLayer = smdPins.get(0).firstLayer();
-      boolean crossesLayers = false;
-      for (Pin pin : smdPins) {
-        if (pin.firstLayer() != firstLayer) {
-          crossesLayers = true;
-          break;
-        }
-      }
-      if (!crossesLayers) {
-        return false;
-      }
-    }
-    return true;
   }
 
   /** Optimize the route on the board. */
@@ -289,6 +250,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     if (this.thread != null) {
       this.thread.resetStopAutoRouterRequest();
     }
+    this.lastStopReason = null;
 
     job.logDebug(
         "Before optimization: Via count: "
@@ -313,6 +275,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
     String bypassReason = evaluatePreFlightGuards(initialStats);
     if (bypassReason != null) {
       job.logInfo("Skipping optimization stage: " + bypassReason + ".");
+      this.lastStopReason = StopReason.SKIPPED;
+      phase.stopReason = RoutingResultManifest.stopReason(this.lastStopReason);
       phase.durationSeconds = 0.0f;
       phase.cpuSeconds = 0.0f;
       phase.totalAllocatedGb = 0.0f;
@@ -327,6 +291,11 @@ public final class BatchOptimizer extends NamedAlgorithm {
       return;
     }
 
+    this.startViolations =
+        new ClearanceBaseline(
+            initialViolations == 0
+                ? List.of()
+                : new DesignRulesChecker(this.board, null).getAllClearanceViolations());
     this.bestBoard = this.board.deepCopy();
     this.bestScore = initialOptimizerScore;
     this.bestIncompleteCount = initialIncomplete;
@@ -401,6 +370,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         && (!this.thread.isStopRequested())) {
       if (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs) {
         this.isTimedOut = true;
+        this.lastStopReason = StopReason.TIMED_OUT;
         job.logInfo("Optimizer stage timed out before starting pass #" + (currentPass + 1));
         break;
       }
@@ -429,12 +399,14 @@ public final class BatchOptimizer extends NamedAlgorithm {
                     + " accepted board (optimizer score %.2f).",
                 currentPass,
                 this.bestScore));
-        this.fireBoardUpdatedEvent(new BoardStatistics(this.board), null, this.board);
+        this.fireBoardUpdatedEvent(this.board.getStatistics(), null, this.board);
+        this.lastStopReason = StopReason.ERROR;
         break;
       }
       peakHeapMb = Math.max(peakHeapMb, sampleHeapUsageMb());
 
       if (this.isTimedOut) {
+        this.lastStopReason = StopReason.TIMED_OUT;
         break;
       }
 
@@ -443,7 +415,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       String rejectionReason =
           optimizerCandidateRejectionReason(
               this.bestIncompleteCount,
-              this.bestClearanceViolationCount,
+              newClearanceViolationCount(passStats),
               this.bestScore,
               passStats,
               scoreAfterPass);
@@ -461,7 +433,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         rejectionReason =
             optimizerCandidateRejectionReason(
                 this.bestIncompleteCount,
-                this.bestClearanceViolationCount,
+                newClearanceViolationCount(passStats),
                 this.bestScore,
                 passStats,
                 scoreAfterPass);
@@ -543,7 +515,19 @@ public final class BatchOptimizer extends NamedAlgorithm {
                     + "the threshold (%.2f%%).",
                 scoreImprovement,
                 this.settings.optimizer.optimizationImprovementThreshold));
+        this.lastStopReason = StopReason.NO_IMPROVEMENT;
         break;
+      }
+    }
+    if (this.lastStopReason == null) {
+      // The loop condition ended it.
+      if (this.thread.isStopRequested()) {
+        this.lastStopReason = job.isTimedOut() ? StopReason.TIMED_OUT : StopReason.CANCELLED;
+      } else if (this.settings.optimizer.maxItems != null
+          && this.totalItemsOptimized >= this.settings.optimizer.maxItems) {
+        this.lastStopReason = StopReason.MAX_ITEMS;
+      } else {
+        this.lastStopReason = StopReason.MAX_PASSES;
       }
     }
 
@@ -603,7 +587,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     phase.totalAllocatedGb = allocMbUsed / 1024.0f;
     phase.peakHeapMb = peakHeapMb;
 
-    BoardStatistics finalStats = new BoardStatistics(this.board);
+    BoardStatistics finalStats = this.board.getStatistics();
     float finalRouterScore = finalStats.getRouterScore(job.routerSettings);
     float finalOptimizerScore = finalStats.getOptimizerScore(job.routerSettings);
     phase.after =
@@ -611,6 +595,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
             finalStats, job.routerSettings, "current");
     phase.after.score = phase.after.optimizerScore;
     phase.passesCompleted = currentPass;
+    phase.stopReason = RoutingResultManifest.stopReason(this.lastStopReason);
     String completionStatus =
         this.isTimedOut
             ? "completed with timeout:"
@@ -640,26 +625,39 @@ public final class BatchOptimizer extends NamedAlgorithm {
   private void restoreIncumbentBoard() {
     this.board = this.bestBoard.deepCopy();
     this.job.board = this.board;
-    this.fireBoardUpdatedEvent(new BoardStatistics(this.board), null, this.board);
+    this.fireBoardUpdatedEvent(this.board.getStatistics(), null, this.board);
+  }
+
+  /**
+   * Returns the number of clearance violations of the live board, which the statistics were taken
+   * of, that the board the optimizer started on did not have.
+   */
+  private int newClearanceViolationCount(BoardStatistics statistics) {
+    if (statistics.clearanceViolations.totalCount == 0) {
+      return 0;
+    }
+    return this.startViolations.countNewOrChanged(
+        new DesignRulesChecker(this.board, null).getAllClearanceViolations());
   }
 
   /**
    * Returns the explicit reason a candidate must be rejected, or {@code null} when it is accepted.
    *
-   * <p>Completeness and DRC count are vetoes; optimizer score ranks candidates that pass both
-   * vetoes. In particular, a more-complete but uglier candidate is not an automatic win.
+   * <p>Completeness and new clearance violations are vetoes; optimizer score ranks candidates that
+   * pass both vetoes. In particular, a more-complete but uglier candidate is not an automatic win,
+   * and a candidate that removes one violation and adds another is rejected.
    */
   static String optimizerCandidateRejectionReason(
       int incumbentIncompleteCount,
-      int incumbentClearanceViolationCount,
+      int newClearanceViolationCount,
       float incumbentOptimizerScore,
       BoardStatistics candidate,
       float candidateOptimizerScore) {
     if (candidate.connections.incompleteCount > incumbentIncompleteCount) {
       return "CONNECTIVITY_REGRESSION";
     }
-    if (candidate.clearanceViolations.totalCount > incumbentClearanceViolationCount) {
-      return "DRC_COUNT_REGRESSION";
+    if (newClearanceViolationCount > 0) {
+      return "NEW_CLEARANCE_VIOLATION";
     }
     if (!(candidateOptimizerScore > incumbentOptimizerScore)) {
       return "OPTIMIZER_SCORE_NOT_IMPROVED";
@@ -686,7 +684,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
 
   private List<Integer> prepareCandidateItems() {
     List<Integer> itemIds = new ArrayList<>();
-    this.sortedRouteItems = new ReadSortedRouteItems();
+    List<Item> candidates = candidates(this.board);
 
     ItemSelectionStrategy strategy =
         this.settings.optimizer != null ? this.settings.optimizer.itemSelectionStrategy : null;
@@ -698,7 +696,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       List<Integer> nonPrioritized = new ArrayList<>();
       PriorityQueue<ItemRouteResult> pq = new PriorityQueue<>();
 
-      for (Item item = sortedRouteItems.next(); item != null; item = sortedRouteItems.next()) {
+      for (Item item : candidates) {
         ItemRouteResult r = resultMap.get(item.getId());
         if (r != null) {
           pq.add(r);
@@ -712,12 +710,11 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
       itemIds.addAll(nonPrioritized);
     } else {
-      for (Item item = sortedRouteItems.next(); item != null; item = sortedRouteItems.next()) {
+      for (Item item : candidates) {
         itemIds.add(item.getId());
       }
     }
 
-    this.sortedRouteItems = null;
     resultMap.clear();
     return itemIds;
   }
@@ -735,7 +732,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
     progressThrottler.reset();
     this.fireBoardUpdatedEvent(boardStatisticsBefore, routerCounters, this.board);
 
-    this.minCumulativeTraceLength = boardStatisticsBefore.traces.totalWeightedLength;
+    this.minCumulativeTraceLength =
+        BoardStatistics.OptimizerMetrics.of(this.board).totalWeightedLength();
     CommitSelection selection =
         CommitSelection.of(
             this.settings.optimizer != null ? this.settings.optimizer.commitSelection : null);
@@ -824,18 +822,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 ? this.settings.optimizer.maxConsecutiveFailures
                 : 50);
 
-    // Candidates with the same key route identically; evaluate the first and reuse its result.
-    int[] representative = new int[candidateItemIds.size()];
-    int[] lastDuplicate = new int[candidateItemIds.size()];
-    Map<String, Integer> firstIndexByKey = new HashMap<>();
-    for (int k = 0; k < candidateItemIds.size(); k++) {
-      String key = candidateKey(this.board, candidateItemIds.get(k));
-      Integer first = key == null ? null : firstIndexByKey.putIfAbsent(key, k);
-      representative[k] = first == null ? k : first;
-      lastDuplicate[representative[k]] = k;
-    }
     Map<Integer, Future<CandidateResult>> futureByIndex = new HashMap<>();
     int nextToSubmit = 0;
+    PassStop passStop = new PassStop(this.thread);
 
     try {
       for (int i = 0; i < candidateItemIds.size(); i += chunkSize) {
@@ -858,9 +847,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
           int submitLimit = Math.min(candidateItemIds.size(), k + chunkSize);
           while (nextToSubmit < submitLimit) {
             int toSubmit = nextToSubmit++;
-            if (representative[toSubmit] != toSubmit) {
-              continue;
-            }
             int itemId = candidateItemIds.get(toSubmit);
             futureByIndex.put(
                 toSubmit,
@@ -872,22 +858,14 @@ public final class BatchOptimizer extends NamedAlgorithm {
                         this.minCumulativeTraceLength,
                         withPreferredDirections,
                         this.useIncreasedRipupCosts,
-                        this.thread,
+                        passStop,
                         this.deadlineMs,
                         baselineMetrics,
-                        selection != CommitSelection.ALL,
+                        this.startViolations,
                         selection == CommitSelection.SCORE_RANKED ? scoreTracker : null)));
           }
           try {
-            int rep = representative[k];
-            CandidateResult res = futureByIndex.get(rep).get();
-            if (k == lastDuplicate[rep]) {
-              futureByIndex.remove(rep);
-            }
-            if (res != null && rep != k) {
-              int itemId = candidateItemIds.get(k);
-              res = res.forDuplicate(itemId, getItemPosition(this.board.getItem(itemId)));
-            }
+            CandidateResult res = futureByIndex.remove(k).get();
             this.totalItemsOptimized++;
             if (res != null) {
               this.workerCpuNanos.addAndGet(res.cpuUsedNanos);
@@ -936,7 +914,21 @@ public final class BatchOptimizer extends NamedAlgorithm {
         }
       }
     } finally {
+      // Candidates still running past an early stop are not interruptible; let them stop at their
+      // next stop check instead of routing their discarded boards into the next pass.
+      passStop.endPass();
       pool.shutdownNow();
+    }
+
+    // A stop or deadline after the last chunk check still marked every candidate evaluated after
+    // it as not improved, so the winner would come from a cut-off candidate set and the result
+    // would depend on when the stop came. Drop the pass, as a stop seen at a chunk boundary does.
+    if (!stoppedOrTimedOut && passInterrupted(this.thread, this.deadlineMs)) {
+      stoppedOrTimedOut = true;
+      if (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs) {
+        job.logInfo("Optimizer stage timed out.");
+        this.isTimedOut = true;
+      }
     }
 
     float routeImproved = 0.0f;
@@ -970,7 +962,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
                       ", optimizer score %.2f -> %.2f",
                       scoreTracker.score(),
                       liveScore.score())));
-      this.minCumulativeTraceLength = this.board.getStatistics().traces.totalWeightedLength;
+      this.minCumulativeTraceLength =
+          BoardStatistics.OptimizerMetrics.of(this.board).totalWeightedLength();
 
       BoardStatistics boardStatisticsAfter = this.board.getStatistics();
       this.fireBoardUpdatedEvent(boardStatisticsAfter, routerCounters, this.board);
@@ -978,7 +971,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     }
 
     double routeoptimizerPassDuration = FRLogger.traceExit(optimizationPassId);
-    BoardStatistics boardStatisticsAfter = new BoardStatistics(this.board);
+    BoardStatistics boardStatisticsAfter = this.board.getStatistics();
     this.fireBoardUpdatedEvent(boardStatisticsAfter, routerCounters, this.board);
     job.logInfo(
         String.format(
@@ -1097,6 +1090,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 || liveScore.scoreWith(changes) > liveScore.score();
       }
     }
+    keep = keep && !changes.addsClearanceViolation(this.board, this.startViolations);
     if (keep) {
       this.passCommits.add(changes);
       if (liveScore != null) {
@@ -1113,6 +1107,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
   private static boolean isRunning(StoppableThread thread, Long deadlineMs) {
     return (thread == null || !thread.isStopRequested())
         && (deadlineMs == null || System.currentTimeMillis() < deadlineMs);
+  }
+
+  /**
+   * True if a stop or the optimizer deadline has come by the end of a pass's candidate loop. The
+   * pass must then commit nothing: candidates evaluated after the stop were cut short and count as
+   * not improved, so the pass's winner would depend on when the stop came.
+   */
+  static boolean passInterrupted(StoppableThread thread, Long deadlineMs) {
+    return !isRunning(thread, deadlineMs);
   }
 
   /** How a pass chooses the improvements it commits; see {@code optimizer.commit_selection}. */
@@ -1235,7 +1238,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     double baseline =
         this.minCumulativeTraceLength > 0
             ? this.minCumulativeTraceLength
-            : routingBoard.getStatistics().traces.totalWeightedLength;
+            : BoardStatistics.OptimizerMetrics.of(routingBoard).totalWeightedLength();
 
     return optRouteItemOnBoard(
         job,
@@ -1292,11 +1295,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
     routerCountersBefore.incompleteCount = calculateIncompleteCount(routingBoard);
 
     Set<Item> rippedConnections = rippedConnectionsOf(item);
-
-    for (Item currentItem : rippedConnections) {
-      if (currentItem.isUserFixed() || currentItem.hasIgnoredNets()) {
-        return new ItemRouteResult(item.getId());
-      }
+    if (rippedConnections == null) {
+      return new ItemRouteResult(item.getId());
     }
 
     routingBoard.removeItems(rippedConnections);
@@ -1348,7 +1348,11 @@ public final class BatchOptimizer extends NamedAlgorithm {
     return result;
   }
 
-  /** The connections a candidate rips: its own and, for a trace, those of unfixed neighbours. */
+  /**
+   * The connections a candidate rips: its own and, for a trace, those of unfixed neighbours, or
+   * null if one of their items is on an ignored net. A connection ends at the first item that is
+   * not routable, so it holds no fixed item.
+   */
   private static Set<Item> rippedConnectionsOf(Item item) {
     Set<Item> rippedItems = new TreeSet<>();
     rippedItems.add(item);
@@ -1367,19 +1371,41 @@ public final class BatchOptimizer extends NamedAlgorithm {
     for (Item currentItem : rippedItems) {
       rippedConnections.addAll(currentItem.getConnectionItems(Item.StopConnectionOption.NONE));
     }
+    for (Item ripped : rippedConnections) {
+      if (ripped.hasIgnoredNets()) {
+        return null;
+      }
+    }
     return rippedConnections;
+  }
+
+  /**
+   * Returns the candidates of a pass: the items of {@link #optimizationOrder}, one per {@link
+   * #candidateKey}. Candidates with equal keys route identically, so evaluating, counting or
+   * committing more than the first of them only repeats its rip-up and reroute.
+   */
+  static List<Item> candidates(BasicBoard board) {
+    List<Item> result = new ArrayList<>();
+    Set<String> keys = new HashSet<>();
+    for (Item item : optimizationOrder(board)) {
+      String key = candidateKey(item);
+      if (key != null && keys.add(key)) {
+        result.add(item);
+      }
+    }
+    return result;
   }
 
   /**
    * Returns everything {@link #optRouteItemOnBoard} reads of a candidate besides the pass's board
    * image and flags: the connections it rips, the nets whose traces it combines and whether it is a
    * trace (which scales the rip-up cost). Candidates with equal keys, such as the vias of one
-   * connection or the branches beside a fork, produce the same result. Returns null for candidates
-   * that are not shared.
+   * connection or the branches beside a fork, produce the same result. Returns null for a candidate
+   * that would rip an item on an ignored net, which is never rerouted.
    */
-  static String candidateKey(RoutingBoard board, int itemId) {
-    Item item = board.getItem(itemId);
-    if (item == null || item.hasIgnoredNets()) {
+  static String candidateKey(Item item) {
+    Set<Item> rippedConnections = item.hasIgnoredNets() ? null : rippedConnectionsOf(item);
+    if (rippedConnections == null) {
       return null;
     }
     StringBuilder key = new StringBuilder(item.getClass().getName());
@@ -1387,7 +1413,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       key.append(':').append(item.getNetNumber(i));
     }
     key.append('|');
-    for (Item ripped : rippedConnectionsOf(item)) {
+    for (Item ripped : rippedConnections) {
       key.append(ripped.getId()).append(',');
     }
     return key.toString();
@@ -1428,12 +1454,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.allocUsedBytes = allocUsedBytes;
     }
 
-    /** This result for a duplicate candidate: same routing, board and changes, its own item. */
-    CandidateResult forDuplicate(int itemId, FloatPoint position) {
-      return new CandidateResult(
-          result.withItemId(itemId), board, changes, scoreGain, position, 0, 0);
-    }
-
     /** True if this candidate is a better pick than the other under the commit selection. */
     boolean ranksBefore(CandidateResult other, CommitSelection selection) {
       if (selection == CommitSelection.SCORE_RANKED) {
@@ -1443,6 +1463,52 @@ public final class BatchOptimizer extends NamedAlgorithm {
             < 0;
       }
       return result.improvedOver(other.result);
+    }
+  }
+
+  /**
+   * The stop flag of one pass's candidates. It is set when the job's flag is, and also once the
+   * pass has consumed all the results it uses, so that candidates left running by an early stop
+   * stop working on boards nobody reads. Every consumed candidate completed before that, so the
+   * results the pass uses are unchanged. Stop requests made by a candidate go to the job.
+   */
+  static final class PassStop extends StoppableThread {
+    private final StoppableThread job;
+    private volatile boolean passEnded;
+
+    PassStop(StoppableThread job) {
+      this.job = job;
+    }
+
+    void endPass() {
+      this.passEnded = true;
+    }
+
+    @Override
+    protected void threadAction() {}
+
+    @Override
+    public boolean isStopRequested() {
+      return passEnded || (job != null && job.isStopRequested());
+    }
+
+    @Override
+    public boolean isStopAutoRouterRequested() {
+      return passEnded || (job != null && job.isStopAutoRouterRequested());
+    }
+
+    @Override
+    public void requestStop() {
+      if (job != null) {
+        job.requestStop();
+      }
+    }
+
+    @Override
+    public void requestStopAutoRouter() {
+      if (job != null) {
+        job.requestStopAutoRouter();
+      }
     }
   }
 
@@ -1460,7 +1526,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     private final StoppableThread thread;
     private final Long deadlineMs;
     private final BoardStatistics.OptimizerMetrics baselineMetrics;
-    private final boolean recordChanges;
+    private final ClearanceBaseline startViolations;
     private final ScoreTracker scoreRanking;
 
     OptimizeCandidateTask(
@@ -1473,7 +1539,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         StoppableThread thread,
         Long deadlineMs,
         BoardStatistics.OptimizerMetrics baselineMetrics,
-        boolean recordChanges,
+        ClearanceBaseline startViolations,
         ScoreTracker scoreRanking) {
       this.job = job;
       this.image = image;
@@ -1484,7 +1550,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.thread = thread;
       this.deadlineMs = deadlineMs;
       this.baselineMetrics = baselineMetrics;
-      this.recordChanges = recordChanges;
+      this.startViolations = startViolations;
       this.scoreRanking = scoreRanking;
     }
 
@@ -1560,11 +1626,14 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 && result.incompleteCount() <= result.incompleteCountBefore()
                 && scoreGain > 0);
       }
+      if (result.improved()) {
+        if (changes == null) {
+          changes = ChangeSet.since(workerBoard);
+        }
+        result.updateImproved(!changes.addsClearanceViolation(workerBoard, startViolations));
+      }
       if (!result.improved()) {
         return new CandidateResult(result, null, null, 0, position, cpuUsed, allocUsed);
-      }
-      if (changes == null && recordChanges) {
-        changes = ChangeSet.since(workerBoard);
       }
       if (!workerBoard.popSnapshot()) {
         FRLogger.warn("BatchOptimizer: failed to remove the candidate-board snapshot");
@@ -1652,6 +1721,29 @@ public final class BatchOptimizer extends NamedAlgorithm {
     }
 
     /**
+     * True if an item this change inserted or changed has a clearance violation that is not in the
+     * baseline. Only those items can be in a new violation: every other item kept its shape.
+     */
+    boolean addsClearanceViolation(BasicBoard board, ClearanceBaseline baseline) {
+      Map<String, ClearanceViolation> violations = new LinkedHashMap<>();
+      for (int id : insertedIds) {
+        Item item = board.getItem(id);
+        if (item == null) {
+          continue;
+        }
+        // An insertion next to another inserted item is seen from both sides; count it once.
+        for (ClearanceViolation violation : item.clearanceViolations()) {
+          int first = violation.firstItem.getId();
+          int second = violation.secondItem.getId();
+          violations.putIfAbsent(
+              Math.min(first, second) + "-" + Math.max(first, second) + "-" + violation.layer,
+              violation);
+        }
+      }
+      return !violations.isEmpty() && baseline.countNewOrChanged(violations.values()) > 0;
+    }
+
+    /**
      * Reverts the change: removes the inserted items and inserts copies of the replaced ones.
      * Returns false, without changing the board, if an inserted item is missing or the change
      * involved other items than traces and vias.
@@ -1719,7 +1811,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
     return board.routingLedger().incompleteCount();
   }
 
-  /** Reads the vias and traces on the board in ascending x order. */
   /**
    * Returns the optimizer's candidate order: one item per distinct (x, y, first layer) key in
    * ascending order, where a via is keyed by its center and a trace by the larger of its end
@@ -1787,14 +1878,5 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
     }
     return false;
-  }
-
-  protected class ReadSortedRouteItems {
-
-    private final Iterator<Item> order = optimizationOrder(board).iterator();
-
-    Item next() {
-      return order.hasNext() ? order.next() : null;
-    }
   }
 }

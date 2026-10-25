@@ -111,7 +111,8 @@ class RoutingJobOutputFailureTest {
     job.board = DsnTestFixtures.loadBoard("Issue026-J2_reference.dsn");
     job.output = new BoardFileDetails();
     job.output.setData("earlier-preview".getBytes(StandardCharsets.UTF_8));
-    job.output.format = FileFormat.DSN;
+    // the binary format needs the GUI serialisation; DSN is a supported output now
+    job.output.format = FileFormat.FRB;
     assertFalse(RoutingJobOutputWriter.write(job));
     assertEquals(0, job.output.getData().available());
   }

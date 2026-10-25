@@ -1,0 +1,4 @@
+control head
+soft50 head -Dfreerouting.exp.optimizer_score_floor=soft
+soft200 head -Dfreerouting.exp.optimizer_score_floor=soft -Dfreerouting.exp.optimizer_score_floor_knee=200
+skip head -Dfreerouting.exp.optimizer_score_floor=skip

@@ -163,28 +163,32 @@ public class Pin extends DrillItem implements Serializable {
   @Override
   public Shape getShape(int index) {
     Padstack padstack = getPadstack();
-    if (this.precalculatedShapes == null) {
+    // Read and publish the cache once: the array is filled before it is stored, so a reader on
+    // another thread (the GUI paints the board the router changes) never sees a half-filled array,
+    // and a concurrent clearDerivedData() cannot null the field between the check and the read.
+    Shape[] shapes = this.precalculatedShapes;
+    if (shapes == null) {
       // all shapes have to be calculated  at once, because otherwise calculation
       // of fromLayer and toLayer may not be correct
       int shapeCount = Math.max(0, padstack.toLayer() - padstack.fromLayer() + 1);
-      this.precalculatedShapes = new Shape[shapeCount];
+      shapes = new Shape[shapeCount];
 
       Component component = board.components.get(this.getComponentId());
-      if (component == null) {
-        FRLogger.warn("Pin.get_shape: component not found");
-        return null;
-      }
-      Package libPackage = component.getPackage();
-      if (libPackage == null) {
-        FRLogger.warn("Pin.get_shape: package not found");
-        return null;
-      }
-      Package.Pin packagePin = libPackage.getPin(this.getPinIndex());
+      Package libPackage = component == null ? null : component.getPackage();
+      Package.Pin packagePin = libPackage == null ? null : libPackage.getPin(this.getPinIndex());
       if (packagePin == null) {
-        FRLogger.warn("Pin.get_shape: pinNo out of range");
+        if (component == null) {
+          FRLogger.warn("Pin.get_shape: component not found");
+        } else if (libPackage == null) {
+          FRLogger.warn("Pin.get_shape: package not found");
+        } else {
+          FRLogger.warn("Pin.get_shape: pinNo out of range");
+        }
+        // Cache the empty shapes, as before, so the warning is not repeated on every call.
+        this.precalculatedShapes = shapes;
         return null;
       }
-      for (int shapeIndex = 0; shapeIndex < this.precalculatedShapes.length; shapeIndex++) {
+      for (int shapeIndex = 0; shapeIndex < shapes.length; shapeIndex++) {
 
         int padstackLayer = getPadstackLayer(shapeIndex);
 
@@ -192,10 +196,11 @@ public class Pin extends DrillItem implements Serializable {
         if (currentShape == null) {
           continue;
         }
-        this.precalculatedShapes[shapeIndex] = (ConvexShape) transformToBoard(currentShape);
+        shapes[shapeIndex] = (ConvexShape) transformToBoard(currentShape);
       }
+      this.precalculatedShapes = shapes;
     }
-    return this.precalculatedShapes[index];
+    return shapes[index];
   }
 
   /**

@@ -57,6 +57,19 @@ public final class KiCadJsonReader {
   private KiCadJsonReader() {}
 
   /**
+   * Returns the board units per JSON unit. The resolution 1 in millimetres is the plugin's
+   * "unspecified" and means 0.1 um; any other positive resolution is used exactly, also a
+   * fractional one, which truncating to an integer made 10 times (0.1) or more too large.
+   */
+  private static double scaleFactor(KiCadBoardJson boardJson, Unit unit) {
+    double resolution = boardJson.resolution;
+    if (resolution == 1.0 && unit == Unit.MM) {
+      return 10000;
+    }
+    return Double.isFinite(resolution) && resolution > 0 ? resolution : 1;
+  }
+
+  /**
    * Reads a KiCad JSON structure and returns a fully constructed RoutingBoard wrapped in
    * BoardReadResult.
    */
@@ -95,13 +108,10 @@ public final class KiCadJsonReader {
         userUnit = Unit.UM;
       }
 
-      // We maintain similar resolution scaling factors as DSN mapping (e.g. 1000 for mm)
-      int resolution = (int) Math.max(1.0, boardJson.resolution);
-      if (boardJson.resolution == 1.0 && userUnit == Unit.MM) {
-        resolution = 10000; // 0.1 micrometer resolution is default for mm if unspecified
-      }
-
-      final double scaleFactor = resolution;
+      final double scaleFactor = scaleFactor(boardJson, userUnit);
+      // The declared resolution, as the DSN and SES writers state it; coordinates use the exact
+      // scale, which can be fractional (an inch board at 0.01 inch is 0.1 board units per mil).
+      final int resolution = (int) Math.max(1, Math.round(scaleFactor));
 
       // 3. Layer Structure
       int layerCount = boardJson.layers.isEmpty() ? 2 : boardJson.layers.size();
@@ -147,21 +157,31 @@ public final class KiCadJsonReader {
 
       KiCadBoardJson.NetClassJson kiCadDefaultNetClass =
           findKiCadDefaultNetClass(boardJson.netClasses);
+      int defaultClVal = defaultClearance;
       if (kiCadDefaultNetClass != null && kiCadDefaultNetClass.clearance > 0) {
-        int defaultClVal = (int) Math.round(kiCadDefaultNetClass.clearance * scaleFactor);
+        defaultClVal = (int) Math.round(kiCadDefaultNetClass.clearance * scaleFactor);
         clearanceMatrix.setValue(1, 1, defaultClVal);
       }
 
       // Populate clearance matrix from non-default NetClasses and Custom Clearance Rules
+      int[] classClearances = new int[additionalNetClasses.size()];
       for (int i = 0; i < additionalNetClasses.size(); i++) {
         KiCadBoardJson.NetClassJson nc = additionalNetClasses.get(i);
         int clNo = i + 2;
         int clVal = (int) Math.round(nc.clearance * scaleFactor);
+        classClearances[i] = clVal;
         clearanceMatrix.setValue(clNo, clNo, clVal);
-        // Spacing between default and class. setValue writes one direction only; the matrix must
-        // stay symmetric, as the DSN reader keeps it, or queries depend on argument order.
-        clearanceMatrix.setValue(1, clNo, clVal);
-        clearanceMatrix.setValue(clNo, 1, clVal);
+        // Spacing between two net classes is the larger of their clearances, as in KiCad.
+        // setValue writes one direction only; the matrix must stay symmetric, as the DSN reader
+        // keeps it, or queries depend on argument order.
+        int toDefault = Math.max(clVal, defaultClVal);
+        clearanceMatrix.setValue(1, clNo, toDefault);
+        clearanceMatrix.setValue(clNo, 1, toDefault);
+        for (int j = 0; j < i; j++) {
+          int between = Math.max(clVal, classClearances[j]);
+          clearanceMatrix.setValue(j + 2, clNo, between);
+          clearanceMatrix.setValue(clNo, j + 2, between);
+        }
       }
 
       if (hasEdgeClearance) {
@@ -789,11 +809,7 @@ public final class KiCadJsonReader {
       userUnit = Unit.UM;
     }
 
-    int resolution = (int) Math.max(1.0, boardJson.resolution);
-    if (boardJson.resolution == 1.0 && userUnit == Unit.MM) {
-      resolution = 10000;
-    }
-    double scaleFactor = resolution;
+    double scaleFactor = scaleFactor(boardJson, userUnit);
 
     // 1. Conduction Areas
     if (boardJson.conductionAreas != null) {

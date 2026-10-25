@@ -1,0 +1,3 @@
+control head
+par2 head -Dfreerouting.exp.parallel_fallback=2
+par4 head -Dfreerouting.exp.parallel_fallback=4

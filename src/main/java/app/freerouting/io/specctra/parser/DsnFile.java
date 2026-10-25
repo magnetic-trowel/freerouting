@@ -20,8 +20,10 @@ public final class DsnFile {
 
   /**
    * Sets containsPlane to true for nets with a conductionArea covering a large part of a signal
-   * layer (at least 50% of the board outline area). This is useful in case the layer type was not
-   * set correctly to plane in the dsn-file. Returns true, if something was changed.
+   * layer (at least 30% of the board outline area). This is useful in case the layer type was not
+   * set correctly to plane in the dsn-file. Each signal layer is judged on its own: a board that
+   * types some layers as power layers may still pour planes on its signal layers. Returns true, if
+   * something was changed.
    *
    * <p>Called from {@link app.freerouting.io.specctra.DsnReader#readBoard} when the DSN file
    * contains no {@code (autoroute ...)} scope.
@@ -34,11 +36,6 @@ public final class DsnFile {
         routingBoard.layerStructure;
     if (boardLayerStructure.layers.length < 1) {
       return false;
-    }
-    for (app.freerouting.board.model.structure.Layer currentLayer : boardLayerStructure.layers) {
-      if (!currentLayer.isSignal) {
-        return false;
-      }
     }
     boolean[] changedLayerArr = new boolean[boardLayerStructure.layers.length];
     Collection<ConductionArea> conductionAreaList = routingBoard.getConductionAreas();
@@ -104,6 +101,17 @@ public final class DsnFile {
       }
     }
     return !nothingChanged;
+  }
+
+  /**
+   * Whether a size or distance read from a DSN file is unset. Exporters mark an unset value with a
+   * negative number: KiCad writes -0.001 for a net class width, clearance or via diameter that is
+   * not set. A number that could not be read or is not finite is unset as well. Readers treat an
+   * unset value as absent, so the enclosing scope's value or the default applies, and a shape whose
+   * size is unset is not read.
+   */
+  static boolean isUnsetSize(Double value) {
+    return value == null || !Double.isFinite(value) || value < 0;
   }
 
   static boolean readOnOffScope(IJFlexScanner scanner) {

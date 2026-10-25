@@ -119,10 +119,20 @@ public class PerformanceProfiler {
     FRLogger.debug("===========================");
   }
 
-  /** Clear all profiling data. */
+  /**
+   * Clear all profiling data. The pass history is cleared too: every pass of every job and of every
+   * optimizer candidate's nested router appends to it, so it otherwise grows for the lifetime of
+   * the process and each report prints and sorts all earlier jobs' passes again.
+   */
   public static void reset() {
     timings.clear();
     counts.clear();
+    passHistory.clear();
+  }
+
+  /** The number of recorded passes; for tests. */
+  static int passHistorySize() {
+    return passHistory.size();
   }
 
   private static class Invocation {

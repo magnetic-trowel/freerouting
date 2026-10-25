@@ -6,10 +6,10 @@ import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.io.FileFormat;
-import app.freerouting.io.specctra.RulesReader;
 import app.freerouting.io.specctra.SesImportSummary;
 import app.freerouting.io.specctra.SesReader;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.management.CompositeBoardInput;
 import app.freerouting.management.HeadlessBoardManager;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
@@ -18,7 +18,6 @@ import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.ApiSettings;
 import app.freerouting.settings.sources.DefaultSettings;
 import app.freerouting.settings.sources.DsnFileSettings;
-import app.freerouting.settings.sources.RulesFileSettings;
 import app.freerouting.util.TextManager;
 import app.freerouting.util.gson.GsonProvider;
 import java.io.ByteArrayInputStream;
@@ -26,12 +25,20 @@ import java.io.IOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -43,6 +50,22 @@ import java.util.stream.Stream;
 public final class RoutingJobScheduler {
 
   private static final int MAX_QUEUED_JOBS = 5_000;
+
+  /**
+   * Default for {@code api_server.max_finished_jobs}. A finished job without its board holds its
+   * input and output files only (usually well under a few MB each), so 200 of them stay within a
+   * few hundred MB, while a client normally downloads its result within seconds of completion.
+   */
+  static final int DEFAULT_MAX_FINISHED_JOBS = 200;
+
+  /**
+   * Smallest default for {@code api_server.max_finished_job_boards}. A routed board with its search
+   * trees can take tens of MB, so not every finished job keeps one; the default is twice the number
+   * of parallel jobs, and at least this, so that a client running as many jobs as the server runs
+   * at once can still poll, download and check each result after the others finish.
+   */
+  static final int DEFAULT_MAX_FINISHED_JOB_BOARDS = 4;
+
   private static final RoutingJobScheduler instance = new RoutingJobScheduler();
   public final LinkedList<RoutingJob> jobs = new LinkedList<>();
 
@@ -140,32 +163,31 @@ public final class RoutingJobScheduler {
                                             + e.getMessage());
                                   }
                                 }
-                              } else if (isDsn && job.input.getDirectoryPath() != null) {
-                                String baseName = job.input.getFilename();
-                                if (baseName.lastIndexOf('.') > 0) {
-                                  baseName = baseName.substring(0, baseName.lastIndexOf('.'));
-                                }
+                              } else if (CompositeBoardInput.adjacentRulesFile(job.input) != null) {
                                 java.io.File autoRules =
-                                    new java.io.File(
-                                        job.input.getDirectoryPath(), baseName + ".rules");
-                                if (autoRules.exists()) {
-                                  try {
-                                    rulesData = Files.readAllBytes(autoRules.toPath());
-                                    rulesFilename = autoRules.getName();
-                                  } catch (IOException e) {
-                                    FRLogger.warn(
-                                        "Failed to read adjacent rules file: "
-                                            + autoRules.getPath()
-                                            + ": "
-                                            + e.getMessage());
-                                  }
+                                    CompositeBoardInput.adjacentRulesFile(job.input);
+                                try {
+                                  rulesData = Files.readAllBytes(autoRules.toPath());
+                                  rulesFilename = autoRules.getName();
+                                } catch (IOException e) {
+                                  FRLogger.warn(
+                                      "Failed to read adjacent rules file: "
+                                          + autoRules.getPath()
+                                          + ": "
+                                          + e.getMessage());
                                 }
                               }
 
+                              // The rules apply onto the board here, and their autoroute settings
+                              // merge at RULES-file priority, below the environment, the command
+                              // line and the caller.
                               if (rulesData != null) {
                                 settingsMerger.addOrReplaceSources(
-                                    new RulesFileSettings(
-                                        new ByteArrayInputStream(rulesData), rulesFilename));
+                                    CompositeBoardInput.readRulesOntoBoard(
+                                        rulesData,
+                                        rulesFilename,
+                                        job.name != null ? job.name : "board",
+                                        job.board));
                               }
 
                               // Keep per-job overrides (e.g. tests toggling fanout/optimizer) by
@@ -178,20 +200,6 @@ public final class RoutingJobScheduler {
                               // Apply the final merged settings to the job and optimize them for
                               // the board
                               job.routerSettings = settingsMerger.merge();
-
-                              // Apply rules from rules file onto the board and routerSettings
-                              if (rulesData != null && job.board != null) {
-                                try {
-                                  String designName = job.name != null ? job.name : "board";
-                                  RulesReader.read(
-                                      new ByteArrayInputStream(rulesData),
-                                      designName,
-                                      job.board,
-                                      job.routerSettings);
-                                } catch (Exception e) {
-                                  FRLogger.error("Failed to apply rules from rules file", e);
-                                }
-                              }
 
                               job.routerSettings.applyBoardSpecificOptimizations(job.board);
                               job.routerSettings.applyNetClassExclusions(job.board);
@@ -249,7 +257,8 @@ public final class RoutingJobScheduler {
                                     SesImportSummary summary =
                                         SesReader.read(
                                             new ByteArrayInputStream(sessionBytesToLoad),
-                                            job.board);
+                                            job.board,
+                                            job.routerSettings.getReworkImportedRouting());
                                     FRLogger.info(
                                         "SES session loaded: "
                                             + summary.wiresImported()
@@ -292,12 +301,15 @@ public final class RoutingJobScheduler {
                                         + job.state
                                         + ") while it was being set up; not started.");
                               }
-                            } catch (Exception e) {
+                            } catch (Throwable e) {
+                              // An Error too (an OutOfMemoryError while loading a large board):
+                              // only this job fails, and its partly loaded board is let go.
                               FRLogger.error(
                                   "Failed to set up routing job '"
                                       + job.id
                                       + "', it will be terminated.",
                                   e);
+                              job.board = null;
                               job.state = RoutingJobState.TERMINATED;
                             }
                           } else {
@@ -316,11 +328,16 @@ public final class RoutingJobScheduler {
                     }
                   }
 
+                  // Boards are released on this thread only, so never during the set-up above.
+                  enforceRetention();
+
                   // wait for a short time before checking the queue again
                   Thread.sleep(250);
                 } catch (InterruptedException e) {
                   FRLogger.error("RoutingJobScheduler thread was interrupted.", e);
-                } catch (Exception e) {
+                } catch (Throwable e) {
+                  // Nothing else restarts this thread: if an Error ended it, no job would ever
+                  // start again.
                   FRLogger.error(
                       "RoutingJobScheduler thread encountered an unexpected error and will "
                           + "continue.",
@@ -374,6 +391,163 @@ public final class RoutingJobScheduler {
     return defaultMaxParallelJobs();
   }
 
+  /**
+   * Returns how many finished jobs the scheduler keeps, from {@code api_server.max_finished_jobs}.
+   * Values below 1 and unloaded settings use {@link #DEFAULT_MAX_FINISHED_JOBS}.
+   */
+  int getMaxFinishedJobs() {
+    GlobalSettings gs = globalSettings();
+    Integer configured =
+        gs != null && gs.apiServerSettings != null ? gs.apiServerSettings.maxFinishedJobs : null;
+    return configured != null && configured > 0 ? configured : DEFAULT_MAX_FINISHED_JOBS;
+  }
+
+  /**
+   * Returns how many of the most recently finished jobs keep their board, from {@code
+   * api_server.max_finished_job_boards}. Negative values and unloaded settings use twice the number
+   * of parallel jobs, at least {@link #DEFAULT_MAX_FINISHED_JOB_BOARDS}.
+   */
+  int getMaxFinishedJobBoards() {
+    GlobalSettings gs = globalSettings();
+    Integer configured =
+        gs != null && gs.apiServerSettings != null
+            ? gs.apiServerSettings.maxFinishedJobBoards
+            : null;
+    if (configured != null && configured >= 0) {
+      return configured;
+    }
+    return Math.max(DEFAULT_MAX_FINISHED_JOB_BOARDS, 2 * getMaxParallelJobs());
+  }
+
+  /**
+   * Applies the retention limits: removes the oldest finished jobs beyond {@link
+   * #getMaxFinishedJobs()} and releases the boards of the finished jobs older than the newest
+   * {@link #getMaxFinishedJobBoards()}. Queued and running jobs, jobs whose routing thread is still
+   * alive and the jobs of the primary (GUI) session are never touched. The scheduler thread calls
+   * it after each start-up pass; releasing a board elsewhere could race with the set-up of a job
+   * that was cancelled while it loaded.
+   */
+  void enforceRetention() {
+    synchronized (jobs) {
+      evictFinishedJobs(getMaxFinishedJobs());
+      List<RoutingJob> finished = finishedJobsNewestFirst();
+      int released = 0;
+      for (int i = getMaxFinishedJobBoards(); i < finished.size(); i++) {
+        RoutingJob job = finished.get(i);
+        if (!job.keepBoardWhenFinished && job.board != null) {
+          job.releaseBoard();
+          released++;
+        }
+      }
+      if (released > 0) {
+        FRLogger.debug("Released the routing boards of " + released + " finished jobs.");
+      }
+    }
+  }
+
+  /**
+   * Removes the oldest finished jobs so that at most {@code keep} of them remain. The caller holds
+   * the lock of {@link #jobs}.
+   *
+   * @return the number of finished jobs that remain
+   */
+  private int evictFinishedJobs(int keep) {
+    List<RoutingJob> finished = finishedJobsNewestFirst();
+    if (finished.size() <= keep) {
+      return finished.size();
+    }
+    Set<RoutingJob> evicted = Collections.newSetFromMap(new IdentityHashMap<>());
+    evicted.addAll(finished.subList(keep, finished.size()));
+    this.jobs.removeIf(evicted::contains);
+    forgetLogs(evicted);
+    FRLogger.debug("Removed the " + evicted.size() + " oldest finished routing jobs.");
+    return keep;
+  }
+
+  /**
+   * Drops the in-memory log entries of removed jobs: the job log endpoints answer 404 for them, and
+   * the console and file logs keep the messages.
+   */
+  private static void forgetLogs(Iterable<RoutingJob> removedJobs) {
+    for (RoutingJob job : removedJobs) {
+      FRLogger.getLogEntries().removeTopic(job.id);
+    }
+  }
+
+  /**
+   * Returns the jobs that retention may remove or strip, newest first. The caller holds the lock of
+   * {@link #jobs}.
+   */
+  private List<RoutingJob> finishedJobsNewestFirst() {
+    List<RoutingJob> finished = new ArrayList<>();
+    for (RoutingJob job : this.jobs) {
+      if (job != null && isFinished(job) && !isPrimarySessionJob(job)) {
+        finished.add(job);
+      }
+    }
+    // The list sort is stable, so jobs that ended at the same instant keep their queue order.
+    finished.sort(Comparator.comparing(RoutingJobScheduler::endedAt).reversed());
+    return finished;
+  }
+
+  /** A finished job is in a terminal state and its routing thread, if any, has ended. */
+  private static boolean isFinished(RoutingJob job) {
+    RoutingJobState state = job.state;
+    StoppableThread thread = job.thread;
+    return state != null && state.isTerminal() && (thread == null || !thread.isAlive());
+  }
+
+  /** The primary session is the GUI's; its job is reused for every run and owns the GUI board. */
+  private static boolean isPrimarySessionJob(RoutingJob job) {
+    if (job.sessionId == null) {
+      return false;
+    }
+    Session session = SessionManager.getInstance().getSession(job.sessionId.toString());
+    return session != null && session.isPrimary;
+  }
+
+  /** When the job ended, or when it was created if it never ran. */
+  private static Instant endedAt(RoutingJob job) {
+    return job.finishedAt != null ? job.finishedAt : job.createdAt;
+  }
+
+  /**
+   * Returns the sessions that have a job which is queued, starting, running, stopping or paused, or
+   * whose routing thread is still alive.
+   */
+  public Set<UUID> sessionIdsWithActiveJobs() {
+    Set<UUID> active = new HashSet<>();
+    synchronized (jobs) {
+      for (RoutingJob job : this.jobs) {
+        if (job != null && job.sessionId != null && !isFinished(job)) {
+          active.add(job.sessionId);
+        }
+      }
+    }
+    return active;
+  }
+
+  /**
+   * Removes the finished jobs of a session and their in-memory log entries; jobs that are still
+   * active stay.
+   *
+   * @param sessionId the session identifier
+   */
+  public void removeFinishedJobs(UUID sessionId) {
+    List<RoutingJob> removed = new ArrayList<>();
+    synchronized (jobs) {
+      Iterator<RoutingJob> queue = this.jobs.iterator();
+      while (queue.hasNext()) {
+        RoutingJob job = queue.next();
+        if (job != null && sessionId.equals(job.sessionId) && isFinished(job)) {
+          queue.remove();
+          removed.add(job);
+        }
+      }
+    }
+    forgetLogs(removed);
+  }
+
   private String uuidToShortCode(UUID uuid) {
     return uuid.toString().substring(0, 6).toUpperCase(Locale.ROOT);
   }
@@ -404,15 +578,11 @@ public final class RoutingJobScheduler {
     job.state = RoutingJobState.QUEUED;
 
     synchronized (jobs) {
-      if (this.jobs.size() >= MAX_QUEUED_JOBS) {
-        // Evict finished/terminal jobs first
-        this.jobs.removeIf(
-            j ->
-                j.state == RoutingJobState.COMPLETED
-                    || j.state == RoutingJobState.CANCELLED
-                    || j.state == RoutingJobState.INVALID
-                    || j.state == RoutingJobState.TIMED_OUT
-                    || j.state == RoutingJobState.TERMINATED);
+      int finishedJobs = evictFinishedJobs(getMaxFinishedJobs());
+      int excess = this.jobs.size() + 1 - MAX_QUEUED_JOBS;
+      if (excess > 0) {
+        // Make room with the oldest remaining finished jobs before refusing the new one.
+        evictFinishedJobs(Math.max(0, finishedJobs - excess));
       }
       if (this.jobs.size() >= MAX_QUEUED_JOBS) {
         throw new IllegalStateException(
@@ -528,8 +698,10 @@ public final class RoutingJobScheduler {
         && job.input.getFilename() != null
         && !job.input.getFilename().isEmpty()
         && job.input.getData() != null) {
-      Path inputFilePath = sessionFolderPath.resolve(job.input.getFilename());
-      Files.write(inputFilePath, job.input.getData().readAllBytes());
+      Path inputFilePath = resolveInFolder(sessionFolderPath, job.input.getFilename());
+      if (inputFilePath != null) {
+        Files.write(inputFilePath, job.input.getData().readAllBytes());
+      }
     }
 
     // Save the output file if the filename is defined and there is data stored in
@@ -537,14 +709,37 @@ public final class RoutingJobScheduler {
     if (job.output != null
         && job.output.getFilename() != null
         && !job.output.getFilename().isEmpty()) {
-      Path outputFilePath = sessionFolderPath.resolve(job.output.getFilename());
+      Path outputFilePath = resolveInFolder(sessionFolderPath, job.output.getFilename());
       var outputData = job.output.getData();
-      if (outputData != null && outputData.available() > 0) {
+      if (outputFilePath == null) {
+        FRLogger.warn("Not saving the output of job '%s': invalid file name.".formatted(job.id));
+      } else if (outputData != null && outputData.available() > 0) {
         Files.write(outputFilePath, outputData.readAllBytes());
       } else {
         Files.deleteIfExists(outputFilePath);
       }
     }
+  }
+
+  /**
+   * Returns the file {@code filename} directly inside {@code folder}, or {@code null} when the name
+   * is not a plain file name (absolute, with a directory, or {@code ..}).
+   */
+  static Path resolveInFolder(Path folder, String filename) {
+    if (filename == null || filename.isBlank()) {
+      return null;
+    }
+    Path name;
+    try {
+      name = Path.of(filename);
+    } catch (InvalidPathException _) {
+      return null;
+    }
+    if (name.isAbsolute() || name.getNameCount() != 1 || "..".equals(name.toString())) {
+      return null;
+    }
+    Path resolved = folder.resolve(name).normalize();
+    return folder.normalize().equals(resolved.getParent()) ? resolved : null;
   }
 
   /**
@@ -582,37 +777,18 @@ public final class RoutingJobScheduler {
   }
 
   /**
-   * Returns jobs visible to a user, optionally restricted to one session.
+   * Returns the jobs of all sessions the caller owns (see {@link Session#isOwnedBy}).
    *
-   * @param sessionId a session identifier, or {@code null} for all sessions owned by the user
-   * @param userId the session owner's identifier
+   * @param userId the caller's profile id
+   * @param apiKeyHash the hash of the caller's validated API key, or {@code null}
    * @return a snapshot of the matching jobs
    */
-  public RoutingJob[] listJobs(String sessionId, UUID userId) {
-    SessionManager sessionManager = SessionManager.getInstance();
-
-    if (sessionId == null) {
-      // Get all sessions that belong to the user
-      Session[] sessions = sessionManager.getSessions(null, userId);
-
-      // Iterate through the sessions and list all jobs belonging to them
-      List<RoutingJob> result = new LinkedList<>();
-      for (Session session : sessions) {
-        // List all jobs belonging to the user in the session
-        result.addAll(List.of(listJobs(session.id.toString())));
-      }
-
-      return result.toArray(RoutingJob[]::new);
-    } else {
-      Session session = sessionManager.getSession(sessionId, userId);
-
-      if (session != null) {
-        // List all jobs belonging to the user in the session
-        return listJobs(session.id.toString());
-      }
+  public RoutingJob[] listOwnedJobs(UUID userId, String apiKeyHash) {
+    List<RoutingJob> result = new LinkedList<>();
+    for (Session session : SessionManager.getInstance().getOwnedSessions(userId, apiKeyHash)) {
+      result.addAll(List.of(listJobs(session.id.toString())));
     }
-
-    return new RoutingJob[0];
+    return result.toArray(RoutingJob[]::new);
   }
 
   /**

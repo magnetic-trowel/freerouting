@@ -9,6 +9,7 @@ import app.freerouting.core.ProgressThrottler;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.StoppableThread;
+import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.GlobalSettings;
 import app.freerouting.util.TextManager;
@@ -166,9 +167,7 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
               String completionStatus = "completed:";
               boolean isTimedOut =
                   (job.state == RoutingJobState.TIMED_OUT)
-                      || ((job.timeoutAt != null)
-                          && !Instant.now().isBefore(job.timeoutAt)
-                          && job.thread.isStopRequested());
+                      || (job.isTimedOut() && job.thread.isStopRequested());
 
               if (isTimedOut) {
                 completionStatus = "completed with timeout:";
@@ -206,6 +205,11 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
           });
       pipeline.run();
       boolean outputReady = RoutingJobOutputWriter.write(job);
+      // Before the job turns terminal: a caller that waits for the terminal state (the CLI, the
+      // synchronous autoroute endpoint) reports these instead of reading the board again while
+      // this thread computes them.
+      var finalBoardStats = job.board != null ? BoardStatistics.ofResult(job.board) : null;
+      job.finalStatistics = finalBoardStats;
 
       boolean fanoutTimedOut = pipeline.getAutorouter().isFanoutTimedOut();
       final boolean optimizerTimedOut =
@@ -243,7 +247,6 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
             default -> JobLifecycleStatus.FAILED;
           };
 
-      var finalBoardStats = job.board != null ? job.board.getStatistics() : null;
       Integer netsTotal =
           finalBoardStats != null && finalBoardStats.nets != null
               ? finalBoardStats.nets.totalCount
@@ -399,7 +402,7 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
         job.state = RoutingJobState.CANCELLED;
         return;
       }
-      if (jobClockExpired()) {
+      if (job.isTimedOut()) {
         job.state = RoutingJobState.TIMED_OUT;
         return;
       }
@@ -426,9 +429,5 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
     return settings == null
         || Boolean.TRUE.equals(settings.apiServerSettings.isRunning)
         || Boolean.TRUE.equals(settings.mcpServerSettings.isRunning);
-  }
-
-  private boolean jobClockExpired() {
-    return job.timeoutAt != null && !Instant.now().isBefore(job.timeoutAt);
   }
 }
