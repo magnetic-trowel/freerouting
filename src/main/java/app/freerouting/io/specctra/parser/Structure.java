@@ -3,6 +3,7 @@ package app.freerouting.io.specctra.parser;
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.ConductionArea;
+import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.ObstacleArea;
 import app.freerouting.board.model.items.ViaObstacleArea;
 import app.freerouting.board.model.structure.AngleRestriction;
@@ -937,12 +938,25 @@ public class Structure extends ScopeKeyword {
     if (currentLayer == Layer.SIGNAL) {
       for (int i = 0; i < board.getLayerCount(); i++) {
         if (scopeParameter.layerStructure.layers[i].isSignal) {
-          insertKeepout(board, keepoutArea, i, area.clearanceClassName, keepoutType, fixedState);
+          insertKeepout(
+              board,
+              keepoutArea,
+              i,
+              area.clearanceClassName,
+              keepoutType,
+              fixedState,
+              scopeParameter);
         }
       }
     } else if (currentLayer.no >= 0) {
       insertKeepout(
-          board, keepoutArea, currentLayer.no, area.clearanceClassName, keepoutType, fixedState);
+          board,
+          keepoutArea,
+          currentLayer.no,
+          area.clearanceClassName,
+          keepoutType,
+          fixedState,
+          scopeParameter);
     } else {
       FRLogger.warn(
           "Structure.insert_keepout: unknown layer name at '"
@@ -960,30 +974,66 @@ public class Structure extends ScopeKeyword {
       int layer,
       String clearanceClassName,
       KeepoutType keepoutType,
-      FixedState fixedState) {
-    int clearanceClassIndex;
-    if (clearanceClassName == null) {
-      clearanceClassIndex =
-          board
-              .rules
-              .getDefaultNetClass()
-              .defaultItemClearanceClasses
-              .get(DefaultItemClearanceClasses.ItemClass.AREA);
+      FixedState fixedState,
+      ReadScopeParameter scopeParameter) {
+    int defaultClass =
+        board
+            .rules
+            .getDefaultNetClass()
+            .defaultItemClearanceClasses
+            .get(DefaultItemClearanceClasses.ItemClass.AREA);
+    int clearanceClassIndex = clearanceClassOrDefault(board, clearanceClassName, defaultClass);
+    ObstacleArea keepout;
+    if (keepoutType == KeepoutType.via_keepout) {
+      keepout = board.insertViaObstacle(area, layer, clearanceClassIndex, fixedState);
+    } else if (keepoutType == KeepoutType.place_keepout) {
+      keepout = board.insertComponentObstacle(area, layer, clearanceClassIndex, fixedState);
     } else {
-      clearanceClassIndex = board.rules.clearanceMatrix.getNo(clearanceClassName);
-      if (clearanceClassIndex < 0) {
+      keepout = board.insertObstacle(area, layer, clearanceClassIndex, fixedState);
+    }
+    deferUnknownClearanceClass(keepout, clearanceClassName, scopeParameter);
+  }
+
+  /** The clearance class with the given name, or the default if there is no name or no class. */
+  private static int clearanceClassOrDefault(BasicBoard board, String name, int defaultClass) {
+    int result = name == null ? -1 : board.rules.clearanceMatrix.getNo(name);
+    return result < 0 ? defaultClass : result;
+  }
+
+  /**
+   * Records an item whose clearance class name is not known yet: it may name a class of the network
+   * scope, which is read after the structure. {@link #resolveDeferredClearanceClasses} assigns it
+   * then.
+   */
+  private static void deferUnknownClearanceClass(
+      Item item, String clearanceClassName, ReadScopeParameter scopeParameter) {
+    if (item != null
+        && clearanceClassName != null
+        && item.board.rules.clearanceMatrix.getNo(clearanceClassName) < 0) {
+      scopeParameter.pendingClearanceClasses.add(
+          new ReadScopeParameter.PendingClearanceClass(item, clearanceClassName));
+    }
+  }
+
+  /**
+   * Assigns the clearance classes that structure items name but that did not exist when the items
+   * were inserted. Called once the network scope has defined its classes. A name that is still
+   * unknown keeps the default class the item was inserted with.
+   */
+  static void resolveDeferredClearanceClasses(ReadScopeParameter scopeParameter) {
+    for (ReadScopeParameter.PendingClearanceClass pending :
+        scopeParameter.pendingClearanceClasses) {
+      int clearanceClassIndex = pending.item().board.rules.clearanceMatrix.getNo(pending.name());
+      if (clearanceClassIndex >= 0) {
+        pending.item().changeClearanceClassIndex(clearanceClassIndex);
+      } else {
         FRLogger.warn(
-            "Keepout.insert_keepout: clearance class not found at '" + clearanceClassName + "'");
-        clearanceClassIndex = BoardRules.clearanceClassNone();
+            "Structure: clearance class '"
+                + pending.name()
+                + "' not found, the default clearance applies");
       }
     }
-    if (keepoutType == KeepoutType.via_keepout) {
-      board.insertViaObstacle(area, layer, clearanceClassIndex, fixedState);
-    } else if (keepoutType == KeepoutType.place_keepout) {
-      board.insertComponentObstacle(area, layer, clearanceClassIndex, fixedState);
-    } else {
-      board.insertObstacle(area, layer, clearanceClassIndex, fixedState);
-    }
+    scopeParameter.pendingClearanceClasses.clear();
   }
 
   @Override
@@ -1139,33 +1189,25 @@ public class Structure extends ScopeKeyword {
           Shape.transformAreaToBoard(planeInfo.area.shapeList, scopeParameter.coordinateTransform);
       final Layer currentLayer = (planeInfo.area.shapeList.iterator().next()).layer;
       if (currentLayer.no >= 0) {
-        int clearanceClassIndex;
-        if (planeInfo.area.clearanceClassName != null) {
-          clearanceClassIndex =
-              board.rules.clearanceMatrix.getNo(planeInfo.area.clearanceClassName);
-          if (clearanceClassIndex < 0) {
-            FRLogger.warn(
-                "Structure.read_scope: clearance class not found at '"
-                    + scopeParameter.scanner.getScopeIdentifier()
-                    + "'");
-            clearanceClassIndex = BoardRules.clearanceClassNone();
-          }
-        } else {
-          clearanceClassIndex =
-              currentNet
-                  .getNetClass()
-                  .defaultItemClearanceClasses
-                  .get(DefaultItemClearanceClasses.ItemClass.AREA);
-        }
+        int clearanceClassIndex =
+            clearanceClassOrDefault(
+                board,
+                planeInfo.area.clearanceClassName,
+                currentNet
+                    .getNetClass()
+                    .defaultItemClearanceClasses
+                    .get(DefaultItemClearanceClasses.ItemClass.AREA));
         int[] netNumbers = new int[1];
         netNumbers[0] = currentNet.netNumber;
-        board.insertConductionArea(
-            planeArea,
-            currentLayer.no,
-            netNumbers,
-            clearanceClassIndex,
-            false,
-            FixedState.SYSTEM_FIXED);
+        Item plane =
+            board.insertConductionArea(
+                planeArea,
+                currentLayer.no,
+                netNumbers,
+                clearanceClassIndex,
+                false,
+                FixedState.SYSTEM_FIXED);
+        deferUnknownClearanceClass(plane, planeInfo.area.clearanceClassName, scopeParameter);
       } else {
         FRLogger.warn(
             "Plane.read_scope: unexpected layer name at '"

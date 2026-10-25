@@ -1427,6 +1427,7 @@ public class Network extends ScopeKeyword {
     insertViaRules(viaRules, scopeParameter.boardHandling.getRoutingBoard());
     insertNetClasses(classes, scopeParameter);
     insertClassPairs(classClassList, scopeParameter);
+    Structure.resolveDeferredClearanceClasses(scopeParameter);
     insertComponents(scopeParameter);
     insertLogicalParts(scopeParameter);
     return true;

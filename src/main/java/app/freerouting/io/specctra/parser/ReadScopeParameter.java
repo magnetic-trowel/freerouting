@@ -43,6 +43,13 @@ public class ReadScopeParameter {
   final Collection<PlaneInfo> planeList = new LinkedList<>();
 
   /**
+   * Items of the structure scope with a clearance class name that is not known when they are
+   * inserted. The structure is read before the network, whose classes define further clearance
+   * classes, so these names are resolved after the network scope.
+   */
+  final Collection<PendingClearanceClass> pendingClearanceClasses = new LinkedList<>();
+
+  /**
    * Component placement information. It is filled while reading the placement scope and can be
    * evaluated after reading the library and network scope.
    */
@@ -217,6 +224,8 @@ public class ReadScopeParameter {
   // -------------------------------------------------------------------------
 
   /** Information for inserting a plane. */
+  record PendingClearanceClass(app.freerouting.board.model.items.Item item, String name) {}
+
   static class PlaneInfo {
 
     final Shape.ReadAreaScopeResult area;
