@@ -932,14 +932,14 @@ public class PolygonShape extends PolylineShape {
       firstArr[i] = corners[cornerInd];
       cornerInd = (cornerInd + 1) % corners.length;
     }
-    firstArr[cornerCount - 1] = d.projection.round();
+    firstArr[cornerCount - 1] = d.roundedProjection;
     cornerCount = concaveCornerNo - d.cornerNoAfterProjection;
     if (cornerCount < 0) {
       cornerCount += corners.length;
     }
     cornerCount += 2;
     Point[] lastArr = new Point[cornerCount];
-    lastArr[0] = d.projection.round();
+    lastArr[0] = d.roundedProjection;
     cornerInd = d.cornerNoAfterProjection;
     for (int i = 1; i < cornerCount; i++) {
       lastArr[i] = corners[cornerInd];
@@ -964,6 +964,15 @@ public class PolygonShape extends PolylineShape {
 
     final int cornerNoAfterProjection;
     final FloatPoint projection;
+
+    /**
+     * The projection rounded towards the concave corner, so that the division segment stays on the
+     * exact one, inside the polygon. Rounded to the nearest point it could cross the border next to
+     * the projection, at a spike narrower than a unit, and leave a piece whose border runs back
+     * over itself; such a piece has no concave corner and was kept as convex, which lost most of
+     * its area.
+     */
+    final IntPoint roundedProjection;
 
     /**
      * At a concave corner of the closed polygon, a minimal axis parallel division line is
@@ -1107,6 +1116,22 @@ public class PolygonShape extends PolylineShape {
 
       projection = minProjection;
       cornerNoAfterProjection = cornerNoAfterMinProjection;
+      roundedProjection =
+          minProjection == null
+              ? null
+              : new IntPoint(
+                  roundTowards(minProjection.x, concaveCorner.x),
+                  roundTowards(minProjection.y, concaveCorner.y));
+    }
+
+    private static int roundTowards(double value, double target) {
+      if (target > value) {
+        return (int) Math.ceil(value);
+      }
+      if (target < value) {
+        return (int) Math.floor(value);
+      }
+      return (int) Math.round(value);
     }
   }
 }
