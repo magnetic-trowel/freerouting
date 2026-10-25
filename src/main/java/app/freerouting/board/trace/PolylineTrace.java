@@ -502,10 +502,20 @@ public class PolylineTrace extends Trace implements Serializable {
               splitPieces.add(foundTrace);
             }
           }
-          // now try splitting the own trace
-
+          // now try splitting the own trace where the found trace touches it: where it was split,
+          // or where it contains the split point. A trace contains its interior points only if they
+          // have integer coordinates, so a split at another point of a trace that cannot be split
+          // there itself (a fixed trace, a point inside a pad) would connect nothing and be undone
+          // by combine().
           intersectingLines = currentLineSegment.intersection(foundLineSegment);
+          Line ownLine = this.lines.lines[i + 1];
           for (int j = 0; j < intersectingLines.length; j++) {
+            if (!foundTraceSplit
+                && foundTrace != this
+                && !ownLine.isParallel(intersectingLines[j])
+                && !foundTrace.contains(ownLine.intersection(intersectingLines[j]))) {
+              continue;
+            }
             PolylineTrace[] currentSplitPieces = split(i + 1, intersectingLines[j]);
             if (currentSplitPieces != null) {
               ownTraceSplit = true;

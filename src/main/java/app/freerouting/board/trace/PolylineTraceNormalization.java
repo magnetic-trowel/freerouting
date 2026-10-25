@@ -25,10 +25,8 @@ final class PolylineTraceNormalization {
       PolylineTrace trace, IntOctagon clipShape, int normalizationDepth) {
     if (normalizationDepth > MAX_NORMALIZATION_DEPTH) {
       // Return false (no further change at this depth level) rather than throwing an exception.
-      // The outer normalizeTraces() loop treats a false return as "nothing changed" for this
-      // trace, which is safe: the trace geometry may be slightly sub-optimal (extra corners), but
-      // it remains structurally valid, its endpoint contacts are preserved and removeTails() will
-      // not touch it.
+      // The trace is the result of the combine() that led here and is left unsplit: a split at
+      // this depth means a split and a combine keep undoing each other, which is a bug.
       FRLogger.debug(
           "PolylineTrace.normalize: max normalization depth ("
               + MAX_NORMALIZATION_DEPTH
