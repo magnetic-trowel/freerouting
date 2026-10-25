@@ -1,5 +1,6 @@
 package app.freerouting.datastructures;
 
+import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntPoint;
 import app.freerouting.geometry.planar.Limits;
 import app.freerouting.geometry.planar.Point;
@@ -28,6 +29,12 @@ public class PlanarDelaunayTriangulation {
    */
   private static final int seed = 99;
 
+  /**
+   * Coordinate of the corners of the bounding triangle (BOUNDING_COOR, 0), (0, BOUNDING_COOR) and
+   * (-BOUNDING_COOR, -BOUNDING_COOR), which strictly contains the square |x|, |y| <= CRIT_INT.
+   */
+  private static final int BOUNDING_COOR = 4 * Limits.CRIT_INT;
+
   /** The structure for searching the triangle containing a given input corner. */
   private final TriangleGraph searchGraph;
 
@@ -49,6 +56,13 @@ public class PlanarDelaunayTriangulation {
     for (PlanarDelaunayTriangulation.Storable currentObject : objectList) {
       Point[] currentCorners = currentObject.getTriangulationCorners();
       for (Point currentCorner : currentCorners) {
+        if (!isInCoordinateRange(currentCorner)) {
+          // Board geometry stays within the coordinate range; a corner outside it belongs to a
+          // degenerate item and cannot be enclosed by the bounding triangle.
+          FRLogger.warn(
+              "PlanarDelaunayTriangulation: corner " + currentCorner + " outside the board range");
+          continue;
+        }
         cornerList.add(new Corner(currentObject, currentCorner));
       }
     }
@@ -57,9 +71,12 @@ public class PlanarDelaunayTriangulation {
     // use a fixed seed to get reproducible result without cross-worker thread interference
     Collections.shuffle(cornerList, new Random(seed));
 
-    // create a big triangle containing all corners in the list to start with.
+    // Create a big triangle containing all corners in the list to start with. It encloses the
+    // whole board coordinate range |x|, |y| <= CRIT_INT: a triangle with corners at CRIT_INT left
+    // out every point with x + y > CRIT_INT, so the corners of items far from the origin were
+    // dropped from the triangulation or not found in it.
 
-    int boundingCoor = Limits.CRIT_INT;
+    int boundingCoor = BOUNDING_COOR;
     Corner[] boundingCorners = new Corner[3];
     boundingCorners[0] = new Corner(null, new IntPoint(boundingCoor, 0));
     boundingCorners[1] = new Corner(null, new IntPoint(0, boundingCoor));
@@ -90,6 +107,11 @@ public class PlanarDelaunayTriangulation {
       Triangle triangleToSplit = this.searchGraph.positionLocate(currentCorner);
       this.split(triangleToSplit, currentCorner);
     }
+  }
+
+  private static boolean isInCoordinateRange(Point point) {
+    FloatPoint floatPoint = point.toFloat();
+    return Math.abs(floatPoint.x) <= Limits.CRIT_INT && Math.abs(floatPoint.y) <= Limits.CRIT_INT;
   }
 
   /** Returns all edge lines of the result of the Delaunay Triangulation. */
@@ -317,6 +339,18 @@ public class PlanarDelaunayTriangulation {
      * Side.COLLINEAR, if this corner is collinear with 1 and 2.
      */
     public Side sideOf(Corner p1, Corner p2) {
+      if (this.coor instanceof IntPoint p
+          && p1.coor instanceof IntPoint a
+          && p2.coor instanceof IntPoint b) {
+        // Exact in long arithmetic: the coordinate differences reach 2 * BOUNDING_COOR, where the
+        // double products of IntVector.sideOf are rounded.
+        long determinant =
+            ((long) b.x - a.x) * ((long) p.y - a.y) - ((long) b.y - a.y) * ((long) p.x - a.x);
+        if (determinant > 0) {
+          return Side.ON_THE_LEFT;
+        }
+        return determinant < 0 ? Side.ON_THE_RIGHT : Side.COLLINEAR;
+      }
       return this.coor.sideOf(p1.coor, p2.coor);
     }
   }
