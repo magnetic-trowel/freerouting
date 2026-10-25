@@ -13,10 +13,14 @@ import app.freerouting.datastructures.ShapeTree.TreeEntry;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.PolylineArea;
+import app.freerouting.geometry.planar.RegularTileShape;
 import app.freerouting.geometry.planar.TileShape;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
 
 public class DrillPage implements ExpandableObject {
 
@@ -104,6 +108,7 @@ public class DrillPage implements ExpandableObject {
       if (drillShapes == null) {
         return this.drills;
       }
+      drillShapes = mergeConvexPieces(drillShapes);
 
       // Use the center points of these drill shapes to try making a via.
       int drillFirstLayer = 0;
@@ -143,6 +148,47 @@ public class DrillPage implements ExpandableObject {
       }
     }
     return this.drills;
+  }
+
+  /**
+   * Merges pieces whose union is convex. Cutting the holes out of the page one after another leaves
+   * many small pieces whose layout depends on the order of the holes; a via candidate is taken in
+   * every piece, so merging them gives fewer candidates, further away from the obstacles. The
+   * pieces are scanned in their given order, so the result is deterministic.
+   */
+  static TileShape[] mergeConvexPieces(TileShape[] pieces) {
+    List<TileShape> result = new ArrayList<>(Arrays.asList(pieces));
+    for (int i = 0; i < result.size(); i++) {
+      for (int j = i + 1; j < result.size(); j++) {
+        TileShape union = convexUnion(result.get(i), result.get(j));
+        if (union != null) {
+          result.set(i, union);
+          result.remove(j);
+          j = i;
+        }
+      }
+    }
+    return result.toArray(new TileShape[0]);
+  }
+
+  /** Returns the union of first and second if it is convex, otherwise null. */
+  private static TileShape convexUnion(TileShape first, TileShape second) {
+    if (!(first instanceof RegularTileShape regularFirst)
+        || !(second instanceof RegularTileShape regularSecond)) {
+      return null;
+    }
+    TileShape overlap = first.intersection(second);
+    if (overlap.dimension() < 1) {
+      // disjoint or touching only at a corner
+      return null;
+    }
+    double overlapArea = overlap.dimension() == 2 ? overlap.area() : 0;
+    TileShape hull = regularFirst.union(regularSecond);
+    // The bounding octagon of two octagons is their union exactly when no area is added.
+    if (Math.abs(hull.area() - (first.area() + second.area() - overlapArea)) > 1e-3) {
+      return null;
+    }
+    return hull.simplify();
   }
 
   @Override
