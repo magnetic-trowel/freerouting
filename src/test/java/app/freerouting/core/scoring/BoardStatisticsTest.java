@@ -2,6 +2,7 @@ package app.freerouting.core.scoring;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.io.FileFormat;
 import app.freerouting.settings.OptimizerScoringVersion;
@@ -91,6 +92,29 @@ class BoardStatisticsTest {
     settings.optimizerScoring.version = OptimizerScoringVersion.V2_LOWER_BOUND;
 
     assertEquals(200.0f, stats.getOptimizerScore(settings), 0.001f);
+  }
+
+  @Test
+  void v3OptimizerScoreIsTheBoundOverTheEquivalentLengthAndHasNoFloor() {
+    BoardStatistics stats = new BoardStatistics();
+    stats.bounds.minTraceLengthMm = 10.0f;
+    stats.bounds.minViaCount = 1;
+    stats.bounds.minBendCount = 1;
+    stats.vias.totalCount = 1;
+    stats.bends.totalCount = 1;
+
+    RouterSettings settings = new RouterSettings();
+    settings.optimizerScoring.version = OptimizerScoringVersion.V3_EQUIVALENT_LENGTH;
+
+    stats.traces.totalLengthMm = 10.0f;
+    assertEquals(1000.0f, stats.getOptimizerScore(settings), 0.001f);
+    stats.traces.totalLengthMm = 15.0f;
+    assertEquals(666.667f, stats.getOptimizerScore(settings), 0.001f);
+    // Three times the bound used to score 0 for every board this long; now it still ranks.
+    stats.traces.totalLengthMm = 40.0f;
+    assertEquals(250.0f, stats.getOptimizerScore(settings), 0.001f);
+    stats.traces.totalLengthMm = 39.0f;
+    assertTrue(stats.getOptimizerScore(settings) > 250.0f);
   }
 
   @Test

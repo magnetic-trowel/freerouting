@@ -168,9 +168,9 @@ can be replayed later without rerouting.
 
 | Symbol | Field | Technical meaning | In plain language |
 | --- | --- | --- | --- |
-| \(L_{\min}\) | `bounds.min_trace_length_mm` | Per-net Manhattan (\(L_1\)) minimum spanning tree of terminal XY coordinates, summed, in millimetres. Obstacles can make it optimistic. A Steiner tree can beat MST, so excess is clamped at 0. | The shortest “connect the dots with city-block streets” length we can prove from pin positions. Real traces will usually be longer because parts are in the way. |
-| \(V_{\min}\) | `bounds.min_via_count` | Minimum via *items* per net from the set of layers the terminals occupy and the via spans the board allows. A through-via that covers every occupied layer counts as **one** item. A copper pour is just another terminal on its layer — no plane special case. | The fewest layer-change nails you must hammer in if nothing crowded the board. Mixed-layer nets will not reach 1000. |
-| \(B_{\min}\) | `bounds.min_bend_count` | Using the same MST edges: 0 if the two terminals share \(x\) or \(y\), else 1 (one Manhattan corner). A straight 45° segment can beat this, so excess is clamped at 0. | The fewest corners a tidy Manhattan path would need. |
+| \(L_{\min}\) | `bounds.min_trace_length_mm` | Per net, a lower bound on any tree of traces that connects the pin centres under the board's angle restriction, summed, in millimetres: the larger of the longest pin-to-pin distance (city-block at 90°, octilinear at 45°, straight otherwise) and the Steiner-ratio share of the minimum spanning tree (2/3 of the city-block tree at 90°, \(\sqrt{3}/2\) of the Euclidean tree otherwise). Two-pin nets get their exact distance. A net with a copper pour adds nothing, since the pour connects its pins without traces. Obstacles only make real traces longer. | The shortest copper we can prove from pin positions. Real traces will usually be longer because parts are in the way. |
+| \(V_{\min}\) | `bounds.min_via_count` | Minimum via *items* per net from the set of layers the terminals occupy and the via spans the board allows, plus the net's fixed vias, which stay on the board and join the layers they span. A through-via that covers every occupied layer counts as **one** item. A copper pour is just another terminal on its layer. | The fewest layer-change nails you must hammer in if nothing crowded the board. Mixed-layer nets will not reach 1000. |
+| \(B_{\min}\) | `bounds.min_bend_count` | Using the same spanning-tree edges: 0 if a straight trace the angle restriction allows joins the two terminals (same \(x\) or \(y\); also a diagonal at 45°; always with any angle), else 1. A junction or a via can turn a corner without a bend, so excess is clamped at 0. | The fewest corners a tidy Manhattan path would need. |
 | \(L_{\mathrm{actual}}\) | `traces.total_length_mm` | Total routed trace length, including jogs, neckdowns, and fanout stubs. | How much copper you actually poured. |
 | \(V_{\mathrm{actual}}\) | `vias.total_count` | Via item count on the board. | How many drill hits you actually placed. |
 | \(B_{\mathrm{actual}}\) | `bends.total_count` | Polyline internal corners. **45° and 90° count equally.** | How many times a trace changes direction. A chamfer still counts as a bend. |
@@ -189,7 +189,13 @@ can be replayed later without rerouting.
 
 V3 uses the same lower bounds but measures every excess in millimetres of trace:
 
-$$\mathrm{score}_{\mathrm{opt}} = \max\Bigl(0,\ 1000 - W_L \cdot rac{\Delta L_{\mathrm{mm}} + \ell_v\,\Delta V + \ell_b\,\Delta B}{\max(L_{\min},\ L_{\mathrm{floor}})}\Bigr)$$
+$$P = W_L \cdot \frac{\Delta L_{\mathrm{mm}} + \ell_v\,\Delta V + \ell_b\,\Delta B}{\max(L_{\min},\ L_{\mathrm{floor}})}, \qquad \mathrm{score}_{\mathrm{opt}} = \frac{1000}{1 + P / 1000}$$
+
+With the default \(W_L = 1000\) the score is \(1000 \cdot L_{\min} / (L_{\min} + \text{excess})\): 1000 at
+the bound, the same slope as \(1000 - P\) near it, and never 0, so a board whose excess exceeds
+its bound still ranks the optimizer's candidates (the former \(\max(0, 1000 - P)\) form scored
+all of them 0 and no candidate could win). A relative score gain is then the relative reduction
+of the equivalent length.
 
 \(\ell_v\) is the trace length that uses as much routing space as one via: the via pad plus
 clearance, squared, on every layer the via spans, divided by one trace width plus clearance.
@@ -197,6 +203,17 @@ clearance, squared, on every layer the via spans, divided by one trace width plu
 net class (typically 2–8 mm per via and under 1 mm per bend) and are logged when the optimizer
 starts. Unlike V2, a via's worth does not shrink on boards with more pins or layers, and the
 optimizer can compare length against vias in one unit.
+
+\(\ell_v\) is also the board's electrical exchange rate between a via and trace length. A through
+via on a 1.6 mm board has about 1.2 nH and 0.4–0.6 pF (Johnson and Graham's estimates), a 50 Ω
+microstrip about 0.3 nH and 0.12 pF per millimetre, so one via weighs like 2–5 mm of trace, and
+more with the drilling and the reliability risk it adds. \(\ell_v\) (3–4.5 mm on typical
+two-layer boards) is in that range. The maze router's via cost, `via_costs` times the via radius
+(50 × 0.3 mm = 15 mm by default, 5 × the radius for plane nets, a tenth of it for pure SMD nets,
+and changed per retry), is a search heuristic for completing the board, not this trade-off, so
+the optimizer does not use it. Since the length and via bounds are true lower bounds, their
+clamps never hide a change, and with `commit_selection = score_ranked` (the default) a candidate
+is kept exactly when it lowers \(L + \ell_v V + \ell_b B\) (bends below their bound count as 0).
 
 ### Keep / undo gates (not score terms)
 

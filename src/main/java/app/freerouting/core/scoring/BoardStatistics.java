@@ -858,6 +858,9 @@ public class BoardStatistics implements Serializable {
   /**
    * Calculates the V3 optimizer score: excess vias and bends are converted to the trace length that
    * uses the same routing space, and the total excess length is measured against the lower bound.
+   * The score is {@code 1000 / (1 + weight / 1000 * excess / bound)}: 1000 at the bound, falling
+   * with every millimetre of excess and never reaching 0, so that a long board still ranks its
+   * candidates. With the default weight it is 1000 times the bound over the equivalent length.
    */
   private float getV3OptimizerScore(
       OptimizerScoreSettings settings, double traceLengthMm, int viaCount, int bendCount) {
@@ -879,13 +882,11 @@ public class BoardStatistics implements Serializable {
         Math.max(0.0, traceLengthMm - minTraceLength)
             + viaLength * Math.max(0.0, viaCount - minViaCount)
             + bendLength * Math.max(0.0, bendCount - minBendCount);
-    return (float)
-        Math.max(
-            0.0,
-            1000.0
-                - valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
-                    * excessLength
-                    / Math.max(minTraceLength, lengthFloor));
+    double penalty =
+        valueOrDefault(settings.excessWireLengthWeight, 1000.0f)
+            * excessLength
+            / Math.max(minTraceLength, lengthFloor);
+    return (float) (1000.0 * 1000.0 / (1000.0 + penalty));
   }
 
   private float getV2OptimizerScore(
