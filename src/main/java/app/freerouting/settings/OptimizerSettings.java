@@ -99,6 +99,15 @@ public class OptimizerSettings implements Serializable, Cloneable {
   @SerializedName("max_autoroute_passes")
   public Integer maxAutoroutePasses;
 
+  /**
+   * Whether the routing of a session (.ses) file loaded with the design may be rerouted. If false,
+   * its wires and vias are protected. If true, each keeps the state its session wrote, as the
+   * wiring of a DSN file does: routing without a {@code type} is ordinary routing that the router
+   * and the optimizer may rip up and improve, while {@code (type protect)} stays fixed.
+   */
+  @SerializedName("rework_imported_routing")
+  public Boolean reworkImportedRouting;
+
   // -------------------------------
 
   /**

@@ -53,14 +53,9 @@ class BatchOptimizerPreflightGuardsTest extends RoutingFixtureTest {
       RoutingBoard board = boardManager.getRoutingBoard();
       InputStream sesStream =
           app.freerouting.TestFixtures.resolvePath(SES_BM08).toUri().toURL().openStream();
-      SesReader.read(sesStream, board);
+      // Reworkable, so that the optimizer has candidates.
+      SesReader.read(sesStream, board, true);
       board.finishAutoroute();
-      // The session is imported fixed; unfix it so that the optimizer has candidates.
-      for (Item item : board.getItems()) {
-        if (item instanceof Trace || item instanceof Via) {
-          item.setFixedState(FixedState.UNFIXED);
-        }
-      }
       return board;
     } catch (Exception e) {
       throw new RuntimeException("Failed to load test board", e);

@@ -11,6 +11,7 @@ import app.freerouting.io.specctra.parser.PolygonPath;
 import app.freerouting.io.specctra.parser.ScopeKeyword;
 import app.freerouting.io.specctra.parser.Shape;
 import app.freerouting.io.specctra.parser.SpecctraDsnStreamReader;
+import app.freerouting.io.specctra.parser.Wiring;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.rules.Net;
 import java.io.IOException;
@@ -34,6 +35,7 @@ public final class SesReader {
   private final IJFlexScanner scanner;
   private final BasicBoard board;
   private final LayerStructure specctraLayerStructure;
+  private final boolean reworkable;
   private double sessionToBoardScale;
   private int wiresImported;
   private int viasImported;
@@ -42,11 +44,13 @@ public final class SesReader {
   /** Number of {@code (net ...)} scopes read so far per net name. */
   private final Map<String, Integer> netScopesRead = new HashMap<>();
 
-  private SesReader(IJFlexScanner scanner, BasicBoard board, double scaleFactor) {
+  private SesReader(
+      IJFlexScanner scanner, BasicBoard board, double scaleFactor, boolean reworkable) {
     this.scanner = scanner;
     this.board = board;
     this.specctraLayerStructure = new LayerStructure(board.layerStructure);
     this.sessionToBoardScale = scaleFactor;
+    this.reworkable = reworkable;
   }
 
   /**
@@ -68,6 +72,20 @@ public final class SesReader {
    *     reading the stream
    */
   public static SesImportSummary read(InputStream in, BasicBoard board) throws IOException {
+    return read(in, board, false);
+  }
+
+  /**
+   * Reads a SES file and imports the routing data into {@code board}, see {@link #read(InputStream,
+   * BasicBoard)}.
+   *
+   * @param reworkable if false, every imported wire and via is protected ({@link
+   *     FixedState#USER_FIXED}); if true, each gets the fixed state its {@code (type ...)} scope
+   *     states, as the wiring of a DSN file does: none is routing the router may rip up and
+   *     improve, {@code (type protect)} stays fixed
+   */
+  public static SesImportSummary read(InputStream in, BasicBoard board, boolean reworkable)
+      throws IOException {
     if (in == null) {
       throw new IOException("SesReader.read: input stream must not be null");
     }
@@ -81,7 +99,7 @@ public final class SesReader {
     double scaleFactor =
         board.communication.coordinateTransform.dsnToBoard(1) / board.communication.resolution;
 
-    SesReader reader = new SesReader(scanner, board, scaleFactor);
+    SesReader reader = new SesReader(scanner, board, scaleFactor, reworkable);
 
     try {
       reader.processSessionScope();
@@ -333,7 +351,7 @@ public final class SesReader {
 
       if (prevToken == Keyword.OPEN_BRACKET) {
         if (nextToken == Keyword.WIRE) {
-          PolygonPath wire = readWireScope();
+          WireEntry wire = readWireScope();
           if (wire != null) {
             entries.add(wire);
           }
@@ -356,8 +374,8 @@ public final class SesReader {
   private void importEntries(List<Object> entries, int[] netNumbers) {
     List<double[]> wireCoordinates = new ArrayList<>();
     for (Object entry : entries) {
-      if (entry instanceof PolygonPath wire) {
-        wireCoordinates.add(wire.coordinateArr);
+      if (entry instanceof WireEntry wire) {
+        wireCoordinates.add(wire.path().coordinateArr);
       }
     }
     List<SesPathGeometry.Restored> restored =
@@ -365,7 +383,7 @@ public final class SesReader {
     int wireIndex = 0;
     for (Object entry : entries) {
       boolean imported =
-          entry instanceof PolygonPath wire
+          entry instanceof WireEntry wire
               ? insertWire(wire, restored.get(wireIndex++), netNumbers)
               : insertVia((ViaEntry) entry, netNumbers);
       if (!imported) {
@@ -377,13 +395,25 @@ public final class SesReader {
   // ---------------------------------------------------------------------------
 
   /**
+   * Returns the fixed state of an imported wire or via whose {@code (type ...)} scope states the
+   * given one ({@link FixedState#UNFIXED} without that scope).
+   */
+  private FixedState importedFixedState(FixedState written) {
+    return this.reworkable ? written : FixedState.USER_FIXED;
+  }
+
+  /** A wire as read from its scope; the fixed state is the one its file states. */
+  private record WireEntry(PolygonPath path, FixedState fixedState) {}
+
+  /**
    * Reads a {@code (wire ...)} scope.
    *
-   * @return its path, or null if it has none (conduction areas) or the file ends inside it, which
-   *     counts as an error
+   * @return the wire, or null if it has no path (conduction areas) or the file ends inside it,
+   *     which counts as an error
    */
-  private PolygonPath readWireScope() throws IOException {
+  private WireEntry readWireScope() throws IOException {
     PolygonPath wirePath = null;
+    FixedState fixedState = FixedState.UNFIXED;
     Object nextToken = null;
     for (; ; ) {
       final Object prevToken = nextToken;
@@ -397,11 +427,13 @@ public final class SesReader {
         return null;
       }
       if (nextToken == Keyword.CLOSED_BRACKET) {
-        return wirePath;
+        return wirePath == null ? null : new WireEntry(wirePath, fixedState);
       }
       if (prevToken == Keyword.OPEN_BRACKET) {
         if (nextToken == Keyword.POLYGON_PATH) {
           wirePath = Shape.readPolygonPathScope(this.scanner, this.specctraLayerStructure, 1);
+        } else if (nextToken == Keyword.TYPE) {
+          fixedState = Wiring.calcFixed(this.scanner);
         } else {
           ScopeKeyword.skipScope(this.scanner);
         }
@@ -414,8 +446,8 @@ public final class SesReader {
    *
    * @return {@code true} if the wire was imported
    */
-  private boolean insertWire(
-      PolygonPath wirePath, SesPathGeometry.Restored restored, int[] netNumbers) {
+  private boolean insertWire(WireEntry wire, SesPathGeometry.Restored restored, int[] netNumbers) {
+    PolygonPath wirePath = wire.path();
     try {
       int layerIndex = wirePath.layer.no;
       if (layerIndex < 0 || layerIndex >= board.getLayerCount()) {
@@ -431,7 +463,7 @@ public final class SesReader {
               .defaultItemClearanceClasses
               .get(app.freerouting.rules.DefaultItemClearanceClasses.ItemClass.TRACE);
 
-      // Import fixed copper exactly; normalization must not erase point copper or short segments.
+      // Import the copper exactly; normalization must not erase point copper or short segments.
       var trace =
           board.insertTraceWithoutCleaning(
               restored.polyline(),
@@ -439,7 +471,7 @@ public final class SesReader {
               halfWidth,
               netNumbers,
               clearanceClass,
-              FixedState.USER_FIXED);
+              importedFixedState(wire.fixedState()));
       if (trace == null) {
         return false;
       }
@@ -452,8 +484,8 @@ public final class SesReader {
     }
   }
 
-  /** A via as read from its scope. */
-  private record ViaEntry(String padstackName, double[] location) {}
+  /** A via as read from its scope; the fixed state is the one its file states. */
+  private record ViaEntry(String padstackName, double[] location, FixedState fixedState) {}
 
   /**
    * Reads a {@code (via ...)} scope.
@@ -487,10 +519,14 @@ public final class SesReader {
       }
     }
 
-    // Skip any additional sub-scopes (e.g. type, lock_type)
+    FixedState fixedState = FixedState.UNFIXED;
     nextToken = this.scanner.nextToken();
     while (nextToken == Keyword.OPEN_BRACKET) {
-      ScopeKeyword.skipScope(this.scanner);
+      if (this.scanner.nextToken() == Keyword.TYPE) {
+        fixedState = Wiring.calcFixed(this.scanner);
+      } else {
+        ScopeKeyword.skipScope(this.scanner);
+      }
       nextToken = this.scanner.nextToken();
     }
 
@@ -501,7 +537,7 @@ public final class SesReader {
               + "'");
       return null;
     }
-    return new ViaEntry(padstackName, location);
+    return new ViaEntry(padstackName, location, fixedState);
   }
 
   /**
@@ -560,7 +596,7 @@ public final class SesReader {
           viaLocation,
           netNumbers,
           clearanceClass,
-          FixedState.USER_FIXED,
+          importedFixedState(via.fixedState()),
           attachAllowed);
 
       viasImported++;

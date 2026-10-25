@@ -254,6 +254,13 @@ Configures the optional route-optimization stage that runs after autorouting.
   keeps a runner-up only if it also raises the optimizer score. `best_prefix` commits in that order
   and then reverts the commits after the highest-scoring point. `all` keeps every runner-up that
   still reduces vias or trace length.
+- **`rework_imported_routing`**: Whether the routing of a session (`.ses`) file loaded with the
+  design (`-de board.dsn+board.ses`, or a session sent to the API) may be rerouted. `false`
+  (default): every imported wire and via is protected, so the router and the optimizer keep it
+  as it is. `true`: each wire and via keeps the fixed state its session states, as the wiring of a
+  DSN file does: routing without a `(type ...)` (what Freerouting writes for its own routing) is
+  ordinary routing that the optimizer may improve and the router may rip up, while
+  `(type protect)` stays fixed. Example: `--router.optimizer.rework_imported_routing=true`.
 
 ##### **`fanout` Sub-section**
 

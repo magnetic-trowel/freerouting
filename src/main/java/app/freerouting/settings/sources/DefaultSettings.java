@@ -243,6 +243,7 @@ public class DefaultSettings implements SettingsSource {
     settings.optimizer.additionalRipupCostFactorAtStart = 10;
     settings.optimizer.traceRipupCostFactor = 0.6f;
     settings.optimizer.maxAutoroutePasses = 6;
+    settings.optimizer.reworkImportedRouting = false;
     settings.optimizer.enablePreflightGuards = true;
     settings.optimizer.maxConsecutiveFailures = 50;
     settings.optimizer.maxConsecutiveFailuresPass1 = 12;

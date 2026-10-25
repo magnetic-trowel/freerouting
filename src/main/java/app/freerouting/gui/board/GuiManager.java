@@ -403,7 +403,11 @@ public class GuiManager {
             FRLogger.info("Loading SES file: " + globalSettings.designSessionFilename);
             FileInputStream sesStream = new FileInputStream(sessionFile);
             SesImportSummary summary =
-                SesReader.read(sesStream, newFrame.boardPanel.boardHandling.getRoutingBoard());
+                SesReader.read(
+                    sesStream,
+                    newFrame.boardPanel.boardHandling.getRoutingBoard(),
+                    routingJob.routerSettings != null
+                        && routingJob.routerSettings.getReworkImportedRouting());
             FRLogger.info(
                 "SES file loaded: "
                     + summary.wiresImported()

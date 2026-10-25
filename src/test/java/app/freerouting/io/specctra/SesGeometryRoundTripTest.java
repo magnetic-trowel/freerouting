@@ -361,6 +361,33 @@ class SesGeometryRoundTripTest {
     assertEquals(10, imported.getHalfWidth());
   }
 
+  /** Only a reworkable import keeps the state each wire was written with; else all are fixed. */
+  @Test
+  void onlyAReworkableImportKeepsTheFixedStateTheSessionWrote() throws Exception {
+    BasicBoard source = board(Unit.UM, 1000, 1000);
+    insert(source, new Polyline(Point.getInstance(0, 0), Point.getInstance(100, 0)))
+        .setFixedState(FixedState.UNFIXED);
+    insert(source, new Polyline(Point.getInstance(0, 50), Point.getInstance(100, 50)));
+    byte[] session = write(source);
+
+    BasicBoard fixedTarget = board(Unit.UM, 1000, 1000);
+    SesReader.read(new ByteArrayInputStream(session), fixedTarget);
+    assertEquals(
+        List.of(FixedState.USER_FIXED, FixedState.USER_FIXED), fixedStatesByY(fixedTarget));
+
+    BasicBoard reworkableTarget = board(Unit.UM, 1000, 1000);
+    SesReader.read(new ByteArrayInputStream(session), reworkableTarget, true);
+    assertEquals(
+        List.of(FixedState.UNFIXED, FixedState.USER_FIXED), fixedStatesByY(reworkableTarget));
+  }
+
+  private static List<FixedState> fixedStatesByY(BasicBoard board) {
+    return traces(board).stream()
+        .sorted(java.util.Comparator.comparingDouble(trace -> trace.firstCorner().toFloat().y))
+        .map(PolylineTrace::getFixedState)
+        .toList();
+  }
+
   private static List<List<Point>> cornerLists(List<PolylineTrace> traces) {
     return traces.stream()
         .sorted(java.util.Comparator.comparingDouble(trace -> trace.firstCorner().toFloat().x))

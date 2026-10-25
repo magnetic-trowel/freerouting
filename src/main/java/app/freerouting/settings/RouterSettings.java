@@ -847,6 +847,11 @@ public class RouterSettings implements Serializable, Cloneable {
     scoring.planeViaCosts = Math.max(value, 1);
   }
 
+  /** Returns whether the routing of a loaded session file may be rerouted. */
+  public boolean getReworkImportedRouting() {
+    return optimizer != null && Boolean.TRUE.equals(optimizer.reworkImportedRouting);
+  }
+
   /** Returns the explicit list of power-plane net names, or empty array if none configured. */
   public String[] getPlaneNets() {
     return planeNets != null ? planeNets.clone() : new String[0];

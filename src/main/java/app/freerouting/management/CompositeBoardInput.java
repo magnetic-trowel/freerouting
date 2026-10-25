@@ -305,7 +305,10 @@ public class CompositeBoardInput {
           }
         } else {
           FRLogger.info("Importing Specctra SES session data onto board");
-          SesReader.read(new ByteArrayInputStream(effectiveSessionData), job.board);
+          SesReader.read(
+              new ByteArrayInputStream(effectiveSessionData),
+              job.board,
+              job.routerSettings.getReworkImportedRouting());
         }
       } catch (Exception e) {
         FRLogger.error("Failed to import session data onto board", e);
