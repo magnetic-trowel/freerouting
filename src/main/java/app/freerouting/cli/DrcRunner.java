@@ -6,6 +6,7 @@ import app.freerouting.io.specctra.SesImportSummary;
 import app.freerouting.io.specctra.SesReader;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.management.BoardLoader;
+import app.freerouting.management.CompositeBoardInput;
 import app.freerouting.management.sessions.SessionManager;
 import app.freerouting.settings.GlobalSettings;
 import app.freerouting.settings.sources.DsnFileSettings;
@@ -70,11 +71,17 @@ public final class DrcRunner {
     // it neither reads a board that is being changed nor races with the DRC below.
     drcJob.board.awaitPostLoad();
 
-    if (globalSettings.initialRulesFile != null) {
+    // The same rules a routing job of this input reads: the given file, else the one next to it.
+    String rulesPath = globalSettings.initialRulesFile;
+    if (rulesPath == null) {
+      File adjacentRules = CompositeBoardInput.adjacentRulesFile(drcJob.input);
+      rulesPath = adjacentRules != null ? adjacentRules.getPath() : null;
+    }
+    if (rulesPath != null) {
       try {
-        File rulesFile = new File(globalSettings.initialRulesFile);
+        File rulesFile = new File(rulesPath);
         if (rulesFile.exists()) {
-          FRLogger.info("Loading RULES file for DRC: " + globalSettings.initialRulesFile);
+          FRLogger.info("Loading RULES file for DRC: " + rulesPath);
           try (java.io.FileInputStream rulesStream = new java.io.FileInputStream(rulesFile)) {
             String designName = drcJob.name != null ? drcJob.name : "board";
             app.freerouting.io.specctra.RulesReader.read(
@@ -82,7 +89,7 @@ public final class DrcRunner {
             FRLogger.info("RULES file loaded for DRC successfully");
           }
         } else {
-          FRLogger.warn("RULES file for DRC not found: " + globalSettings.initialRulesFile);
+          FRLogger.warn("RULES file for DRC not found: " + rulesPath);
         }
       } catch (Exception e) {
         FRLogger.error("Failed to load RULES file for DRC", e);

@@ -113,6 +113,26 @@ public class CompositeBoardInput {
   }
 
   /**
+   * The rules file a DSN input brings along: {@code <name>.rules} in the directory of the DSN file,
+   * or null if there is none. Routing and the design rules check both read it when no rules file is
+   * given explicitly, so both judge the board by the same rules.
+   */
+  public static File adjacentRulesFile(BoardFileDetails input) {
+    if (input == null
+        || input.format != FileFormat.DSN
+        || input.getDirectoryPath() == null
+        || input.getDirectoryPath().isBlank()) {
+      return null;
+    }
+    String baseName = input.getFilename();
+    if (baseName.lastIndexOf('.') > 0) {
+      baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+    }
+    File rulesFile = new File(input.getDirectoryPath(), baseName + ".rules");
+    return rulesFile.exists() ? rulesFile : null;
+  }
+
+  /**
    * Applies a RULES file onto {@code board} and returns the router settings of its {@code
    * (autoroute_settings ...)} scope as the RULES-file settings source. The settings are read with
    * the board's layer structure and merged at RULES-file priority, below the environment, the
@@ -209,23 +229,14 @@ public class CompositeBoardInput {
     if (effectiveRulesData == null && job.rules != null && job.rules.getData() != null) {
       effectiveRulesData = job.rules.getData().readAllBytes();
       effectiveRulesFilename = job.rules.getFilename();
-    } else if (effectiveRulesData == null
-        && isDsn
-        && job.input.getDirectoryPath() != null
-        && !job.input.getDirectoryPath().isBlank()) {
-      String baseName = job.input.getFilename();
-      if (baseName.lastIndexOf('.') > 0) {
-        baseName = baseName.substring(0, baseName.lastIndexOf('.'));
-      }
-      File autoRules = new File(job.input.getDirectoryPath(), baseName + ".rules");
-      if (autoRules.exists()) {
-        try {
-          effectiveRulesData = Files.readAllBytes(autoRules.toPath());
-          effectiveRulesFilename = autoRules.getName();
-        } catch (Exception e) {
-          FRLogger.warn(
-              "Failed to read adjacent rules file: " + autoRules.getPath() + ": " + e.getMessage());
-        }
+    } else if (effectiveRulesData == null && adjacentRulesFile(job.input) != null) {
+      File autoRules = adjacentRulesFile(job.input);
+      try {
+        effectiveRulesData = Files.readAllBytes(autoRules.toPath());
+        effectiveRulesFilename = autoRules.getName();
+      } catch (Exception e) {
+        FRLogger.warn(
+            "Failed to read adjacent rules file: " + autoRules.getPath() + ": " + e.getMessage());
       }
     }
 

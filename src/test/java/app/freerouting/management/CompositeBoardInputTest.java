@@ -3,9 +3,11 @@ package app.freerouting.management;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.Freerouting;
+import app.freerouting.core.BoardFileDetails;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.fixtures.RoutingFixtureTest;
 import app.freerouting.settings.GlobalSettings;
@@ -15,6 +17,7 @@ import java.nio.file.Path;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class CompositeBoardInputTest extends RoutingFixtureTest {
 
@@ -152,5 +155,20 @@ class CompositeBoardInputTest extends RoutingFixtureTest {
     assertFalse(job.routerSettings.viasAllowed, "caller disallowed vias");
     assertEquals(7, job.routerSettings.scoring.startRipupCosts, "caller set the ripup costs");
     assertEquals(51, job.routerSettings.scoring.viaCosts, "the rules file sets the via costs");
+  }
+
+  @Test
+  void adjacentRulesFileIsTheRulesFileNamedAfterTheDsn(@TempDir Path directory) throws Exception {
+    byte[] dsnBytes = getRoutingJob("Issue508-DAC2020_bm01.dsn").input.getData().readAllBytes();
+    Path dsn = directory.resolve("board.dsn");
+    Files.write(dsn, dsnBytes);
+    BoardFileDetails input = new BoardFileDetails(dsn.toFile());
+    assertNull(CompositeBoardInput.adjacentRulesFile(input), "no rules file yet");
+
+    Path rules = directory.resolve("board.rules");
+    Files.writeString(rules, "(rules PCB board)");
+    assertEquals(
+        rules.toFile().getAbsoluteFile(),
+        CompositeBoardInput.adjacentRulesFile(input).getAbsoluteFile());
   }
 }

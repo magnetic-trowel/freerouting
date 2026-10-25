@@ -163,25 +163,18 @@ public final class RoutingJobScheduler {
                                             + e.getMessage());
                                   }
                                 }
-                              } else if (isDsn && job.input.getDirectoryPath() != null) {
-                                String baseName = job.input.getFilename();
-                                if (baseName.lastIndexOf('.') > 0) {
-                                  baseName = baseName.substring(0, baseName.lastIndexOf('.'));
-                                }
+                              } else if (CompositeBoardInput.adjacentRulesFile(job.input) != null) {
                                 java.io.File autoRules =
-                                    new java.io.File(
-                                        job.input.getDirectoryPath(), baseName + ".rules");
-                                if (autoRules.exists()) {
-                                  try {
-                                    rulesData = Files.readAllBytes(autoRules.toPath());
-                                    rulesFilename = autoRules.getName();
-                                  } catch (IOException e) {
-                                    FRLogger.warn(
-                                        "Failed to read adjacent rules file: "
-                                            + autoRules.getPath()
-                                            + ": "
-                                            + e.getMessage());
-                                  }
+                                    CompositeBoardInput.adjacentRulesFile(job.input);
+                                try {
+                                  rulesData = Files.readAllBytes(autoRules.toPath());
+                                  rulesFilename = autoRules.getName();
+                                } catch (IOException e) {
+                                  FRLogger.warn(
+                                      "Failed to read adjacent rules file: "
+                                          + autoRules.getPath()
+                                          + ": "
+                                          + e.getMessage());
                                 }
                               }
 
