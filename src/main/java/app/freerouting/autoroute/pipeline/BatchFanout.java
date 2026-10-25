@@ -3,6 +3,7 @@ package app.freerouting.autoroute.pipeline;
 import app.freerouting.autoroute.AutorouteAttemptResult;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Pin;
+import app.freerouting.board.model.items.WholeNetConnectivity;
 import app.freerouting.board.model.structure.Component;
 import app.freerouting.core.ProgressThrottler;
 import app.freerouting.core.StoppableThread;
@@ -68,14 +69,12 @@ public final class BatchFanout {
     }
     int pinCount = 0;
     int alreadyConnected = 0;
+    WholeNetConnectivity connectivity = new WholeNetConnectivity();
     for (Component component : sortedComponents) {
       pinCount += component.smdPinCount;
       for (Component.Pin pin : component.smdPins) {
-        // A pin is already connected if all items in its connected set are on the pin's layer
-        // and its unconnected set is empty — same logic as RoutingBoard.fanout().
         app.freerouting.board.model.items.Pin boardPin = pin.boardPin;
-        int netNumber = boardPin.getNetNumber(0);
-        if (boardPin.getUnconnectedSet(netNumber).isEmpty()) {
+        if (connectivity.isConnectedToWholeNet(boardPin, boardPin.getNetNumber(0))) {
           alreadyConnected++;
         }
       }

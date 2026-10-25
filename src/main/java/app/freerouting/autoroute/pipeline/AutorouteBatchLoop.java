@@ -15,6 +15,7 @@ import app.freerouting.autoroute.PerformanceProfiler;
 import app.freerouting.autoroute.events.TaskStateChangedEvent;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Item;
+import app.freerouting.board.model.items.WholeNetConnectivity;
 import app.freerouting.core.RouterCounters;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.StoppableThread;
@@ -125,13 +126,14 @@ final class AutorouteBatchLoop {
         int netConnectedSmdPins = 0;
         int alreadyConnectedAtStart = 0;
         int ignoredSmdPins = 0;
+        WholeNetConnectivity connectivity = new WholeNetConnectivity();
         for (app.freerouting.board.model.items.Pin pin : router.board.getSmdPins()) {
           if (pin.netCount() > 0) {
             if (pin.hasIgnoredNets()) {
               ignoredSmdPins++;
             } else {
               netConnectedSmdPins++;
-              if (pin.getUnconnectedSet(pin.getNetNumber(0)).isEmpty()) {
+              if (connectivity.isConnectedToWholeNet(pin, pin.getNetNumber(0))) {
                 alreadyConnectedAtStart++;
               }
             }

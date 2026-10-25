@@ -8,6 +8,7 @@ import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
+import app.freerouting.board.model.items.WholeNetConnectivity;
 import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.trace.PolylineTrace;
@@ -32,10 +33,8 @@ import java.awt.geom.Rectangle2D;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 
 /** Statistics of a board. */
 public class BoardStatistics implements Serializable {
@@ -424,25 +423,11 @@ public class BoardStatistics implements Serializable {
     int total = 0;
     int escaped = 0;
     int alreadyConnected = 0;
-    // All pins of one net share the answer: the connected set is an equivalence class over the
-    // net's connectable items, so it either covers the whole net for every pin or for none.
-    Map<Integer, Boolean> netFullyConnected = new HashMap<>();
+    WholeNetConnectivity connectivity = new WholeNetConnectivity();
     for (Pin pin : smdPins) {
       if (pin.netCount() > 0) {
         total++;
-        int netNumber = pin.getNetNumber(0);
-        boolean pinConnected;
-        if (netNumber > 0) {
-          Boolean memo = netFullyConnected.get(netNumber);
-          if (memo == null) {
-            memo = pin.getUnconnectedSet(netNumber).isEmpty();
-            netFullyConnected.put(netNumber, memo);
-          }
-          pinConnected = memo;
-        } else {
-          pinConnected = pin.getUnconnectedSet(netNumber).isEmpty();
-        }
-        if (pinConnected) {
+        if (connectivity.isConnectedToWholeNet(pin, pin.getNetNumber(0))) {
           alreadyConnected++;
         }
         if (isPinEscaped(pin)) {
