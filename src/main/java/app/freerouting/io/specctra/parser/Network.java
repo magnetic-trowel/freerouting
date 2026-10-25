@@ -1466,6 +1466,9 @@ public class Network extends ScopeKeyword {
           viaPadstacks[foundPadstackCount] = currentPadstack;
           ++foundPadstackCount;
         } else {
+          if (currentPadstackName != null) {
+            board.library.noteMissingViaPadstack(currentPadstackName);
+          }
           FRLogger.warn(
               "Library.read_scope: via padstack with name '"
                   + currentPadstackName
