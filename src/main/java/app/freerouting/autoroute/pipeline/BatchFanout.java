@@ -8,7 +8,6 @@ import app.freerouting.board.model.structure.Component;
 import app.freerouting.core.ProgressThrottler;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.scoring.BoardStatistics;
-import app.freerouting.datastructures.TimeLimit;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.RouterSettings;
@@ -184,10 +183,6 @@ public final class BatchFanout {
     final int viasBeforePass = this.routingBoard.getViaCount();
     int ripupCosts = this.settings.getStartRipupCosts() * (passNo + 1);
 
-    long baseMillisPerPin =
-        this.settings.fanout != null && this.settings.fanout.maxMillisecondsPerPin != null
-            ? this.settings.fanout.maxMillisecondsPerPin
-            : 10000L;
     boolean ripupAllowed =
         (this.settings.fanout == null || this.settings.fanout.ripupAllowed == null)
             || Boolean.TRUE.equals(this.settings.fanout.ripupAllowed);
@@ -206,9 +201,7 @@ public final class BatchFanout {
             + ", pinsToFanout="
             + (this.totalSmdPinCount - this.alreadyConnectedPinCount)
             + ", ripupCosts="
-            + effectiveRipupCosts
-            + ", baseMillisPerPin="
-            + baseMillisPerPin,
+            + effectiveRipupCosts,
         "",
         new app.freerouting.geometry.planar.Point[0]);
 
@@ -240,8 +233,6 @@ public final class BatchFanout {
           maxLimitReached = true;
           break;
         }
-        double maxMilliseconds = baseMillisPerPin * (passNo + 1);
-        final TimeLimit timeLimit = new TimeLimit((int) maxMilliseconds);
         if (currentPin.boardPin.hasIgnoredNets()) {
           --pinsToGo;
           continue;
@@ -309,7 +300,7 @@ public final class BatchFanout {
         long pinStartNanos = System.nanoTime();
         AutorouteAttemptResult currentResult =
             this.routingBoard.fanout(
-                currentPin.boardPin, this.settings, effectiveRipupCosts, this.thread, timeLimit);
+                currentPin.boardPin, this.settings, effectiveRipupCosts, this.thread);
         long pinDurationMs = (System.nanoTime() - pinStartNanos) / 1_000_000L;
 
         if (currentResult.state == app.freerouting.autoroute.AutorouteAttemptState.ROUTED) {

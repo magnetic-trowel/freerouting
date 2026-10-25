@@ -220,7 +220,6 @@ public class DefaultSettings implements SettingsSource {
     // Fanout pre-pass defaults
     settings.fanout.enabled = true;
     settings.fanout.maxPasses = 20;
-    settings.fanout.maxMillisecondsPerPin = 10000L;
     settings.fanout.ripupAllowed = true;
     settings.fanout.minEscapeLengthMm = 2.5;
     settings.fanout.maxEscapeLengthMm = 4.5;

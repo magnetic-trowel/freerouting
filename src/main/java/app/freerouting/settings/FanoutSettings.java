@@ -38,17 +38,6 @@ public class FanoutSettings implements Serializable, Cloneable {
   public Integer maxItems;
 
   /**
-   * Base time budget (in milliseconds) that each individual SMD pin may consume in pass 1. The
-   * budget scales linearly with the pass number so that later, harder passes are given
-   * proportionally more time: {@code effectiveLimit = maxMillisecondsPerPin * passNumber}.
-   *
-   * <p>Reducing this value speeds up fanout on simple boards at the cost of fewer escape attempts
-   * per pin per pass.
-   */
-  @SerializedName("max_milliseconds_per_pin")
-  public Long maxMillisecondsPerPin;
-
-  /**
    * Whether the fanout router is allowed to rip up and re-route existing traces in order to make
    * room for a new escape via. When {@code false} fanout runs without any ripup, which is faster
    * but may leave more pins un-escaped on congested boards.

@@ -1128,9 +1128,6 @@
           "name": "maxItems"
         },
         {
-          "name": "maxMillisecondsPerPin"
-        },
-        {
           "name": "maxPasses"
         },
         {

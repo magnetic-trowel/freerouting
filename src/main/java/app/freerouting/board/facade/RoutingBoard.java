@@ -822,14 +822,11 @@ public class RoutingBoard extends BasicBoard implements Serializable {
   /**
    * Autoroutes from the input pin until the first via, in case the pin and its connected set has
    * only 1 layer. Ripup is allowed if ripupCosts is {@literal >}= 0. Returns an enum of type
-   * AutorouteEngine.AutorouteResult
+   * AutorouteEngine.AutorouteResult. The search has no work budget; only the stop request of
+   * stoppableThread ends it early.
    */
   public AutorouteAttemptResult fanout(
-      Pin pin,
-      RouterSettings routerSettings,
-      int ripupCosts,
-      Stoppable stoppableThread,
-      TimeLimit timeLimit) {
+      Pin pin, RouterSettings routerSettings, int ripupCosts, Stoppable stoppableThread) {
     if (pin.firstLayer() != pin.lastLayer() || pin.netCount() != 1) {
       return new AutorouteAttemptResult(
           AutorouteAttemptState.ALREADY_CONNECTED, "The pin '" + pin + "' is already connected.");
@@ -910,7 +907,7 @@ public class RoutingBoard extends BasicBoard implements Serializable {
     SortedSet<Item> rippedItemList = new TreeSet<>();
     AutorouteEngine currentAutorouteEngine =
         initAutoroute(
-            pinNetNo, ctrlSettings.traceClearanceClassIndex, stoppableThread, timeLimit, false);
+            pinNetNo, ctrlSettings.traceClearanceClassIndex, stoppableThread, null, false);
 
     AutorouteAttemptResult result = null;
     if (sortedUnconnectedList.size() <= 4) {

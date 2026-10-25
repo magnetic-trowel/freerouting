@@ -13,7 +13,6 @@ import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.scoring.BoardStatistics;
-import app.freerouting.datastructures.TimeLimit;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.settings.RouterSettings;
 import java.util.ArrayList;
@@ -147,17 +146,7 @@ final class DirectPinRouting {
       control.traceHalfWidth[layer] = neckHalfWidth;
       control.compensatedTraceHalfWidth[layer] = neckHalfWidth + compensation;
     }
-    long perPinMs =
-        settings.fanout != null && settings.fanout.maxMillisecondsPerPin != null
-            ? settings.fanout.maxMillisecondsPerPin
-            : 1000L;
-    var engine =
-        board.initAutoroute(
-            net,
-            control.traceClearanceClassIndex,
-            thread,
-            new TimeLimit((int) Math.min(perPinMs, Integer.MAX_VALUE)),
-            false);
+    var engine = board.initAutoroute(net, control.traceClearanceClassIndex, thread, null, false);
     return engine.autorouteConnection(
         pin.getConnectedSet(net), pin.getUnconnectedSet(net), control, new TreeSet<>(), null);
   }
