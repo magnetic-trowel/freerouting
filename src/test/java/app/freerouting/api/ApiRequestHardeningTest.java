@@ -10,11 +10,16 @@ import app.freerouting.Freerouting;
 import app.freerouting.api.security.ApiKeyValidationService;
 import app.freerouting.settings.ApiServerSettings;
 import app.freerouting.settings.GlobalSettings;
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
@@ -76,6 +81,37 @@ class ApiRequestHardeningTest {
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body)));
 
     assertEquals(413, response.statusCode());
+  }
+
+  @Test
+  void earlyRejectionReadsTheRestOfTheBodyInsteadOfResettingTheConnection() throws Exception {
+    // Larger than the socket buffers, so the client is still uploading when the 413 is sent.
+    int bodyLength = 8 * 1024 * 1024;
+    int port = baseUri.getPort();
+    try (Socket socket = new Socket("127.0.0.1", port)) {
+      socket.setSoTimeout((int) HTTP_TIMEOUT.toMillis());
+      OutputStream out = socket.getOutputStream();
+      out.write(
+          ("POST /v1/analytics/track HTTP/1.1\r\nHost: 127.0.0.1:"
+                  + port
+                  + "\r\nContent-Type: application/json\r\nContent-Length: "
+                  + bodyLength
+                  + "\r\n\r\n")
+              .getBytes(StandardCharsets.US_ASCII));
+      // Without the drain, Jetty closed the socket with the body unread and this write failed
+      // with "Broken pipe" or "Connection reset", which can also discard the 413 at the client.
+      byte[] chunk = new byte[64 * 1024];
+      Arrays.fill(chunk, (byte) ' ');
+      for (int sent = 0; sent < bodyLength; sent += chunk.length) {
+        out.write(chunk, 0, Math.min(chunk.length, bodyLength - sent));
+      }
+      out.flush();
+
+      BufferedReader in =
+          new BufferedReader(
+              new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+      assertEquals("HTTP/1.1 413 Payload Too Large", in.readLine());
+    }
   }
 
   @Test

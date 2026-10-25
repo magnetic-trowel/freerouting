@@ -22,6 +22,9 @@ import java.io.InputStream;
  *
  * <p>The analytics endpoints are reachable without an API key and only take small JSON objects, so
  * their limit is much lower.
+ *
+ * <p>The 413 is sent while the client may still be uploading; {@link UnreadRequestBodyDrainFilter}
+ * discards the rest of the body so that the response is not lost to a connection reset.
  */
 @Provider
 @Priority(Priorities.AUTHENTICATION - 50)

@@ -2,6 +2,7 @@ package app.freerouting;
 
 import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.api.AppContextListener;
+import app.freerouting.api.UnreadRequestBodyDrainFilter;
 import app.freerouting.api.mcp.McpApplication;
 import app.freerouting.api.mcp.McpContextListener;
 import app.freerouting.api.mcp.McpWebSocketEndpoint;
@@ -24,11 +25,13 @@ import app.freerouting.startup.LoggingBootstrap;
 import app.freerouting.startup.UserDataPathResolver;
 import app.freerouting.util.TextManager;
 import app.freerouting.util.VersionChecker;
+import jakarta.servlet.DispatcherType;
 import java.awt.Dimension;
 import java.awt.Toolkit;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -186,6 +189,8 @@ public class Freerouting {
     apiServer.setHandler(apiHandler);
 
     // Set up the Jersey Servlet that handles the API
+    // Lets early responses (413, 401) reach clients that are still uploading the body.
+    context.addFilter(UnreadRequestBodyDrainFilter.class, "/*", EnumSet.of(DispatcherType.REQUEST));
     ServletHolder jerseyServlet = context.addServlet(ServletContainer.class, "/*");
     jerseyServlet.setInitOrder(0);
     jerseyServlet.setInitParameter(
@@ -329,6 +334,8 @@ public class Freerouting {
 
     mcpServer.setHandler(mcpHandler);
 
+    // Lets early responses (413, 401) reach clients that are still uploading the body.
+    context.addFilter(UnreadRequestBodyDrainFilter.class, "/*", EnumSet.of(DispatcherType.REQUEST));
     ServletHolder jerseyServlet = context.addServlet(ServletContainer.class, "/*");
     jerseyServlet.setInitOrder(0);
     jerseyServlet.setInitParameter("jakarta.ws.rs.Application", McpApplication.class.getName());
