@@ -650,6 +650,7 @@ final class AutorouteBatchLoop {
               autorouterAfterStats, job.routerSettings, "current");
       phase.after.score = phase.after.routerScore;
       phase.passesCompleted = passesCompleted;
+      phase.stopReason = RoutingResultManifest.stopReason(router.lastStopReason);
       phase.durationSeconds =
           (float) (Duration.between(autorouterStageStart, Instant.now()).toMillis() / 1000.0);
       float autorouterCpuEnd = AutorouteRuntimeMetrics.currentThreadCpuSeconds();

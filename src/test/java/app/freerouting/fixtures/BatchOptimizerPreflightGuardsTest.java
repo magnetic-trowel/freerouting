@@ -346,6 +346,36 @@ class BatchOptimizerPreflightGuardsTest extends RoutingFixtureTest {
     assertNotNull(phase.after);
     assertEquals(0, phase.passesCompleted);
     assertEquals(0.0f, phase.durationSeconds, 0.001f);
+    assertEquals(BatchOptimizer.StopReason.SKIPPED, optimizer.lastStopReason);
+    assertEquals("skipped", phase.stopReason);
+  }
+
+  @Test
+  void stopReasonTellsAPassLimitFromAStopAndATimeout() {
+    RoutingJob limited = getRoutingJob(DSN_BM08, new TestingSettings());
+    limited.board = fullyRoutedBm08.deepCopy();
+    limited.routerSettings.optimizer.maxPasses = 1;
+    limited.thread = new NoOpStoppableThread();
+    BatchOptimizer.create(limited).runBatchLoop();
+    assertEquals(1, limited.resultPhaseMetrics.optimizer.passesCompleted);
+    assertEquals("max_passes", limited.resultPhaseMetrics.optimizer.stopReason);
+
+    RoutingJob cancelled = getRoutingJob(DSN_BM08, new TestingSettings());
+    cancelled.board = fullyRoutedBm08.deepCopy();
+    cancelled.thread = new NoOpStoppableThread();
+    cancelled.thread.requestStop();
+    BatchOptimizer.create(cancelled).runBatchLoop();
+    assertEquals(0, cancelled.resultPhaseMetrics.optimizer.passesCompleted);
+    assertEquals("cancelled", cancelled.resultPhaseMetrics.optimizer.stopReason);
+
+    // What the job monitor does when the job timeout passes.
+    RoutingJob timedOut = getRoutingJob(DSN_BM08, new TestingSettings());
+    timedOut.board = fullyRoutedBm08.deepCopy();
+    timedOut.thread = new NoOpStoppableThread();
+    timedOut.timeoutAt = java.time.Instant.now().minusSeconds(1);
+    timedOut.thread.requestStop();
+    BatchOptimizer.create(timedOut).runBatchLoop();
+    assertEquals("timed_out", timedOut.resultPhaseMetrics.optimizer.stopReason);
   }
 
   private static final class NoOpStoppableThread extends StoppableThread {

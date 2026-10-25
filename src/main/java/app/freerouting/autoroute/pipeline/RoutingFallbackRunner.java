@@ -9,7 +9,6 @@ import app.freerouting.settings.RouterSettings;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -183,10 +182,7 @@ final class RoutingFallbackRunner {
     }
     RoutingResultManifest.FallbackAttempt attempt = new RoutingResultManifest.FallbackAttempt();
     attempt.strategy = outcome.strategy;
-    attempt.stopReason =
-        router.lastStopReason != null
-            ? router.lastStopReason.name().toLowerCase(Locale.ROOT)
-            : null;
+    attempt.stopReason = RoutingResultManifest.stopReason(router.lastStopReason);
     attempt.unrouted = outcome.unrouted;
     attempt.newOrChangedViolations = outcome.newOrChanged;
     attempt.clearanceViolations = outcome.violations;

@@ -61,6 +61,10 @@ public final class BatchOptimizer extends NamedAlgorithm {
   protected int totalItemsOptimized;
   protected Long deadlineMs;
   protected boolean isTimedOut;
+
+  /** Why the last {@link #runBatchLoop()} stopped; null before it ran. */
+  public StopReason lastStopReason;
+
   protected RoutingBoard bestBoard;
   protected float bestScore;
   protected int bestIncompleteCount;
@@ -116,6 +120,21 @@ public final class BatchOptimizer extends NamedAlgorithm {
               + "' will be used instead.");
       job.routerSettings.optimizer.algorithm = optimizer.getId();
     }
+  }
+
+  /** Why {@link #runBatchLoop()} stopped. */
+  public enum StopReason {
+    /** A pre-flight guard found nothing to optimize; no pass ran. */
+    SKIPPED,
+    MAX_PASSES,
+    MAX_ITEMS,
+    /** A pass improved the score by no more than the improvement threshold. */
+    NO_IMPROVEMENT,
+    /** The optimizer timeout or the job timeout. */
+    TIMED_OUT,
+    CANCELLED,
+    /** A pass ran out of memory; the best accepted board was kept. */
+    ERROR
   }
 
   /** Returns true if timed out. */
@@ -231,6 +250,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     if (this.thread != null) {
       this.thread.resetStopAutoRouterRequest();
     }
+    this.lastStopReason = null;
 
     job.logDebug(
         "Before optimization: Via count: "
@@ -255,6 +275,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
     String bypassReason = evaluatePreFlightGuards(initialStats);
     if (bypassReason != null) {
       job.logInfo("Skipping optimization stage: " + bypassReason + ".");
+      this.lastStopReason = StopReason.SKIPPED;
+      phase.stopReason = RoutingResultManifest.stopReason(this.lastStopReason);
       phase.durationSeconds = 0.0f;
       phase.cpuSeconds = 0.0f;
       phase.totalAllocatedGb = 0.0f;
@@ -348,6 +370,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         && (!this.thread.isStopRequested())) {
       if (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs) {
         this.isTimedOut = true;
+        this.lastStopReason = StopReason.TIMED_OUT;
         job.logInfo("Optimizer stage timed out before starting pass #" + (currentPass + 1));
         break;
       }
@@ -377,11 +400,13 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 currentPass,
                 this.bestScore));
         this.fireBoardUpdatedEvent(new BoardStatistics(this.board), null, this.board);
+        this.lastStopReason = StopReason.ERROR;
         break;
       }
       peakHeapMb = Math.max(peakHeapMb, sampleHeapUsageMb());
 
       if (this.isTimedOut) {
+        this.lastStopReason = StopReason.TIMED_OUT;
         break;
       }
 
@@ -490,7 +515,19 @@ public final class BatchOptimizer extends NamedAlgorithm {
                     + "the threshold (%.2f%%).",
                 scoreImprovement,
                 this.settings.optimizer.optimizationImprovementThreshold));
+        this.lastStopReason = StopReason.NO_IMPROVEMENT;
         break;
+      }
+    }
+    if (this.lastStopReason == null) {
+      // The loop condition ended it.
+      if (this.thread.isStopRequested()) {
+        this.lastStopReason = job.isTimedOut() ? StopReason.TIMED_OUT : StopReason.CANCELLED;
+      } else if (this.settings.optimizer.maxItems != null
+          && this.totalItemsOptimized >= this.settings.optimizer.maxItems) {
+        this.lastStopReason = StopReason.MAX_ITEMS;
+      } else {
+        this.lastStopReason = StopReason.MAX_PASSES;
       }
     }
 
@@ -558,6 +595,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
             finalStats, job.routerSettings, "current");
     phase.after.score = phase.after.optimizerScore;
     phase.passesCompleted = currentPass;
+    phase.stopReason = RoutingResultManifest.stopReason(this.lastStopReason);
     String completionStatus =
         this.isTimedOut
             ? "completed with timeout:"

@@ -17,6 +17,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.Locale;
 
 /** Machine-readable summary of a headless CLI routing run for benchmark and autopilot harnesses. */
 public final class RoutingResultManifest {
@@ -149,6 +150,14 @@ public final class RoutingResultManifest {
 
   /** Duration and pass count for one routing stage. */
   public static class PhaseDetail {
+    /**
+     * Why the stage stopped, in the lower-case form of {@link #stopReason(Enum)}: for the
+     * autorouter a {@code BatchAutorouter.StopReason}, for the optimizer a {@code
+     * BatchOptimizer.StopReason}. Null for a stage that did not run.
+     */
+    @SerializedName("stop_reason")
+    public String stopReason;
+
     @SerializedName("before")
     public PhaseSnapshot before;
 
@@ -275,6 +284,11 @@ public final class RoutingResultManifest {
     }
 
     return manifest;
+  }
+
+  /** The manifest form of a stage's stop reason: its lower-case name, or null. */
+  public static String stopReason(Enum<?> reason) {
+    return reason != null ? reason.name().toLowerCase(Locale.ROOT) : null;
   }
 
   /** Writes the manifest as UTF-8 JSON to {@code targetPath}. */
