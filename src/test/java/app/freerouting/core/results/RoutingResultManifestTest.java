@@ -60,6 +60,7 @@ class RoutingResultManifestTest {
     job.resourceUsage.cpuTimeUsed = 1.5f;
     job.resourceUsage.peakMemoryUsed = 128.0f;
     BoardStatistics stats = new BoardStatistics(board);
+    job.finalStatistics = stats;
     job.resultPhaseMetrics.autorouter.before =
         RoutingResultManifest.PhaseSnapshot.fromBoardStatistics(
             stats, job.routerSettings, "current");

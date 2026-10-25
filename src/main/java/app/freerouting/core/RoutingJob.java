@@ -143,8 +143,10 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   public transient volatile RoutingBoard board;
 
   /**
-   * Statistics of the final board, captured when the scheduler finished the job. They stay
-   * available after the scheduler released {@link #board}.
+   * Statistics of the final board, captured by the routing thread after its last change to the
+   * board and before the job turned terminal. They stay available after the scheduler released
+   * {@link #board}. Null until then, which includes a job that the job monitor marked as timed out
+   * while its routing thread, which did not stop within the grace period, still runs.
    */
   public transient volatile BoardStatistics finalStatistics;
 
@@ -183,6 +185,15 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
    */
   public boolean isTimedOut() {
     return !isCancelledByUser && timeoutAt != null && !Instant.now().isBefore(timeoutAt);
+  }
+
+  /**
+   * Returns whether the routing thread of this job is not running (it ended, never started, or the
+   * job has none), so that nothing changes {@link #board} any more.
+   */
+  public boolean isRoutingThreadEnded() {
+    Thread routingThread = thread;
+    return routingThread == null || !routingThread.isAlive();
   }
 
   /**

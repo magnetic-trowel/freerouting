@@ -21,6 +21,13 @@ import java.util.UUID;
 /** Executes a batch CLI routing job from command line arguments and settings. */
 public final class CliRunner {
 
+  /**
+   * How long the CLI waits for the routing thread to end once the job is terminal. A thread that
+   * ended its job itself has only the analytics left; one that the job monitor marked as timed out
+   * after its grace period may keep changing the board, and the CLI does not wait for that.
+   */
+  static final long ROUTING_THREAD_END_WAIT_MS = 5_000;
+
   private CliRunner() {}
 
   /**
@@ -114,6 +121,7 @@ public final class CliRunner {
       }
     }
 
+    awaitRoutingThreadEnd(routingJob, ROUTING_THREAD_END_WAIT_MS);
     boolean outputWritten = writeCliOutputIfAvailable(globalSettings, routingJob);
     int cliExitCode = computeCliExitCode(routingJob, outputWritten);
     writeCliResultManifestIfRequested(globalSettings, routingJob, outputWritten, cliExitCode);
@@ -150,7 +158,7 @@ public final class CliRunner {
           };
       String failureReason =
           cliExitCode != 0 ? "CLI exit code " + cliExitCode + " (" + routingJob.state + ")" : null;
-      var stats = routingJob.board != null ? routingJob.board.getStatistics() : null;
+      var stats = routingJob.finalStatistics;
       Integer netsTotal = stats != null && stats.nets != null ? stats.nets.totalCount : null;
       Integer netsIncomplete =
           stats != null && stats.connections != null ? stats.connections.incompleteCount : null;
@@ -200,6 +208,31 @@ public final class CliRunner {
 
     globalSettings.cliExitCode = cliExitCode;
     return cliExitCode == 0;
+  }
+
+  /**
+   * Waits up to {@code waitMillis} for the routing thread of a terminal job to end, and returns
+   * whether it has ended. Until it has, the CLI must not read the board: it writes the output the
+   * job last published and reports no board statistics.
+   */
+  static boolean awaitRoutingThreadEnd(RoutingJob routingJob, long waitMillis) {
+    Thread thread = routingJob.thread;
+    if (thread != null && thread.isAlive()) {
+      try {
+        thread.join(waitMillis);
+      } catch (InterruptedException _) {
+        Thread.currentThread().interrupt();
+      }
+    }
+    if (routingJob.isRoutingThreadEnded()) {
+      return true;
+    }
+    FRLogger.warn(
+        "The routing thread is still running after the job ended with state "
+            + routingJob.state
+            + "; writing the last published result without reading the board, and exiting"
+            + " without waiting for the thread.");
+    return false;
   }
 
   /** Returns whether the CLI should stop waiting for routing updates. */
@@ -253,7 +286,8 @@ public final class CliRunner {
 
     if (globalSettings.additionalOutputFiles != null
         && !globalSettings.additionalOutputFiles.isEmpty()
-        && routingJob.board != null) {
+        && routingJob.board != null
+        && routingJob.isRoutingThreadEnded()) {
       for (String addPathStr : globalSettings.additionalOutputFiles) {
         try {
           Path addPath = Path.of(addPathStr);

@@ -204,6 +204,11 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
           });
       pipeline.run();
       boolean outputReady = RoutingJobOutputWriter.write(job);
+      // Before the job turns terminal: a caller that waits for the terminal state (the CLI, the
+      // synchronous autoroute endpoint) reports these instead of reading the board again while
+      // this thread computes them.
+      var finalBoardStats = job.board != null ? job.board.getStatistics() : null;
+      job.finalStatistics = finalBoardStats;
 
       boolean fanoutTimedOut = pipeline.getAutorouter().isFanoutTimedOut();
       final boolean optimizerTimedOut =
@@ -241,10 +246,6 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
             default -> JobLifecycleStatus.FAILED;
           };
 
-      var finalBoard = job.board;
-      var finalBoardStats = finalBoard != null ? finalBoard.getStatistics() : null;
-      // Reported by the job status after the scheduler released the board.
-      job.finalStatistics = finalBoardStats;
       Integer netsTotal =
           finalBoardStats != null && finalBoardStats.nets != null
               ? finalBoardStats.nets.totalCount
