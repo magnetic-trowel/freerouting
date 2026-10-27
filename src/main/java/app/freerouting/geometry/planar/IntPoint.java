@@ -1,6 +1,5 @@
 package app.freerouting.geometry.planar;
 
-import app.freerouting.logger.FRLogger;
 import java.io.Serializable;
 import java.math.BigInteger;
 
@@ -17,13 +16,6 @@ public final class IntPoint extends Point implements Serializable {
 
   /** Creates an IntPoint from two integer coordinates. */
   public IntPoint(int x, int y) {
-    if (Math.abs(x) > Limits.CRIT_INT) {
-      FRLogger.debug("IntPoint: x is out of range");
-    }
-    if (Math.abs(y) > Limits.CRIT_INT) {
-      FRLogger.debug("IntPoint: y is out of range");
-    }
-
     this.x = x;
     this.y = y;
   }
