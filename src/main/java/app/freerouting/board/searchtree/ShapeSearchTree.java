@@ -69,11 +69,17 @@ public class ShapeSearchTree extends MinAreaTree {
    * it, and inner nodes go before leaves at equal gap, so the walk meets the leaves in the order of
    * (gap, {@link Leaf} order) whatever the tree structure is.
    */
-  protected record NearNode(long gap, TreeNode node) implements Comparable<NearNode> {
+  protected record NearNode(long gap, long order, TreeNode node) implements Comparable<NearNode> {
+
+    /** Order of an inner node: before every leaf at equal gap, equal to other inner nodes. */
+    private static final long INNER_ORDER = Long.MIN_VALUE;
+
+    /** Order of a leaf without a precomputed key: compared with {@link Leaf#compareTo}. */
+    private static final long UNKEYED_ORDER = -1;
 
     /** Creates the entry of node for a walk around target. */
     public static NearNode of(TreeNode node, IntBox target) {
-      return new NearNode(squaredGap(node.boundingShape, target), node);
+      return new NearNode(squaredGap(node.boundingShape, target), orderOf(node), node);
     }
 
     @Override
@@ -82,11 +88,44 @@ public class ShapeSearchTree extends MinAreaTree {
       if (result != 0) {
         return result;
       }
+      if (order != UNKEYED_ORDER && other.order != UNKEYED_ORDER) {
+        return Long.compare(order, other.order);
+      }
       boolean leaf = node instanceof Leaf;
       if (leaf != other.node instanceof Leaf) {
         return leaf ? 1 : -1;
       }
       return leaf ? ((Leaf) node).compareTo((Leaf) other.node) : 0;
+    }
+
+    /**
+     * Returns a non-negative key whose order is the {@link Leaf} order, so the queue compares
+     * primitives instead of calling {@link ShapeTree.Storable#compareTo} on every sift. Rooms come
+     * before items and both sort by descending id (see {@link Item#compareTo} and {@link
+     * CompleteFreeSpaceExpansionRoom#compareTo}), then by ascending shape index. Leaves of other
+     * objects, or with ids or indices outside the range where those differences cannot overflow,
+     * get {@link #UNKEYED_ORDER} and keep the original comparison.
+     */
+    private static long orderOf(TreeNode node) {
+      if (!(node instanceof Leaf leaf)) {
+        return INNER_ORDER;
+      }
+      long tier;
+      int id;
+      if (leaf.object instanceof Item item) {
+        tier = 1;
+        id = item.getId();
+      } else if (leaf.object instanceof CompleteFreeSpaceExpansionRoom room) {
+        tier = 0;
+        id = room.getId();
+      } else {
+        return UNKEYED_ORDER;
+      }
+      int index = leaf.shapeIndexInObject;
+      if (id < 0 || index < 0) {
+        return UNKEYED_ORDER;
+      }
+      return (tier << 62) | ((long) (Integer.MAX_VALUE - id) << 31) | index;
     }
 
     private static long squaredGap(RegularTileShape shape, IntBox target) {
