@@ -1,0 +1,972 @@
+{
+ "schema_version": 1,
+ "generated_at": "2026-11-01T00:36:16.028566478Z",
+ "app_version": "2.5.1-SNAPSHOT",
+ "git_sha": "unknown",
+ "fixture": {
+  "filename": "unrouted.dsn",
+  "sha256": "69a8b94caf864c18b0d725baaf3115ce8a74366718cee027d81b2fea9b8b51ee"
+ },
+ "settings_snapshot": {
+  "autorouter": {
+   "enabled": true,
+   "algorithm": "freerouting-router",
+   "max_passes": 0,
+   "max_items": 2147483647,
+   "max_threads": 1,
+   "ignore_net_classes": [],
+   "start_necked": true,
+   "fallback_strategies": "direct-first,fanout-retry,short-escape,open-escape,no-fanout",
+   "explore_fallback_strategies": "short-escape,open-escape",
+   "smd_net_via_cost_factor": 0.1,
+   "residual_repair_max_open": 4,
+   "explore_patience": 0
+  },
+  "fanout": {
+   "enabled": true,
+   "max_passes": 20,
+   "max_items": 2147483647,
+   "ripup_allowed": true,
+   "min_escape_length_mm": 2.5,
+   "max_escape_length_mm": 4.5,
+   "start_via_diameter_mm": 0.25,
+   "end_via_diameter_mm": 0.25,
+   "pin_sorting_order": "outer_first",
+   "fallback_to_board_vias": true,
+   "retry_without_escape_window": false,
+   "strategy": "eager"
+  },
+  "copper_to_edge_clearance_um": 250.0,
+  "hole_clearance_um": 0.0,
+  "clearance_tolerance_um": 1.0,
+  "plane_nets": [],
+  "plane_as_obstacle": false,
+  "meander_min_amplitude_mm": 0.2,
+  "meander_max_amplitude_mm": 1.0,
+  "meander_spacing_mm": 0.6,
+  "meander_corner_style": "FILLET",
+  "meander_radius_percentage": 80.0,
+  "meander_single_sided": false,
+  "neck_width_um": 0.0,
+  "min_trace_width_um": 0.0,
+  "strict_drc": false,
+  "fix_kicad_footprints": false,
+  "job_timeout": "06:00:00",
+  "validation_warnings": [],
+  "trace_pull_tight_accuracy": 500,
+  "allowed_via_types": true,
+  "automatic_neckdown": true,
+  "optimizer": {
+   "enabled": true,
+   "algorithm": "freerouting-optimizer",
+   "max_passes": 100,
+   "max_items": 2147483647,
+   "max_threads": 1,
+   "improvement_threshold": 2.5,
+   "enable_preflight_guards": true,
+   "max_consecutive_failures": 50,
+   "max_consecutive_failures_pass1": 12,
+   "max_commits_per_pass": 0,
+   "commit_selection": "score_ranked",
+   "additional_ripup_cost_factor_at_start": 10,
+   "trace_ripup_cost_factor": 0.6,
+   "max_autoroute_passes": 6,
+   "rework_imported_routing": false
+  },
+  "scoring": {
+   "default_preferred_direction_trace_cost": 1.0,
+   "default_undesired_direction_trace_cost": 1.0,
+   "via_costs": 50,
+   "plane_via_costs": 5,
+   "start_ripup_costs": 100,
+   "default_bend_cost": 0.0,
+   "unrouted_net_penalty": 5000000.0,
+   "clearance_violation_penalty": 1000000.0,
+   "bend_penalty": 10.0
+  },
+  "router_scoring": {
+   "version": "V2_CONTINUOUS",
+   "unrouted_connection_weight": 1000.0,
+   "unrouted_free_fraction": 0.5,
+   "unrouted_first_half_weight": 333.33334,
+   "unrouted_second_half_weight": 666.6667,
+   "clearance_violation_count_weight": 25.0,
+   "clearance_violation_depth_weight": 300.0,
+   "clearance_violation_depth_scale": 1000.0
+  },
+  "optimizer_scoring": {
+   "version": "V3_EQUIVALENT_LENGTH",
+   "excess_wire_length_weight": 1000.0,
+   "excess_via_weight": 2000.0,
+   "excess_bend_weight": 500.0,
+   "length_floor": 1.0,
+   "difficulty_scale_floor": 1.0
+  },
+  "max_threads": 1,
+  "result_json": "scripts/benchmark/outputs/phone_amp_phone_amp--unrouted--master-edffcabb-result.json",
+  "layers": [
+   {
+    "routable": true,
+    "preferred_direction_horizontal": false,
+    "bend_cost": 0.0
+   },
+   {
+    "routable": true,
+    "preferred_direction_horizontal": true,
+    "bend_cost": 0.0
+   }
+  ]
+ },
+ "phases": {
+  "fanout": {
+   "before": {
+    "board_statistics": {
+     "host": "KiCad's Pcbnew,10.0.2",
+     "unit": "mm",
+     "board": {
+      "bounding_box": {
+       "x": 133.79,
+       "y": -135.635,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "size": {
+       "x": 0.0,
+       "y": 0.0,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "area_cm2": 6.66057
+     },
+     "layers": {
+      "total_count": 2,
+      "signal_count": 2
+     },
+     "items": {
+      "total_count": 347,
+      "trace_count": 0,
+      "via_count": 0,
+      "conduction_area_count": 0,
+      "drill_item_count": 0,
+      "pin_count": 129,
+      "component_count": 193,
+      "other_count": 25
+     },
+     "components": {
+      "total_count": 42
+     },
+     "pads": {
+      "total_count": 129
+     },
+     "nets": {
+      "total_count": 41,
+      "class_count": 1
+     },
+     "connections": {
+      "maximum_count": 88,
+      "incomplete_count": 88
+     },
+     "traces": {
+      "total_count": 0,
+      "total_segment_count": 0,
+      "total_length": 0.0,
+      "total_length_mm": 0.0,
+      "total_weighted_length": 0.0,
+      "average_length": 0.0,
+      "total_vertical_length": 0.0,
+      "total_horizontal_length": 0.0,
+      "total_angled_length": 0.0
+     },
+     "bends": {
+      "total_count": 0,
+      "90_degree_count": 0,
+      "45_degree_count": 0,
+      "other_angle_count": 0
+     },
+     "vias": {
+      "total_count": 0,
+      "through_hole_count": 0,
+      "blind_count": 0,
+      "buried_count": 0
+     },
+     "clearance_violations": {
+      "total_count": 0,
+      "pre_existing_count": 0,
+      "unfixable_count": 0,
+      "router_introduced_count": 0,
+      "new_or_changed_count": 0,
+      "total_violation_um": 0.0,
+      "min_violation_um": 0.0,
+      "max_violation_um": 0.0,
+      "avg_violation_um": 0.0
+     },
+     "difficulty": {
+      "pin_count": 129,
+      "signal_layer_count": 2,
+      "complexity_c": 258,
+      "difficulty_d": 258.0,
+      "board_area_cm2": 6.66057
+     },
+     "bounds": {
+      "min_trace_length_mm": 395.05426,
+      "min_via_count": 4,
+      "min_bend_count": 58,
+      "via_equivalent_length_mm": 3.2,
+      "bend_equivalent_length_mm": 0.4
+     },
+     "fanout": {
+      "total_smd_pins": 117,
+      "pins_to_escape": 107,
+      "escaped_count": 0
+     }
+    },
+    "score_source": "not_applicable"
+   },
+   "after": {
+    "board_statistics": {
+     "host": "KiCad's Pcbnew,10.0.2",
+     "unit": "mm",
+     "board": {
+      "bounding_box": {
+       "x": 133.79,
+       "y": -135.635,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "size": {
+       "x": 0.0,
+       "y": 0.0,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "area_cm2": 6.66057
+     },
+     "layers": {
+      "total_count": 2,
+      "signal_count": 2
+     },
+     "items": {
+      "total_count": 527,
+      "trace_count": 155,
+      "via_count": 25,
+      "conduction_area_count": 0,
+      "drill_item_count": 0,
+      "pin_count": 129,
+      "component_count": 193,
+      "other_count": 25
+     },
+     "components": {
+      "total_count": 42
+     },
+     "pads": {
+      "total_count": 129
+     },
+     "nets": {
+      "total_count": 41,
+      "class_count": 1
+     },
+     "connections": {
+      "maximum_count": 88,
+      "incomplete_count": 24
+     },
+     "traces": {
+      "total_count": 155,
+      "total_segment_count": 248,
+      "total_length": 278.5628,
+      "total_length_mm": 278.5628,
+      "total_weighted_length": 75.66943,
+      "average_length": 1.7971792,
+      "total_vertical_length": 134.7332,
+      "total_horizontal_length": 25.490398,
+      "total_angled_length": 43.921783
+     },
+     "bends": {
+      "total_count": 93,
+      "90_degree_count": 3,
+      "45_degree_count": 90,
+      "other_angle_count": 0
+     },
+     "vias": {
+      "total_count": 25,
+      "through_hole_count": 25,
+      "blind_count": 0,
+      "buried_count": 0
+     },
+     "clearance_violations": {
+      "total_count": 0,
+      "pre_existing_count": 0,
+      "unfixable_count": 0,
+      "router_introduced_count": 0,
+      "new_or_changed_count": 0,
+      "total_violation_um": 0.0,
+      "min_violation_um": 0.0,
+      "max_violation_um": 0.0,
+      "avg_violation_um": 0.0
+     },
+     "difficulty": {
+      "pin_count": 129,
+      "signal_layer_count": 2,
+      "complexity_c": 258,
+      "difficulty_d": 258.0,
+      "board_area_cm2": 6.66057
+     },
+     "bounds": {
+      "min_trace_length_mm": 395.05426,
+      "min_via_count": 4,
+      "min_bend_count": 58,
+      "via_equivalent_length_mm": 3.2,
+      "bend_equivalent_length_mm": 0.4
+     },
+     "fanout": {
+      "total_smd_pins": 117,
+      "pins_to_escape": 54,
+      "escaped_count": 105
+     }
+    },
+    "score_source": "not_applicable"
+   },
+   "duration_seconds": 0.517,
+   "cpu_seconds": 0.51771545
+  },
+  "autorouter": {
+   "stop_reason": "stagnation",
+   "before": {
+    "board_statistics": {
+     "host": "KiCad's Pcbnew,10.0.2",
+     "unit": "mm",
+     "board": {
+      "bounding_box": {
+       "x": 133.79,
+       "y": -135.635,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "size": {
+       "x": 0.0,
+       "y": 0.0,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "area_cm2": 6.66057
+     },
+     "layers": {
+      "total_count": 2,
+      "signal_count": 2
+     },
+     "items": {
+      "total_count": 527,
+      "trace_count": 155,
+      "via_count": 25,
+      "conduction_area_count": 0,
+      "drill_item_count": 0,
+      "pin_count": 129,
+      "component_count": 193,
+      "other_count": 25
+     },
+     "components": {
+      "total_count": 42
+     },
+     "pads": {
+      "total_count": 129
+     },
+     "nets": {
+      "total_count": 41,
+      "class_count": 1
+     },
+     "connections": {
+      "maximum_count": 88,
+      "incomplete_count": 24
+     },
+     "traces": {
+      "total_count": 155,
+      "total_segment_count": 248,
+      "total_length": 278.5628,
+      "total_length_mm": 278.5628,
+      "total_weighted_length": 75.66943,
+      "average_length": 1.7971792,
+      "total_vertical_length": 134.7332,
+      "total_horizontal_length": 25.490398,
+      "total_angled_length": 43.921783
+     },
+     "bends": {
+      "total_count": 93,
+      "90_degree_count": 3,
+      "45_degree_count": 90,
+      "other_angle_count": 0
+     },
+     "vias": {
+      "total_count": 25,
+      "through_hole_count": 25,
+      "blind_count": 0,
+      "buried_count": 0
+     },
+     "clearance_violations": {
+      "total_count": 0,
+      "pre_existing_count": 0,
+      "unfixable_count": 0,
+      "router_introduced_count": 0,
+      "new_or_changed_count": 0,
+      "total_violation_um": 0.0,
+      "min_violation_um": 0.0,
+      "max_violation_um": 0.0,
+      "avg_violation_um": 0.0
+     },
+     "difficulty": {
+      "pin_count": 129,
+      "signal_layer_count": 2,
+      "complexity_c": 258,
+      "difficulty_d": 258.0,
+      "board_area_cm2": 6.66057
+     },
+     "bounds": {
+      "min_trace_length_mm": 395.05426,
+      "min_via_count": 4,
+      "min_bend_count": 58,
+      "via_equivalent_length_mm": 3.2,
+      "bend_equivalent_length_mm": 0.4
+     },
+     "fanout": {
+      "total_smd_pins": 117,
+      "pins_to_escape": 54,
+      "escaped_count": 105
+     }
+    },
+    "score": 636.36365,
+    "router_score": 636.36365,
+    "optimizer_score": 829.5028,
+    "score_source": "current"
+   },
+   "after": {
+    "board_statistics": {
+     "host": "KiCad's Pcbnew,10.0.2",
+     "unit": "mm",
+     "board": {
+      "bounding_box": {
+       "x": 133.79,
+       "y": -135.635,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "size": {
+       "x": 0.0,
+       "y": 0.0,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "area_cm2": 6.66057
+     },
+     "layers": {
+      "total_count": 2,
+      "signal_count": 2
+     },
+     "items": {
+      "total_count": 568,
+      "trace_count": 200,
+      "via_count": 21,
+      "conduction_area_count": 0,
+      "drill_item_count": 0,
+      "pin_count": 129,
+      "component_count": 193,
+      "other_count": 25
+     },
+     "components": {
+      "total_count": 42
+     },
+     "pads": {
+      "total_count": 129
+     },
+     "nets": {
+      "total_count": 41,
+      "class_count": 1
+     },
+     "connections": {
+      "maximum_count": 88,
+      "incomplete_count": 1
+     },
+     "traces": {
+      "total_count": 200,
+      "total_segment_count": 407,
+      "total_length": 566.6795,
+      "total_length_mm": 566.6795,
+      "total_weighted_length": 161.40118,
+      "average_length": 2.8333974,
+      "total_vertical_length": 285.3006,
+      "total_horizontal_length": 56.5257,
+      "total_angled_length": 141.30489
+     },
+     "bends": {
+      "total_count": 207,
+      "90_degree_count": 2,
+      "45_degree_count": 205,
+      "other_angle_count": 0
+     },
+     "vias": {
+      "total_count": 21,
+      "through_hole_count": 21,
+      "blind_count": 0,
+      "buried_count": 0
+     },
+     "clearance_violations": {
+      "total_count": 0,
+      "pre_existing_count": 0,
+      "unfixable_count": 0,
+      "router_introduced_count": 0,
+      "new_or_changed_count": 0,
+      "total_violation_um": 0.0,
+      "min_violation_um": 0.0,
+      "max_violation_um": 0.0,
+      "avg_violation_um": 0.0
+     },
+     "difficulty": {
+      "pin_count": 129,
+      "signal_layer_count": 2,
+      "complexity_c": 258,
+      "difficulty_d": 258.0,
+      "board_area_cm2": 6.66057
+     },
+     "bounds": {
+      "min_trace_length_mm": 395.05426,
+      "min_via_count": 4,
+      "min_bend_count": 58,
+      "via_equivalent_length_mm": 3.2,
+      "bend_equivalent_length_mm": 0.4
+     },
+     "fanout": {
+      "total_smd_pins": 117,
+      "pins_to_escape": 3,
+      "escaped_count": 106
+     }
+    },
+    "score": 984.8485,
+    "router_score": 984.8485,
+    "optimizer_score": 580.3822,
+    "score_source": "current"
+   },
+   "duration_seconds": 10.906,
+   "cpu_seconds": 10.866459,
+   "passes_completed": 38,
+   "total_allocated_gb": 7.4857006,
+   "peak_heap_mb": 642.1036
+  },
+  "optimizer": {
+   "stop_reason": "skipped",
+   "before": {
+    "board_statistics": {
+     "host": "KiCad's Pcbnew,10.0.2",
+     "unit": "mm",
+     "board": {
+      "bounding_box": {
+       "x": 133.79,
+       "y": -135.635,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "size": {
+       "x": 0.0,
+       "y": 0.0,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "area_cm2": 6.66057
+     },
+     "layers": {
+      "total_count": 2,
+      "signal_count": 2
+     },
+     "items": {
+      "total_count": 568,
+      "trace_count": 200,
+      "via_count": 21,
+      "conduction_area_count": 0,
+      "drill_item_count": 0,
+      "pin_count": 129,
+      "component_count": 193,
+      "other_count": 25
+     },
+     "components": {
+      "total_count": 42
+     },
+     "pads": {
+      "total_count": 129
+     },
+     "nets": {
+      "total_count": 41,
+      "class_count": 1
+     },
+     "connections": {
+      "maximum_count": 88,
+      "incomplete_count": 1
+     },
+     "traces": {
+      "total_count": 200,
+      "total_segment_count": 407,
+      "total_length": 566.6795,
+      "total_length_mm": 566.6795,
+      "total_weighted_length": 161.40118,
+      "average_length": 2.8333974,
+      "total_vertical_length": 285.3006,
+      "total_horizontal_length": 56.5257,
+      "total_angled_length": 141.30489
+     },
+     "bends": {
+      "total_count": 207,
+      "90_degree_count": 2,
+      "45_degree_count": 205,
+      "other_angle_count": 0
+     },
+     "vias": {
+      "total_count": 21,
+      "through_hole_count": 21,
+      "blind_count": 0,
+      "buried_count": 0
+     },
+     "clearance_violations": {
+      "total_count": 0,
+      "pre_existing_count": 0,
+      "unfixable_count": 0,
+      "router_introduced_count": 0,
+      "new_or_changed_count": 0,
+      "total_violation_um": 0.0,
+      "min_violation_um": 0.0,
+      "max_violation_um": 0.0,
+      "avg_violation_um": 0.0
+     },
+     "difficulty": {
+      "pin_count": 129,
+      "signal_layer_count": 2,
+      "complexity_c": 258,
+      "difficulty_d": 258.0,
+      "board_area_cm2": 6.66057
+     },
+     "bounds": {
+      "min_trace_length_mm": 395.05426,
+      "min_via_count": 4,
+      "min_bend_count": 58,
+      "via_equivalent_length_mm": 3.2,
+      "bend_equivalent_length_mm": 0.4
+     },
+     "fanout": {
+      "total_smd_pins": 117,
+      "pins_to_escape": 3,
+      "escaped_count": 106
+     }
+    },
+    "score": 580.3822,
+    "router_score": 984.8485,
+    "optimizer_score": 580.3822,
+    "score_source": "current"
+   },
+   "after": {
+    "board_statistics": {
+     "host": "KiCad's Pcbnew,10.0.2",
+     "unit": "mm",
+     "board": {
+      "bounding_box": {
+       "x": 133.79,
+       "y": -135.635,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "size": {
+       "x": 0.0,
+       "y": 0.0,
+       "width": 11.82,
+       "height": 56.35
+      },
+      "area_cm2": 6.66057
+     },
+     "layers": {
+      "total_count": 2,
+      "signal_count": 2
+     },
+     "items": {
+      "total_count": 568,
+      "trace_count": 200,
+      "via_count": 21,
+      "conduction_area_count": 0,
+      "drill_item_count": 0,
+      "pin_count": 129,
+      "component_count": 193,
+      "other_count": 25
+     },
+     "components": {
+      "total_count": 42
+     },
+     "pads": {
+      "total_count": 129
+     },
+     "nets": {
+      "total_count": 41,
+      "class_count": 1
+     },
+     "connections": {
+      "maximum_count": 88,
+      "incomplete_count": 1
+     },
+     "traces": {
+      "total_count": 200,
+      "total_segment_count": 407,
+      "total_length": 566.6795,
+      "total_length_mm": 566.6795,
+      "total_weighted_length": 161.40118,
+      "average_length": 2.8333974,
+      "total_vertical_length": 285.3006,
+      "total_horizontal_length": 56.5257,
+      "total_angled_length": 141.30489
+     },
+     "bends": {
+      "total_count": 207,
+      "90_degree_count": 2,
+      "45_degree_count": 205,
+      "other_angle_count": 0
+     },
+     "vias": {
+      "total_count": 21,
+      "through_hole_count": 21,
+      "blind_count": 0,
+      "buried_count": 0
+     },
+     "clearance_violations": {
+      "total_count": 0,
+      "pre_existing_count": 0,
+      "unfixable_count": 0,
+      "router_introduced_count": 0,
+      "new_or_changed_count": 0,
+      "total_violation_um": 0.0,
+      "min_violation_um": 0.0,
+      "max_violation_um": 0.0,
+      "avg_violation_um": 0.0
+     },
+     "difficulty": {
+      "pin_count": 129,
+      "signal_layer_count": 2,
+      "complexity_c": 258,
+      "difficulty_d": 258.0,
+      "board_area_cm2": 6.66057
+     },
+     "bounds": {
+      "min_trace_length_mm": 395.05426,
+      "min_via_count": 4,
+      "min_bend_count": 58,
+      "via_equivalent_length_mm": 3.2,
+      "bend_equivalent_length_mm": 0.4
+     },
+     "fanout": {
+      "total_smd_pins": 117,
+      "pins_to_escape": 3,
+      "escaped_count": 106
+     }
+    },
+    "score": 580.3822,
+    "router_score": 984.8485,
+    "optimizer_score": 580.3822,
+    "score_source": "current"
+   },
+   "duration_seconds": 0.0,
+   "cpu_seconds": 0.0,
+   "passes_completed": 0,
+   "total_allocated_gb": 0.0,
+   "peak_heap_mb": 558.24774
+  },
+  "fallback": {
+   "chosen": "open-escape",
+   "attempts": [
+    {
+     "strategy": "default",
+     "stop_reason": "stagnation",
+     "unrouted": 3,
+     "new_or_changed_violations": 0,
+     "clearance_violations": 0,
+     "router_score": 954.5455,
+     "duration_seconds": 11.882
+    },
+    {
+     "strategy": "continue",
+     "stop_reason": "stagnation",
+     "unrouted": 2,
+     "new_or_changed_violations": 0,
+     "clearance_violations": 0,
+     "router_score": 969.69696,
+     "duration_seconds": 6.94
+    },
+    {
+     "strategy": "direct-first",
+     "stop_reason": "stagnation",
+     "unrouted": 3,
+     "new_or_changed_violations": 0,
+     "clearance_violations": 0,
+     "router_score": 954.5455,
+     "duration_seconds": 5.6480002
+    },
+    {
+     "strategy": "fanout-retry",
+     "stop_reason": "repeated",
+     "unrouted": 30,
+     "new_or_changed_violations": 0,
+     "clearance_violations": 0,
+     "router_score": 545.4545,
+     "duration_seconds": 0.743
+    },
+    {
+     "strategy": "short-escape",
+     "stop_reason": "stagnation",
+     "unrouted": 4,
+     "new_or_changed_violations": 0,
+     "clearance_violations": 0,
+     "router_score": 939.3939,
+     "duration_seconds": 14.476
+    },
+    {
+     "strategy": "open-escape",
+     "stop_reason": "stagnation",
+     "unrouted": 1,
+     "new_or_changed_violations": 0,
+     "clearance_violations": 0,
+     "router_score": 984.8485,
+     "duration_seconds": 11.423
+    },
+    {
+     "strategy": "no-fanout",
+     "stop_reason": "stagnation",
+     "unrouted": 2,
+     "new_or_changed_violations": 0,
+     "clearance_violations": 0,
+     "router_score": 969.69696,
+     "duration_seconds": 9.146
+    },
+    {
+     "strategy": "continue",
+     "stop_reason": "stagnation",
+     "unrouted": 1,
+     "new_or_changed_violations": 0,
+     "clearance_violations": 0,
+     "router_score": 984.8485,
+     "duration_seconds": 4.048
+    }
+   ]
+  }
+ },
+ "board_statistics": {
+  "host": "KiCad's Pcbnew,10.0.2",
+  "unit": "mm",
+  "board": {
+   "bounding_box": {
+    "x": 133.79,
+    "y": -135.635,
+    "width": 11.82,
+    "height": 56.35
+   },
+   "size": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 11.82,
+    "height": 56.35
+   },
+   "area_cm2": 6.66057
+  },
+  "layers": {
+   "total_count": 2,
+   "signal_count": 2
+  },
+  "items": {
+   "total_count": 568,
+   "trace_count": 200,
+   "via_count": 21,
+   "conduction_area_count": 0,
+   "drill_item_count": 0,
+   "pin_count": 129,
+   "component_count": 193,
+   "other_count": 25
+  },
+  "components": {
+   "total_count": 42
+  },
+  "pads": {
+   "total_count": 129
+  },
+  "nets": {
+   "total_count": 41,
+   "class_count": 1
+  },
+  "connections": {
+   "maximum_count": 88,
+   "incomplete_count": 1,
+   "pour_cut_off_count": 0
+  },
+  "traces": {
+   "total_count": 200,
+   "total_segment_count": 407,
+   "total_length": 566.6795,
+   "total_length_mm": 566.6795,
+   "total_weighted_length": 161.40118,
+   "average_length": 2.8333974,
+   "total_vertical_length": 285.3006,
+   "total_horizontal_length": 56.5257,
+   "total_angled_length": 141.30489
+  },
+  "bends": {
+   "total_count": 207,
+   "90_degree_count": 2,
+   "45_degree_count": 205,
+   "other_angle_count": 0
+  },
+  "vias": {
+   "total_count": 21,
+   "through_hole_count": 21,
+   "blind_count": 0,
+   "buried_count": 0
+  },
+  "clearance_violations": {
+   "total_count": 0,
+   "pre_existing_count": 0,
+   "unfixable_count": 0,
+   "router_introduced_count": 0,
+   "new_or_changed_count": 0,
+   "total_violation_um": 0.0,
+   "min_violation_um": 0.0,
+   "max_violation_um": 0.0,
+   "avg_violation_um": 0.0
+  },
+  "difficulty": {
+   "pin_count": 129,
+   "signal_layer_count": 2,
+   "complexity_c": 258,
+   "difficulty_d": 258.0,
+   "board_area_cm2": 6.66057
+  },
+  "bounds": {
+   "min_trace_length_mm": 395.05426,
+   "min_via_count": 4,
+   "min_bend_count": 58,
+   "via_equivalent_length_mm": 3.2,
+   "bend_equivalent_length_mm": 0.4
+  },
+  "fanout": {
+   "total_smd_pins": 117,
+   "pins_to_escape": 3,
+   "escaped_count": 106
+  }
+ },
+ "bounds": {
+  "min_trace_length_mm": 395.05426,
+  "min_via_count": 4,
+  "min_bend_count": 58,
+  "via_equivalent_length_mm": 3.2,
+  "bend_equivalent_length_mm": 0.4
+ },
+ "normalized_score": 984.8485,
+ "optimizer_score": 580.3822,
+ "resource_usage": {
+  "cpu_time": 63.53381,
+  "max_memory": 43518.37,
+  "peak_memory": 642.1036,
+  "io_read": 0.0,
+  "io_written": 0.0
+ },
+ "final_state": "COMPLETED",
+ "exit_code": 0,
+ "output_written": true,
+ "output_partial": false,
+ "cpu_score": 342,
+ "routing_thread_running": false
+}

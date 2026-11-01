@@ -48,6 +48,28 @@ Converted DSNs land in `scripts/benchmark/fixtures/PCBench/` (gitignored). Cache
 - PCBench boards are KiCad 4–7 era; KiCad 10 may upgrade-on-load during export.
 - Headless `pcbnew.ImportSpecctraSES` on KiCad 10.0.2 returned false for Freerouting SES
   (tracks unchanged). G3 should treat KiCad DRC on `raw.kicad_pcb` as the external arbiter
-  until SES reimport is reliable.
+  until SES reimport is reliable. On KiCad 10.0.7 the import works headless as long as no
+  `wx.App` is created (`import_specctra_ses.py` creates one and fails without an X display;
+  `kicad_layout_tool.py import` does not).
 - `strip_kicad_routing.py` must remove `segment`/`via` children of the `(kicad_pcb ...)`
   wrapper; dropping only file-level s-exprs leaves the original copper in place.
+
+## Hard-board reruns
+
+Rerun only the boards earlier releases failed on, keep every failing layout, and compare the routed
+result with the human layout under KiCad DRC. Results for `master-edffcabb` are in
+`scripts/benchmark/results/hard-boards-master-edffcabb/README.md`.
+
+- `make_hard_board_subset.py` — fixtures dir (symlinks + filtered `catalog.json`) holding the boards
+  that failed for the given labels in `benchmarks.json`.
+- `collect_hard_board_failures.py` — snapshot failing runs (input, `.ses`, log, result JSON, run
+  record) while a run is in progress.
+- `render_layout.sh` + `kicad_layout_tool.py` — import a `.ses` into the placed board, run KiCad DRC
+  on it and on the human reference, and render PNGs with open connections and electrical violations
+  drawn on top. KiCad commands come from `FREEROUTING_KICAD_CLI` / `FREEROUTING_KICAD_PYTHON`.
+- `hard_boards_report.py` — summary, per-board pages and pictures under
+  `scripts/benchmark/results/hard-boards-<label>/`.
+- `compact_log.py` — collapse repeated log messages in place (`[x N, last <time>]`). The runner
+  does this to each board's log when the board finishes; pass `--keep-raw-logs` to skip it. Some
+  boards repeat `Polyline: must contain at least 2 different points` hundreds of millions of times,
+  which made single logs 2-12 GB; compacted they are about 1 MB.

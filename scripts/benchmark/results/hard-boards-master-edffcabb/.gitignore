@@ -1,0 +1,4 @@
+# Renders and routed sessions of third-party boards stay on disk (licences); regenerate with
+# scripts/pcbench/render_layout.sh and scripts/pcbench/kicad_layout_tool.py.
+boards/*/*.png
+boards/*/*.ses

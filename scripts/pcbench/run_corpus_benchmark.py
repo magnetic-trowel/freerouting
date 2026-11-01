@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from compact_log import compact_log
+
 # Reconfigure stdout/stderr to UTF-8 with fallback
 try:
     if hasattr(sys.stdout, "reconfigure"):
@@ -236,6 +238,7 @@ def route_single_board(
     *,
     reference_seconds: float = 0.0,
     queued_ids: list[str] | None = None,
+    compact_logs: bool = True,
 ) -> dict[str, Any] | None:
     """Execute Freerouting on a single PCBench board and return a benchmark run record."""
     if cancel_event.is_set() or force_kill_event.is_set():
@@ -377,6 +380,14 @@ def route_single_board(
 
     stdout_text = "".join(stdout_lines)
     wall_time = round(time.perf_counter() - t0, 2)
+
+    # Some boards repeat one warning hundreds of millions of times (multi-GB logs); collapse the repeats.
+    if compact_logs and log_path.exists():
+        try:
+            compact_log(log_path)
+        except OSError:
+            # Best-effort: a failed compaction leaves the raw log in place
+            pass
 
     # Clean up any stray SES files created in working directory if an older binary split on '+'
     stray_suffix = f"{board_id.split('+')[-1]}--unrouted--{version_label}.ses"
@@ -945,6 +956,11 @@ def main() -> int:
     parser.add_argument("--filter", default="", help="Filter fixtures by substring/pattern")
     parser.add_argument("--force", action="store_true", help="Force rerun even if already in benchmarks.json")
     parser.add_argument("--timeout", default="06:00:00", help="Job timeout budget for all tiers (default: 06:00:00)")
+    parser.add_argument(
+        "--keep-raw-logs",
+        action="store_true",
+        help="Keep each board's log as written instead of collapsing repeated messages (see compact_log.py)",
+    )
     args = parser.parse_args()
     try:
         tier_order = parse_tier_order(args.tier)
@@ -1271,6 +1287,7 @@ def main() -> int:
                     force_kill_event,
                     reference_seconds=board_reference.get(board_name, ("?", 0.0))[1],
                     queued_ids=queued_ids,
+                    compact_logs=not args.keep_raw_logs,
                 )
             except Exception as exc:
                 err = exc
