@@ -232,11 +232,10 @@ public final class KaePinEntryTails {
       if (joined == null) {
         continue;
       }
-      Polyline newPart = new Polyline(cand.path);
-      if (newPart.lines.length < 3 && cand.path.length >= 2) {
-        continue;
-      }
-      if (!board.checkPolylineTrace(newPart, layer, hw, nets, cl)
+      // the joined trace is checked as it will be: its corner at the cut point is where the new
+      // last line meets the trace's own line, which may lie off the rounded cut point
+      if (!followsPath(joined, cand.path, c)
+          || !board.checkPolylineTrace(joined, layer, hw, nets, cl)
           || !board.checkPolylineTrace(tail, layer, tailHw, nets, cl)) {
         continue;
       }
@@ -287,12 +286,16 @@ public final class KaePinEntryTails {
     if (a.equals(centre)) {
       return null;
     }
-    long cross =
-        (long) (m.x - a.x) * (long) (centre.y - a.y) - (long) (m.y - a.y) * (long) (centre.x - a.x);
-    Point[] pts =
-        m.equals(centre) || m.equals(a) || cross == 0
-            ? new Point[] {a, centre}
-            : new Point[] {a, m, centre};
+    // the planned end within a few units of the line approach-centre (or of the centre) is
+    // dropped: a corner that close only leaves a sliver of a segment
+    double cross =
+        (double) (m.x - a.x) * (centre.y - a.y) - (double) (m.y - a.y) * (centre.x - a.x);
+    double ac = a.toFloat().distance(centre.toFloat());
+    boolean straight =
+        m.equals(a)
+            || m.toFloat().distance(centre.toFloat()) <= CORNER_TOL
+            || Math.abs(cross) <= CORNER_TOL * ac;
+    Point[] pts = straight ? new Point[] {a, centre} : new Point[] {a, m, centre};
     Polyline p = new Polyline(pts);
     return p.lines.length >= 3 ? p : null;
   }
@@ -325,6 +328,30 @@ public final class KaePinEntryTails {
     Polyline result = new Polyline(lines.toArray(new Line[0]));
     return result.lines.length >= 3 ? result : null;
   }
+
+  /**
+   * Whether a joined polyline (pin side first) has the path's corners where the path puts them:
+   * each within a few board units, so a nearly parallel join cannot move the cut corner away.
+   */
+  private static boolean followsPath(Polyline joined, IntPoint[] path, FloatPoint[] c) {
+    int k = 0;
+    for (int i = 0; i < path.length; i++) {
+      if (i > 0 && path[i].equals(path[i - 1])) {
+        continue;
+      }
+      if (k >= joined.cornerCount()) {
+        return false;
+      }
+      FloatPoint q = joined.cornerApprox(k++);
+      if (q.distance(path[i].toFloat()) > CORNER_TOL) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Board units a joined corner may lie from the path's (rounding of the cut point). */
+  private static final double CORNER_TOL = 4.0;
 
   /** The polyline segment (pin side first) the cut point of a path lies on. */
   private static int cutSegment(IntPoint[] path, FloatPoint[] c) {
