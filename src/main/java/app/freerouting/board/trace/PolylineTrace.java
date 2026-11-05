@@ -28,6 +28,7 @@ import app.freerouting.geometry.planar.Shape;
 import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.geometry.planar.Vector;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.rules.KaePinEntries;
 import app.freerouting.rules.Net;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
@@ -239,7 +240,9 @@ public class PolylineTrace extends Trace implements Serializable {
             && otherTrace.getHalfWidth() == getHalfWidth()
             && otherTrace.getFixedState() == this.getFixedState()
             && !otherTrace.isDeletionForbidden()
-            && !this.isDeletionForbidden()) {
+            && !this.isDeletionForbidden()
+            && !KaePinEntries.isTail(board.rules, otherTrace.getId())
+            && !KaePinEntries.isTail(board.rules, this.getId())) {
           if (startCorner.equals(otherTrace.lastCorner())) {
             traceFound = true;
             break;
@@ -338,7 +341,9 @@ public class PolylineTrace extends Trace implements Serializable {
             && otherTrace.getHalfWidth() == getHalfWidth()
             && otherTrace.getFixedState() == this.getFixedState()
             && !otherTrace.isDeletionForbidden()
-            && !this.isDeletionForbidden()) {
+            && !this.isDeletionForbidden()
+            && !KaePinEntries.isTail(board.rules, otherTrace.getId())
+            && !KaePinEntries.isTail(board.rules, this.getId())) {
           if (endCorner.equals(otherTrace.firstCorner())) {
             traceFound = true;
             break;
@@ -713,6 +718,10 @@ public class PolylineTrace extends Trace implements Serializable {
     if (this.isShoveFixed()) {
       return false;
     }
+    if (KaePinEntries.isTail(this.board.rules, this.getId())) {
+      // a planned rule D tail keeps its shape; the trace meeting it tightens up to it
+      return false;
+    }
     if (!this.netsNormal()) {
       return false;
     }
@@ -816,11 +825,23 @@ public class PolylineTrace extends Trace implements Serializable {
     return pullTightAlgo.smoothenEndCornersAtTrace(this);
   }
 
+  private IntPoint kaeTailApproach() {
+    KaePinEntries t = KaePinEntries.active(this.board.rules);
+    return t == null ? null : t.tailApproach(this.getId());
+  }
+
   @Override
   public TileShape getTraceConnectionShape(ShapeSearchTree searchTree, int index) {
     if (index < 0 || index >= this.tileShapeCount()) {
       FRLogger.warn("PolylineTrace.get_trace_connection_shape index out of range");
       return null;
+    }
+    if (this.board != null) {
+      // a planned rule D tail is joined only at its approach point
+      IntPoint approach = kaeTailApproach();
+      if (approach != null) {
+        return TileShape.getInstance(approach);
+      }
     }
     return PolylineTraceGeometry.connectionShape(lines, index);
   }

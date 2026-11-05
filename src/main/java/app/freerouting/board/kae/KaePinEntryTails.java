@@ -109,6 +109,7 @@ public final class KaePinEntryTails {
     for (Item it : pin.getNormalContacts()) {
       if (it instanceof PolylineTrace t
           && !t.isShoveFixed()
+          && !KaePinEntries.isTail(t.board.rules, t.getId())
           && t.cornerCount() >= 2
           && (t.firstCorner().equals(c) || t.lastCorner().equals(c))) {
         out.add(t);
@@ -179,7 +180,10 @@ public final class KaePinEntryTails {
   static boolean correctEnd(PolylineTrace trace, boolean atStart, boolean useCache) {
     BasicBoard board = trace.board;
     KaePinEntries table = KaePinEntries.active(board.rules);
-    if (table == null || trace.isShoveFixed() || trace.cornerCount() < 2) {
+    if (table == null
+        || trace.isShoveFixed()
+        || table.tailApproach(trace.getId()) != null
+        || trace.cornerCount() < 2) {
       return false;
     }
     Pin pin = pinAt(trace, atStart);
@@ -242,7 +246,16 @@ public final class KaePinEntryTails {
       PolylineTrace existing = existingTail(pin, layer, e.approach);
       trace.change(atStart ? joined : joined.reverse());
       if (existing == null) {
-        board.insertTrace(tail, layer, tailHw, nets, cl, FixedState.SHOVE_FIXED);
+        // phase 2 (planned): the tail is routing like the planner's; phase 1: a fixed piece
+        boolean planned = table.isPlanned();
+        board.insertTrace(
+            tail, layer, tailHw, nets, cl, planned ? FixedState.UNFIXED : FixedState.SHOVE_FIXED);
+        if (planned) {
+          PolylineTrace t = KaePinEntryPlanner.traceBetween(pin, layer, pl.centre, e.approach);
+          if (t != null) {
+            table.registerTail(pin.getId(), layer, t.getId(), e.approach);
+          }
+        }
         TAILS.incrementAndGet();
       } else {
         REUSED.incrementAndGet();
@@ -270,7 +283,8 @@ public final class KaePinEntryTails {
     for (Item it : pin.getNormalContacts()) {
       if (it instanceof PolylineTrace t
           && t.getLayer() == layer
-          && t.getFixedState() == FixedState.SHOVE_FIXED
+          && (t.getFixedState() == FixedState.SHOVE_FIXED
+              || KaePinEntries.isTail(t.board.rules, t.getId()))
           && (t.firstCorner().equals(approach) || t.lastCorner().equals(approach))) {
         found.add(t);
       }
@@ -603,7 +617,10 @@ public final class KaePinEntryTails {
               break;
             }
           }
-          if (t.getFixedState() == FixedState.SHOVE_FIXED && tailOf != null) {
+          boolean fixedOrPlanned =
+              t.getFixedState() == FixedState.SHOVE_FIXED
+                  || KaePinEntries.isTail(board.rules, t.getId());
+          if (fixedOrPlanned && tailOf != null) {
             ++tails;
             if (!tailOf.end.equals(pl.centre)) {
               ++bent;
@@ -639,7 +656,8 @@ public final class KaePinEntryTails {
             + " short="
             + SHORT.get()
             + " class_floors="
-            + table.classFloorCount();
+            + table.classFloorCount()
+            + KaePinEntryPlanner.counts();
     FRLogger.info(s);
     return s;
   }

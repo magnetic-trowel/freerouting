@@ -14,11 +14,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Reads the DSN scope {@code kae_pin_entries} that kicad-auto-everything writes at the end of the
- * {@code pcb} scope (after the placement, network and wiring, so the pins exist):
+ * Reads the DSN scope {@code kae_pin_entries} of kicad-auto-everything.
+ *
+ * <p>The scope comes at the end of the {@code pcb} scope (after the placement, network and wiring,
+ * so the pins exist):
  *
  * <pre>
- * (kae_pin_entries (version 1)
+ * (kae_pin_entries (version 1) [(mode plan)]
  *   (pin REF PIN (layer L) (centre x y) (frame ux uy long short cx cy) [(radial)]
  *     (entry KIND (width W) [(neck N)] (approach x y) (end x y)) ...)
  *   (class_floor CLASS (width W) (layer_rule L (width W)) ...))
@@ -102,7 +104,9 @@ public final class KaePinEntryScope {
         continue;
       }
       String head = atom(node.get(0));
-      if ("pin".equalsIgnoreCase(head) && node.size() >= 3) {
+      if ("mode".equalsIgnoreCase(head) && node.size() >= 2) {
+        table.setPlanned("plan".equalsIgnoreCase(atom(node.get(1))));
+      } else if ("pin".equalsIgnoreCase(head) && node.size() >= 3) {
         Pin pin = pins.get(atom(node.get(1)) + "\u0000" + atom(node.get(2)));
         List<?> layerNode = sub(node, "layer");
         int layer = layerNode == null ? -1 : board.layerStructure.getNo(atom(layerNode.get(1)));

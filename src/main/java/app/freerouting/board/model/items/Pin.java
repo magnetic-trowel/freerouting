@@ -146,6 +146,24 @@ public class Pin extends DrillItem implements Serializable {
     setCenter(null);
   }
 
+  /**
+   * The point a trace connects to: the approach point of a tail kicad-auto-everything's entry
+   * planner put at this pin (phase 2, KaePinEntryPlanner), else the centre.
+   */
+  @Override
+  public TileShape getTraceConnectionShape(
+      app.freerouting.board.searchtree.ShapeSearchTree searchTree, int index) {
+    if (KaePinEntries.active(board.rules) != null) {
+      IntPoint a =
+          app.freerouting.board.kae.KaePinEntryPlanner.plannedApproach(
+              this, this.firstLayer() + index);
+      if (a != null) {
+        return TileShape.getInstance(a);
+      }
+    }
+    return super.getTraceConnectionShape(searchTree, index);
+  }
+
   /** Return the name of this pin in the package of this component. */
   public String name() {
     Component component = board.components.get(this.getComponentId());

@@ -37,6 +37,7 @@ public final class KaePinEntries implements Serializable {
     /** Half width of the tail when it is necked, 0 when it is not. */
     public final int neckHalfWidth;
 
+    /** Creates an entry; points and widths in board units. */
     public Entry(String kind, IntPoint approach, IntPoint end, int halfWidth, int neckHalfWidth) {
       this.kind = kind;
       this.approach = approach;
@@ -72,6 +73,7 @@ public final class KaePinEntries implements Serializable {
 
     public final List<Entry> entries;
 
+    /** Creates the entries of a pin on a layer; lengths in board units. */
     public PinLayer(
         int pinId,
         int layer,
@@ -105,6 +107,52 @@ public final class KaePinEntries implements Serializable {
   public final Map<Long, Integer> failedTails = new HashMap<>();
 
   private boolean enabled;
+
+  /** Phase 2: the router plans tails before it searches ({@code (mode plan)} in the DSN). */
+  private boolean planned;
+
+  /** Planned tails: tail trace id -> its approach point. Looked up, never iterated. */
+  private final Map<Integer, IntPoint> tailApproach = new HashMap<>();
+
+  /** Planned tails by pin and layer: {tail trace id}. */
+  private final Map<Long, Integer> tailOfPin = new HashMap<>();
+
+  /** Registers a tail trace (approach to pin centre) of a pin on a layer. */
+  public void registerTail(int pinId, int layer, int traceId, IntPoint approach) {
+    tailApproach.put(traceId, approach);
+    tailOfPin.put(key(pinId, layer), traceId);
+  }
+
+  /** The id of the tail registered for a pin on a layer, or -1. */
+  public int tailOf(int pinId, int layer) {
+    Integer t = tailOfPin.get(key(pinId, layer));
+    return t == null ? -1 : t;
+  }
+
+  /** Forgets the tail of a pin on a layer (it was ripped or changed). */
+  public void forgetTail(int pinId, int layer) {
+    tailOfPin.remove(key(pinId, layer));
+  }
+
+  /** The approach point of a registered tail, or null when the trace is no tail. */
+  public IntPoint tailApproach(int traceId) {
+    return tailApproach.get(traceId);
+  }
+
+  public boolean isPlanned() {
+    return planned;
+  }
+
+  public void setPlanned(boolean planned) {
+    this.planned = planned;
+  }
+
+  /** Whether a trace is a registered tail on a board whose table is active. */
+  public static boolean isTail(BoardRules rules, int traceId) {
+    KaePinEntries t = active(rules);
+    return t != null && t.tailApproach.containsKey(traceId);
+  }
+
   private final List<PinLayer> pinLayers = new ArrayList<>();
   private final Map<Long, PinLayer> byPinLayer = new HashMap<>();
   private final Map<String, int[]> classFloors = new LinkedHashMap<>();
@@ -146,6 +194,7 @@ public final class KaePinEntries implements Serializable {
     return f[layer];
   }
 
+  /** The number of classes with a width floor. */
   public int classFloorCount() {
     return classFloors.size();
   }

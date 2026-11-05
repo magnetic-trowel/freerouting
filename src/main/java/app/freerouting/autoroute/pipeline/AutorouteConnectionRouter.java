@@ -5,12 +5,15 @@ import app.freerouting.autoroute.AutorouteAttemptState;
 import app.freerouting.autoroute.maze.AutorouteControl;
 import app.freerouting.autoroute.maze.AutorouteEngine;
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.board.kae.KaePinEntryPlanner;
 import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.Item;
+import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.datastructures.TimeLimit;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.rules.Net;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
@@ -215,6 +218,16 @@ final class AutorouteConnectionRouter {
         }
       }
 
+      // kicad-auto-everything's planned pin entries (phase 2): the tails go in first, and the
+      // search ends at their approach points; off unless the DSN table asks for it
+      List<PolylineTrace> plannedTails =
+          KaePinEntryPlanner.plan(
+              router.board,
+              routeNetNo,
+              routeStartSet,
+              routeDestSet,
+              autorouteControl.traceHalfWidth,
+              autorouteControl.traceClearanceClassIndex);
       AutorouteEngine autorouteEngine =
           router.board.initAutoroute(
               routeNetNo,
@@ -225,9 +238,27 @@ final class AutorouteConnectionRouter {
       int maxItemIdBeforeRoute = router.board.communication.idGenerator.maxGeneratedId();
 
       long mazeSearchStart = BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
-      final AutorouteAttemptResult autorouteResult =
+      AutorouteAttemptResult firstResult =
           autorouteEngine.autorouteConnection(
               routeStartSet, routeDestSet, autorouteControl, rippedItemList, ripupCosts);
+      if (!plannedTails.isEmpty() && firstResult.state != AutorouteAttemptState.ROUTED) {
+        // no route to the approach points: the tails go, and the connection is searched once
+        // more Freerouting's normal way
+        KaePinEntryPlanner.unplan(router.board, plannedTails);
+        routeStartSet.removeAll(plannedTails);
+        routeDestSet.removeAll(plannedTails);
+        autorouteEngine =
+            router.board.initAutoroute(
+                routeNetNo,
+                autorouteControl.traceClearanceClassIndex,
+                router.thread,
+                timeLimit,
+                router.isRetainAutorouteDatabase());
+        firstResult =
+            autorouteEngine.autorouteConnection(
+                routeStartSet, routeDestSet, autorouteControl, rippedItemList, ripupCosts);
+      }
+      final AutorouteAttemptResult autorouteResult = firstResult;
       if (BatchAutorouter.isBenchmarkProfileEnabled()) {
         router.addProfileMazeSearchNanos(System.nanoTime() - mazeSearchStart);
       }
