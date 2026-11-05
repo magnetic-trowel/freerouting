@@ -338,7 +338,10 @@ public final class KaePinEntryTails {
     for (int guard = 0; guard < 64 && cur.lines.length >= 3; guard++) {
       int drop = -1;
       for (int i = 1; i < cur.cornerCount(); i++) {
-        if (cur.corner(i).equals(cur.corner(i - 1))) {
+        // equal, or rational corners that round to the same board point (the session writes
+        // rounded coordinates)
+        if (cur.corner(i).equals(cur.corner(i - 1))
+            || cur.cornerApprox(i).distance(cur.cornerApprox(i - 1)) < 1.0) {
           drop = i;
           break;
         }
