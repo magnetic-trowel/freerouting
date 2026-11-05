@@ -17,7 +17,9 @@ import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.trace.PolylineTrace;
 import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.geometry.planar.IntPoint;
+import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Point;
+import app.freerouting.geometry.planar.Polyline;
 import app.freerouting.io.BoardReadResult;
 import app.freerouting.io.specctra.DsnReader;
 import app.freerouting.rules.KaePinEntries;
@@ -186,6 +188,25 @@ class KaePinEntryTailsTest {
     KaePinEntries.Entry axial = board.rules.kaePinEntries.pinLayers().get(0).entries.get(1);
     assertTrue(endsAt(tails.get(0), axial.approach));
     assertTrue(new DesignRulesChecker(board, null).getAllClearanceViolations().isEmpty());
+  }
+
+  @Test
+  void zeroLengthLinesAreDropped() {
+    // three lines through (100, 0): a zero-length segment that would be written as a wire
+    Polyline p =
+        new Polyline(
+            new Line[] {
+              new Line(new IntPoint(0, 0), new IntPoint(0, 10)),
+              new Line(new IntPoint(0, 0), new IntPoint(100, 0)),
+              new Line(new IntPoint(100, 0), new IntPoint(200, 100)),
+              new Line(new IntPoint(100, 0), new IntPoint(100, 50))
+            });
+    Polyline q = KaePinEntryTails.withoutZeroLengthLines(p);
+    for (int i = 1; i < q.cornerCount(); i++) {
+      assertFalse(q.corner(i).equals(q.corner(i - 1)));
+    }
+    assertEquals(new IntPoint(0, 0), q.corner(0));
+    assertEquals(new IntPoint(100, 0), q.corner(q.cornerCount() - 1));
   }
 
   @Test

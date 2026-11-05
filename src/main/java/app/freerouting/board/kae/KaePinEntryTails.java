@@ -325,8 +325,42 @@ public final class KaePinEntryTails {
     for (int j = seg + 1; j < poly.lines.length; j++) {
       lines.add(poly.lines[j]);
     }
-    Polyline result = new Polyline(lines.toArray(new Line[0]));
-    return result.lines.length >= 3 ? result : null;
+    Polyline result = withoutZeroLengthLines(new Polyline(lines.toArray(new Line[0])));
+    return result != null && result.lines.length >= 3 ? result : null;
+  }
+
+  /**
+   * The polyline without lines between two equal corners (several lines through one point, as a
+   * join next to a via can leave): they would be written as zero-length wires.
+   */
+  static Polyline withoutZeroLengthLines(Polyline p) {
+    Polyline cur = p;
+    for (int guard = 0; guard < 64 && cur.lines.length >= 3; guard++) {
+      int drop = -1;
+      for (int i = 1; i < cur.cornerCount(); i++) {
+        if (cur.corner(i).equals(cur.corner(i - 1))) {
+          drop = i;
+          break;
+        }
+      }
+      if (drop < 0) {
+        return cur;
+      }
+      // line `drop` runs from corner drop - 1 to corner drop; an end line stays (it fixes the end)
+      int line = drop;
+      if (line >= cur.lines.length - 1) {
+        return cur;
+      }
+      Line[] fewer = new Line[cur.lines.length - 1];
+      System.arraycopy(cur.lines, 0, fewer, 0, line);
+      System.arraycopy(cur.lines, line + 1, fewer, line, fewer.length - line);
+      Polyline next = new Polyline(fewer);
+      if (next.lines.length >= cur.lines.length) {
+        return cur;
+      }
+      cur = next;
+    }
+    return cur;
   }
 
   /**
