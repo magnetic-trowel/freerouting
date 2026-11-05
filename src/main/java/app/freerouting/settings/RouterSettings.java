@@ -125,6 +125,15 @@ public class RouterSettings implements Serializable, Cloneable {
   public Double minTraceWidthUm;
 
   /**
+   * kicad-auto-everything's pad entries: when true, the {@code kae_pin_entries} table of the DSN
+   * (planned rule D pin entries and per-class minimum widths) is honoured; traces ending at a
+   * listed pin get a fixed tail from the planned approach point. Off by default; without the DSN
+   * table it changes nothing.
+   */
+  @SerializedName("kae_pin_entries")
+  public Boolean kaePinEntries;
+
+  /**
    * When true, a routed connection whose newly inserted traces/vias carry clearance violations is
    * ripped up again and counted as not routed for that pass, instead of being kept with the
    * violations (v1 limitation: violations between two pre-existing foreign items pushed by a shove
@@ -700,6 +709,7 @@ public class RouterSettings implements Serializable, Cloneable {
     result.planeAsObstacle = this.planeAsObstacle;
     result.neckWidthUm = this.neckWidthUm;
     result.minTraceWidthUm = this.minTraceWidthUm;
+    result.kaePinEntries = this.kaePinEntries;
     result.strictDrc = this.strictDrc;
     result.fixKicadFootprints = this.fixKicadFootprints;
     result.resultJsonPath = this.resultJsonPath;
@@ -733,6 +743,11 @@ public class RouterSettings implements Serializable, Cloneable {
   /** Sets the configured necking width in micrometres. */
   public void setNeckWidthUm(double width) {
     this.neckWidthUm = width;
+  }
+
+  /** Returns whether kicad-auto-everything's pad entry table is honoured. */
+  public boolean getKaePinEntries() {
+    return Boolean.TRUE.equals(kaePinEntries);
   }
 
   /** Returns the minimum trace width in micrometres, or zero when none is set. */

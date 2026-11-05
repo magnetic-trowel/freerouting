@@ -379,6 +379,7 @@ public class HeadlessBoardManager implements BoardManager {
     applyCopperToEdgeClearanceOverride();
     applyHoleClearanceOverride();
     applyMinTraceWidthOverride();
+    applyKaePinEntriesSetting();
     applyPlaneNetsOverride();
     applyPlaneAsObstacleOverride();
     applyClearanceToleranceOverride();
@@ -429,6 +430,19 @@ public class HeadlessBoardManager implements BoardManager {
               + " board units)"
               + (holeKeepouts > 0 ? ", " + holeKeepouts + " hole keepouts reclassified." : "."));
     }
+  }
+
+  /** Switches the DSN's kae_pin_entries table on or off by {@code router.kae_pin_entries}. */
+  private void applyKaePinEntriesSetting() {
+    if (this.board == null || this.board.rules == null || this.board.rules.kaePinEntries == null) {
+      return;
+    }
+    boolean on =
+        this.routingJob != null
+            && this.routingJob.routerSettings != null
+            && this.routingJob.routerSettings.getKaePinEntries();
+    this.board.rules.kaePinEntries.setEnabled(on);
+    FRLogger.info("kae_pin_entries: " + (on ? "on" : "off"));
   }
 
   /**
@@ -1000,6 +1014,7 @@ public class HeadlessBoardManager implements BoardManager {
       applyCopperToEdgeClearanceOverride();
       applyHoleClearanceOverride();
       applyMinTraceWidthOverride();
+      applyKaePinEntriesSetting();
       applyPlaneNetsOverride();
       applyPlaneAsObstacleOverride();
       applyClearanceToleranceOverride();

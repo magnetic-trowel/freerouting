@@ -137,7 +137,8 @@ final class DirectPinRouting {
       return new AutorouteAttemptResult(AutorouteAttemptState.FAILED, "Pin layer is inactive.");
     }
     if (neck) {
-      int neckHalfWidth = neckHalfWidth(board, settings);
+      int neckHalfWidth =
+          Math.max(neckHalfWidth(board, settings), control.minNeckdownHalfWidth(layer));
       if (neckHalfWidth >= control.traceHalfWidth[layer]) {
         return new AutorouteAttemptResult(
             AutorouteAttemptState.FAILED, "Neck width is not narrower than the class width.");

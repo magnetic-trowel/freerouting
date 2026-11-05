@@ -48,6 +48,12 @@ public class BoardRules implements Serializable {
 
   private static final long serialVersionUID = 3029478744858107286L;
 
+  /**
+   * kicad-auto-everything's planned pad entries and class width floors (DSN scope {@code
+   * kae_pin_entries}); null when the DSN has none. Used only with {@code router.kae_pin_entries}.
+   */
+  public KaePinEntries kaePinEntries;
+
   private boolean useSlowAutorouteAlgorithm;
   private int holeClearance;
   public transient double clearanceToleranceUm = 1.0;

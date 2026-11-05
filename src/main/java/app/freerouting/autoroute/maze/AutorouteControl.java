@@ -8,6 +8,7 @@ import app.freerouting.core.library.Padstack;
 import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.rules.KaePinEntries;
 import app.freerouting.rules.Net;
 import app.freerouting.rules.NetClass;
 import app.freerouting.rules.ViaInfo;
@@ -31,6 +32,9 @@ public class AutorouteControl {
    * {@link #neckHalfWidth} (0: no limit).
    */
   public final int minNeckdownHalfWidth;
+
+  /** The net's class floor per layer from the DSN's kae_pin_entries table (0: none). */
+  private int[] kaeFloorHalfWidth;
 
   /** Defines for each layer, if it may be used for routing. */
   public final boolean[] layerActive;
@@ -239,6 +243,10 @@ public class AutorouteControl {
 
   private void initNet(int netNumber, RoutingBoard board, int viaCosts) {
     this.netNumber = netNumber;
+    kaeFloorHalfWidth = new int[layerCount];
+    for (int i = 0; i < layerCount; i++) {
+      kaeFloorHalfWidth[i] = KaePinEntries.floorHalfWidth(board.rules, netNumber, i);
+    }
     Net currentNet = board.rules.nets.get(netNumber);
     NetClass currentNetClass;
     if (currentNet != null) {
@@ -385,6 +393,19 @@ public class AutorouteControl {
       this.toLayer = toLayer;
       this.attachSmdAllowed = attachSmdAllowed;
     }
+  }
+
+  /**
+   * The narrowest half width any neck-down may give this net's traces on a layer: {@link
+   * #minNeckdownHalfWidth}, raised to the net class's floor of kicad-auto-everything's table (the
+   * width its current needs) when {@code router.kae_pin_entries} is on.
+   */
+  public int minNeckdownHalfWidth(int layer) {
+    int floor =
+        kaeFloorHalfWidth != null && layer >= 0 && layer < kaeFloorHalfWidth.length
+            ? kaeFloorHalfWidth[layer]
+            : 0;
+    return Math.max(minNeckdownHalfWidth, floor);
   }
 
   /**

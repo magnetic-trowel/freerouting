@@ -321,7 +321,9 @@ final class AutorouteConnectionRouter {
     int neckHalfWidth = AutorouteControl.neckHalfWidth(router.board, router.settings);
     boolean narrowerSomewhere = false;
     for (int i = 0; i < originalControl.layerCount; i++) {
-      if (originalControl.layerActive[i] && originalControl.traceHalfWidth[i] > neckHalfWidth) {
+      if (originalControl.layerActive[i]
+          && originalControl.traceHalfWidth[i]
+              > Math.max(neckHalfWidth, originalControl.minNeckdownHalfWidth(i))) {
         narrowerSomewhere = true;
         break;
       }
@@ -338,7 +340,11 @@ final class AutorouteConnectionRouter {
     neckControl.removeUnconnectedVias = router.isRemoveUnconnectedVias();
     for (int i = 0; i < neckControl.layerCount; i++) {
       int compensation = neckControl.compensatedTraceHalfWidth[i] - neckControl.traceHalfWidth[i];
-      neckControl.traceHalfWidth[i] = Math.min(neckControl.traceHalfWidth[i], neckHalfWidth);
+      // never below the net class's floor (kae_pin_entries), which is 0 without the table
+      neckControl.traceHalfWidth[i] =
+          Math.min(
+              neckControl.traceHalfWidth[i],
+              Math.max(neckHalfWidth, neckControl.minNeckdownHalfWidth(i)));
       neckControl.compensatedTraceHalfWidth[i] = neckControl.traceHalfWidth[i] + compensation;
       neckControl.updateTraceClearanceOffset(i, router.board);
     }

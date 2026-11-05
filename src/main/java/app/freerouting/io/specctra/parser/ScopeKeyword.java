@@ -71,6 +71,11 @@ public class ScopeKeyword extends Keyword {
           if (!nextScope.readScope(scopeParameter)) {
             return false;
           }
+        } else if (KaePinEntryScope.isScope(nextToken)) {
+          // kicad-auto-everything's planned pad entries (a string token: no lexer keyword)
+          if (!KaePinEntryScope.read(scopeParameter)) {
+            return false;
+          }
         } else {
           // skip unknown scope
           skipScope(scopeParameter.scanner);

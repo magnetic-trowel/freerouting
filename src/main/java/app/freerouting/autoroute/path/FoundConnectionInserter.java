@@ -4,6 +4,7 @@ import app.freerouting.autoroute.maze.AutorouteControl;
 import app.freerouting.board.actions.ForcedViaInserter;
 import app.freerouting.board.actions.ItemSelectionFilter;
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.board.kae.KaePinEntryTails;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
@@ -138,6 +139,9 @@ public final class FoundConnectionInserter {
     }
 
     board.normalizeTraces(ctrl.netNumber);
+    // kicad-auto-everything's planned pin entries: fixed rule D tails at listed pins (off unless
+    // router.kae_pin_entries and the DSN table)
+    KaePinEntryTails.afterInsert(board, targetItem, startItem);
 
     return newInstance;
   }
@@ -524,7 +528,7 @@ public final class FoundConnectionInserter {
     // neck_width_um and min_trace_width_um set the narrowest trace allowed: no candidate goes below
     // it, pin-width ones included, and the minimum itself is tried last. Without them (0) the
     // candidates are unchanged.
-    int minHalfWidth = ctrl.minNeckdownHalfWidth;
+    int minHalfWidth = ctrl.minNeckdownHalfWidth(layer);
     candidateHalfWidths.removeIf(halfWidth -> halfWidth < minHalfWidth);
     if (minHalfWidth > 0) {
       candidateHalfWidths.add(minHalfWidth);
@@ -610,7 +614,7 @@ public final class FoundConnectionInserter {
     }
 
     int neckDownHalfwidth =
-        Math.max(pin.getTraceNeckdownHalfwidth(layer), ctrl.minNeckdownHalfWidth);
+        Math.max(pin.getTraceNeckdownHalfwidth(layer), ctrl.minNeckdownHalfWidth(layer));
     if (neckDownHalfwidth >= ctrl.traceHalfWidth[layer]) {
       return null;
     }

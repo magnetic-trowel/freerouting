@@ -445,7 +445,8 @@ public class MazeSearchEngine {
       Item startItem = door.item;
       if (startItem instanceof Pin pin) {
         double neckdownHalfWidth =
-            Math.max(pin.getTraceNeckdownHalfwidth(layerIndex), ctrl.minNeckdownHalfWidth);
+            Math.max(
+                pin.getTraceNeckdownHalfwidth(layerIndex), ctrl.minNeckdownHalfWidth(layerIndex));
         if (neckdownHalfWidth > 0) {
           halfWidth = Math.min(halfWidth, neckdownHalfWidth);
         }
@@ -1268,7 +1269,9 @@ public class MazeSearchEngine {
     Collection<TargetItemExpansionDoor> targetDoors = room.getTargetDoors();
     for (TargetItemExpansionDoor currentTargetDoor : targetDoors) {
       if (currentTargetDoor.item instanceof Pin pin) {
-        return Math.max(pin.getTraceNeckdownHalfwidth(room.getLayer()), ctrl.minNeckdownHalfWidth);
+        return Math.max(
+            pin.getTraceNeckdownHalfwidth(room.getLayer()),
+            ctrl.minNeckdownHalfWidth(room.getLayer()));
       }
     }
     return 0;

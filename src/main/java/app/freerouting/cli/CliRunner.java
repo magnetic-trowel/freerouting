@@ -2,6 +2,7 @@ package app.freerouting.cli;
 
 import app.freerouting.analytics.FRAnalytics;
 import app.freerouting.analytics.model.JobLifecycleStatus;
+import app.freerouting.board.kae.KaePinEntryTails;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.results.RoutingResultManifest;
@@ -123,6 +124,8 @@ public final class CliRunner {
 
     awaitRoutingThreadEnd(routingJob, ROUTING_THREAD_END_WAIT_MS);
     boolean outputWritten = writeCliOutputIfAvailable(globalSettings, routingJob);
+    // the ends at kicad-auto-everything's listed pins, on the board written (logged; null when off)
+    KaePinEntryTails.summary(routingJob.board);
     int cliExitCode = computeCliExitCode(routingJob, outputWritten);
     writeCliResultManifestIfRequested(globalSettings, routingJob, outputWritten, cliExitCode);
 

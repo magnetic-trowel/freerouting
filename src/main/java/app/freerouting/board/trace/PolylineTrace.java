@@ -2,6 +2,7 @@ package app.freerouting.board.trace;
 
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.board.kae.KaePinEntryTails;
 import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
@@ -733,6 +734,10 @@ public class PolylineTrace extends Trace implements Serializable {
             this.touchingPinsAtEndCorners());
     if (newLines != lines) {
       change(newLines);
+      return true;
+    }
+    // kicad-auto-everything's planned pin entries: a fixed rule D tail at a listed pin
+    if (KaePinEntryTails.active(this.board) && KaePinEntryTails.correctEnds(this)) {
       return true;
     }
     AngleRestriction angleRestriction = this.board.rules.getTraceAngleRestriction();

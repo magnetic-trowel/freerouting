@@ -22,6 +22,7 @@ import app.freerouting.geometry.planar.Shape;
 import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.geometry.planar.Vector;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.rules.KaePinEntries;
 import app.freerouting.util.TextManager;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
@@ -251,6 +252,10 @@ public class Pin extends DrillItem implements Serializable {
    */
   public Collection<TraceExitRestriction> getTraceExitRestrictions(int layer) {
     Collection<TraceExitRestriction> result = new LinkedList<>();
+    if (KaePinEntries.covers(board.rules, this.getId(), layer)) {
+      // the planned entries of kicad-auto-everything govern this pin (board.kae.KaePinEntryTails)
+      return result;
+    }
     int padstackLayer = this.getPadstackLayer(layer - this.firstLayer());
     double padXyFactor = 1.5;
     // setting 1.5 to a higher factor may hinder the shove algorithm of the autorouter between
