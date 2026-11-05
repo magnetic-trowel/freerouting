@@ -156,8 +156,9 @@ public final class KaePinEntryPlanner {
       if (!board.checkPolylineTrace(tail, layer, tailHw, nets, clearanceClass)) {
         continue;
       }
-      board.insertTrace(tail, layer, tailHw, nets, clearanceClass, FixedState.UNFIXED);
-      PolylineTrace t = traceBetween(pin, layer, pl.centre, e.approach);
+      PolylineTrace t =
+          board.insertTraceWithoutCleaning(
+              tail, layer, tailHw, nets, clearanceClass, FixedState.UNFIXED);
       if (t == null) {
         continue;
       }

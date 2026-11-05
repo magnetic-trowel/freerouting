@@ -117,6 +117,19 @@ public final class KaePinEntries implements Serializable {
   /** Planned tails by pin and layer: {tail trace id}. */
   private final Map<Long, Integer> tailOfPin = new HashMap<>();
 
+  /** Tails made at a pin and layer by re-ending traces: a bound against a re-ending loop. */
+  private final Map<Long, Integer> reEnds = new HashMap<>();
+
+  /** Counts one more re-ended trace at a pin on a layer; returns the count so far. */
+  public int countReEnd(int pinId, int layer) {
+    return reEnds.merge(key(pinId, layer), 1, Integer::sum);
+  }
+
+  /** How many traces were re-ended at a pin on a layer. */
+  public int reEndCount(int pinId, int layer) {
+    return reEnds.getOrDefault(key(pinId, layer), 0);
+  }
+
   /** Registers a tail trace (approach to pin centre) of a pin on a layer. */
   public void registerTail(int pinId, int layer, int traceId, IntPoint approach) {
     tailApproach.put(traceId, approach);

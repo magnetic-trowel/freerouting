@@ -43,6 +43,9 @@ public final class KaePinEntryTails {
   /** A last piece may be this much shorter than the planned approach distance. */
   private static final double DEPTH_SLACK = 0.98;
 
+  /** Re-endings at one pin and layer at most: a pin re-ended this often is left as it is. */
+  private static final int MAX_RE_ENDS = 16;
+
   private static final AtomicLong TAILS = new AtomicLong();
   private static final AtomicLong REUSED = new AtomicLong();
   private static final AtomicLong FAILED = new AtomicLong();
@@ -191,7 +194,7 @@ public final class KaePinEntryTails {
       return false;
     }
     KaePinEntries.PinLayer pl = table.get(pin.getId(), trace.getLayer());
-    if (pl == null) {
+    if (pl == null || table.reEndCount(pin.getId(), trace.getLayer()) >= MAX_RE_ENDS) {
       return false;
     }
     Polyline poly = atStart ? trace.polyline() : trace.polyline().reverse();
@@ -247,20 +250,23 @@ public final class KaePinEntryTails {
       trace.change(atStart ? joined : joined.reverse());
       if (existing == null) {
         // phase 2 (planned): the tail is routing like the planner's; phase 1: a fixed piece
-        boolean planned = table.isPlanned();
-        board.insertTrace(
-            tail, layer, tailHw, nets, cl, planned ? FixedState.UNFIXED : FixedState.SHOVE_FIXED);
-        if (planned) {
-          PolylineTrace t = KaePinEntryPlanner.traceBetween(pin, layer, pl.centre, e.approach);
+        if (table.isPlanned()) {
+          // registered before anything can combine it with the trace it meets (same width and
+          // state): a combined tail would end at the centre again and be re-ended without end
+          PolylineTrace t =
+              board.insertTraceWithoutCleaning(tail, layer, tailHw, nets, cl, FixedState.UNFIXED);
           if (t != null) {
             table.registerTail(pin.getId(), layer, t.getId(), e.approach);
           }
+        } else {
+          board.insertTrace(tail, layer, tailHw, nets, cl, FixedState.SHOVE_FIXED);
         }
         TAILS.incrementAndGet();
       } else {
         REUSED.incrementAndGet();
       }
       table.failedTails.remove(cacheKey);
+      table.countReEnd(pin.getId(), layer);
       return true;
     }
     FAILED.incrementAndGet();
