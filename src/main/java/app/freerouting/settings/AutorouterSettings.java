@@ -77,6 +77,16 @@ public class AutorouterSettings implements Serializable, Cloneable {
   public Double smdNetViaCostFactor;
 
   /**
+   * Connection attempts at most in the repair after routing that joins copper cut off from the fill
+   * of its pour (BatchAutorouter.connectPourCutOffs). A count of work, not of time, so the repair
+   * stops at the same point on every machine. Negative: automatic, twice the cut-off groups at its
+   * start plus 10. {@code 0} disables the repair.
+   */
+  @SerializedName("pour_repair_attempts")
+  @Schema(description = "Connection attempts at most in the pour cut-off repair (negative: automatic)")
+  public Integer pourRepairAttempts;
+
+  /**
    * Erik Gavriluk (freerouting.net): a board with at most this many open connections is continued
    * from its best routing before the other fallback attempts. {@code 0} disables that continuation.
    */
