@@ -51,6 +51,8 @@ public class ConductionArea extends ObstacleArea implements Connectable {
   private transient List<java.awt.geom.Area> cachedFillIslands;
   private transient List<java.awt.geom.Rectangle2D> cachedFillIslandBounds;
   private transient app.freerouting.drc.IslandIndex cachedFillIslandIndex;
+  // the island found at each point asked about since the islands were computed (-1: none)
+  private transient java.util.Map<java.awt.geom.Point2D.Double, Integer> cachedIslandAtPoint;
 
   /** Creates a new instance of ConductionArea. */
   public ConductionArea(
@@ -92,6 +94,7 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     this.cachedFillIslands = null;
     this.cachedFillIslandBounds = null;
     this.cachedFillIslandIndex = null;
+    this.cachedIslandAtPoint = null;
   }
 
   /** Pre-computes detailed plane-fill geometry off the EDT so zoom-in paints stay responsive. */
@@ -188,17 +191,34 @@ public class ConductionArea extends ObstacleArea implements Connectable {
         cachedFillIslandBounds.add(island.getBounds2D());
       }
       cachedFillIslandIndex = new app.freerouting.drc.IslandIndex(cachedFillIslandBounds);
+      cachedIslandAtPoint = new java.util.HashMap<>();
       cachedIslandsRevision = fillRevision;
     }
     FloatPoint floatPoint = point.toFloat();
+    // A point test on a fill island runs over all of its edges, thousands on a pour with many
+    // holes, and the fill-cycle search asks about the same pads, vias and trace ends again and
+    // again while the fill is unchanged: remember the answer per point.
+    java.awt.geom.Point2D.Double key = new java.awt.geom.Point2D.Double(floatPoint.x, floatPoint.y);
+    Integer known = cachedIslandAtPoint.get(key);
+    if (known != null) {
+      if (known >= 0) {
+        islands.set(known);
+      }
+      return;
+    }
+    int found = -1;
     // the islands whose bounds contain the point, in ascending order: the first one that contains
     // it is the one a scan of all islands finds, since the islands do not overlap
     for (int i : cachedFillIslandIndex.candidates(floatPoint.x, floatPoint.y)) {
       if (cachedFillIslandBounds.get(i).contains(floatPoint.x, floatPoint.y)
           && cachedFillIslands.get(i).contains(floatPoint.x, floatPoint.y)) {
-        islands.set(i);
-        return; // the islands do not overlap
+        found = i;
+        break; // the islands do not overlap
       }
+    }
+    cachedIslandAtPoint.put(key, found);
+    if (found >= 0) {
+      islands.set(found);
     }
   }
 
