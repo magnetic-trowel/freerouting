@@ -194,6 +194,7 @@ public class DefaultSettings implements SettingsSource {
     settings.autorouter.exploreFallbackStrategies = DEFAULT_EXPLORE_FALLBACK_STRATEGIES;
     settings.autorouter.smdNetViaCostFactor = DEFAULT_SMD_NET_VIA_COST_FACTOR;
     settings.autorouter.residualRepairMaxOpen = 4;
+    settings.autorouter.pourRepairAttempts = -1;
     settings.autorouter.explorePatience = 0;
     settings.maxThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
     settings.autorouter.maxThreads = settings.maxThreads;
