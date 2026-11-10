@@ -428,11 +428,13 @@ public class DesignRulesChecker {
     // depth: the number of contours around a contour; parent: the smallest one of them.
     int[] depth = new int[count];
     int[] parent = new int[count];
+    // Only contours whose bounds meet can contain or touch each other (meetingBounds): checking
+    // every pair made this quadratic in the contour count, and it runs at every fill change.
+    int[][] meeting = meetingBounds(bounds);
     for (int i = 0; i < count; i++) {
       parent[i] = -1;
-      for (int j = 0; j < count; j++) {
-        if (j != i
-            && areas[j] > areas[i]
+      for (int j : meeting[i]) {
+        if (areas[j] > areas[i]
             && bounds[j].contains(bounds[i])
             && contours.get(j).contains(firstPoints[i][0], firstPoints[i][1])) {
           depth[i]++;
@@ -451,8 +453,12 @@ public class DesignRulesChecker {
       edges.add(depth[i] % 2 == 0 ? edgesOf(contours.get(i)) : null);
     }
     for (int i = 0; i < count; i++) {
-      for (int j = i + 1; j < count && depth[i] % 2 == 0; j++) {
-        if (depth[j] % 2 == 0
+      if (depth[i] % 2 != 0) {
+        continue;
+      }
+      for (int j : meeting[i]) {
+        if (j > i
+            && depth[j] % 2 == 0
             && touches(bounds[i], bounds[j])
             && shareBorder(edges.get(i), edges.get(j), bounds[i].createIntersection(bounds[j]))) {
           group[findGroup(group, j)] = findGroup(group, i);
@@ -557,6 +563,89 @@ public class DesignRulesChecker {
     }
     sum += prevX * startY - startX * prevY;
     return sum / 2;
+  }
+
+  /**
+   * For each rectangle, the indices of the other rectangles whose closed bounds meet it ({@link
+   * #touches}), in ascending order. Rectangles are binned into a uniform grid over their joint
+   * bounds; two closed rectangles that meet share a cell, so only rectangles of a common cell are
+   * compared. The result is the same as comparing every pair.
+   */
+  static int[][] meetingBounds(java.awt.geom.Rectangle2D[] bounds) {
+    int count = bounds.length;
+    int[][] result = new int[count][];
+    if (count == 0) {
+      return result;
+    }
+    double minX = Double.POSITIVE_INFINITY;
+    double minY = Double.POSITIVE_INFINITY;
+    double maxX = Double.NEGATIVE_INFINITY;
+    double maxY = Double.NEGATIVE_INFINITY;
+    for (java.awt.geom.Rectangle2D b : bounds) {
+      minX = Math.min(minX, b.getMinX());
+      minY = Math.min(minY, b.getMinY());
+      maxX = Math.max(maxX, b.getMaxX());
+      maxY = Math.max(maxY, b.getMaxY());
+    }
+    int cells = (int) Math.max(1, Math.min(256, Math.ceil(Math.sqrt(count))));
+    double cellWidth = maxX > minX ? (maxX - minX) / cells : 1.0;
+    double cellHeight = maxY > minY ? (maxY - minY) / cells : 1.0;
+    int[][] range = new int[count][];
+    int[] cellCount = new int[cells * cells];
+    for (int i = 0; i < count; i++) {
+      range[i] =
+          new int[] {
+            cellOf(bounds[i].getMinX(), minX, cellWidth, cells),
+            cellOf(bounds[i].getMinY(), minY, cellHeight, cells),
+            cellOf(bounds[i].getMaxX(), minX, cellWidth, cells),
+            cellOf(bounds[i].getMaxY(), minY, cellHeight, cells)
+          };
+      for (int y = range[i][1]; y <= range[i][3]; y++) {
+        for (int x = range[i][0]; x <= range[i][2]; x++) {
+          cellCount[y * cells + x]++;
+        }
+      }
+    }
+    int[][] cellMembers = new int[cells * cells][];
+    for (int c = 0; c < cellMembers.length; c++) {
+      cellMembers[c] = new int[cellCount[c]];
+      cellCount[c] = 0;
+    }
+    for (int i = 0; i < count; i++) {
+      for (int y = range[i][1]; y <= range[i][3]; y++) {
+        for (int x = range[i][0]; x <= range[i][2]; x++) {
+          int c = y * cells + x;
+          cellMembers[c][cellCount[c]++] = i;
+        }
+      }
+    }
+    int[] seenBy = new int[count];
+    java.util.Arrays.fill(seenBy, -1);
+    int[] found = new int[count];
+    for (int i = 0; i < count; i++) {
+      int foundCount = 0;
+      for (int y = range[i][1]; y <= range[i][3]; y++) {
+        for (int x = range[i][0]; x <= range[i][2]; x++) {
+          for (int j : cellMembers[y * cells + x]) {
+            if (j != i && seenBy[j] != i) {
+              seenBy[j] = i;
+              if (touches(bounds[i], bounds[j])) {
+                found[foundCount++] = j;
+              }
+            }
+          }
+        }
+      }
+      int[] meeting = java.util.Arrays.copyOf(found, foundCount);
+      java.util.Arrays.sort(meeting);
+      result[i] = meeting;
+    }
+    return result;
+  }
+
+  private static int cellOf(double value, double min, double cellSize, int cells) {
+    int cell = (int) Math.floor((value - min) / cellSize);
+    return Math.max(0, Math.min(cells - 1, cell));
   }
 
   private static int findGroup(int[] group, int index) {
