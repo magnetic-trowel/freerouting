@@ -731,7 +731,10 @@ public class PolylineTrace extends Trace implements Serializable {
             netNumbers,
             clearanceClassIndex(),
             this.touchingPinsAtEndCorners());
-    if (newLines != lines) {
+    // A result without lines (all its corners collapsed into one point) is no trace: change()
+    // would leave this trace as it is, and reporting a change would make
+    // TraceTightener.optChangedArea pull it tight again for ever.
+    if (newLines != lines && newLines.lines.length >= 3) {
       change(newLines);
       return true;
     }

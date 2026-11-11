@@ -217,7 +217,13 @@ class TraceTightener45 extends TraceTightener {
     System.arraycopy(newCorners, 0, adjustedCorners, 0, newCornerCount);
     adjustedCorners[newCornerCount] = currentCorner[1];
     adjustedCorners[newCornerCount + 1] = currentCorner[2];
-    return new Polyline(adjustedCorners);
+    Polyline result = new Polyline(adjustedCorners);
+    if (result.lines.length < 3) {
+      // The shortcuts closed a loop trace down to one point (its first and last corner are the
+      // same): no trace is left, so keep the polyline as it is.
+      return polyline;
+    }
+    return result;
   }
 
   /**
