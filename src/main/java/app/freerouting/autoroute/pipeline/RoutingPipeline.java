@@ -113,6 +113,10 @@ public final class RoutingPipeline {
               + connected
               + " group(s) of copper that foreign tracks had cut off from the fill of their pour.");
     }
+    BatchAutorouter.PourRepair repair = this.autorouter.pourRepair;
+    if (repair != null && repair.groups > 0) {
+      this.job.logInfo(repair.toString());
+    }
   }
 
   /**

@@ -73,14 +73,27 @@ class PourCutOffRoutingTest {
   }
 
   private static BatchAutorouter router(RoutingBoard board) {
+    return router(board, null, false);
+  }
+
+  /** A router whose pour repair may make {@code attempts} attempts (null: default). */
+  private static BatchAutorouter router(RoutingBoard board, Integer attempts, boolean stopped) {
     RouterSettings settings = new SettingsMerger(new DefaultSettings()).merge();
-    settings.setLayerCount(board.getLayerCount());
-    settings.applyBoardSpecificOptimizations(board);
-    return new BatchAutorouter(
+    if (attempts != null) {
+      settings.autorouter.pourRepairAttempts = attempts;
+    }
+    StoppableThread thread =
         new StoppableThread() {
           @Override
           protected void threadAction() {}
-        },
+        };
+    if (stopped) {
+      thread.requestStop();
+    }
+    settings.setLayerCount(board.getLayerCount());
+    settings.applyBoardSpecificOptimizations(board);
+    return new BatchAutorouter(
+        thread,
         board,
         settings,
         true,
@@ -133,5 +146,54 @@ class PourCutOffRoutingTest {
     board.removeItem(cut);
 
     assertTrue(gndTrace.isCycle());
+  }
+
+  /** The routed board as it stands: every trace, by net and corners. */
+  private static java.util.List<String> routing(RoutingBoard board) {
+    return board.getTraces().stream()
+        .map(t -> t.getNetNumber(0) + ":" + t.firstCorner() + "-" + t.lastCorner())
+        .sorted()
+        .toList();
+  }
+
+  @Test
+  void spentBudgetLeavesTheRoutedBoardAsItIs() {
+    RoutingBoard board = board();
+    cutThePour(board);
+    java.util.List<String> routed = routing(board);
+    BatchAutorouter router = router(board, 0, false);
+
+    assertEquals(0, router.connectPourCutOffs());
+
+    assertEquals(routed, routing(board));
+    assertTrue(router.pourRepair.stoppedByBudget);
+    assertEquals(0, router.pourRepair.attempts);
+    assertEquals(1, router.pourRepair.left);
+    assertTrue(new DesignRulesChecker(board, null).getAllClearanceViolations().isEmpty());
+  }
+
+  @Test
+  void stopRequestLeavesTheRoutedBoardAsItIs() {
+    RoutingBoard board = board();
+    cutThePour(board);
+    java.util.List<String> routed = routing(board);
+
+    assertEquals(0, router(board, null, true).connectPourCutOffs());
+
+    assertEquals(routed, routing(board));
+  }
+
+  @Test
+  void budgetCountsAttempts() {
+    RoutingBoard board = board();
+    cutThePour(board);
+    BatchAutorouter router = router(board, 1, false);
+
+    assertEquals(1, router.connectPourCutOffs());
+
+    assertEquals(1, router.pourRepair.attempts);
+    assertEquals(1, router.pourRepair.kept);
+    assertEquals(0, router.pourRepair.left);
+    assertEquals(12, router(board()).pourRepairBudget(1), "automatic: twice the groups plus 10");
   }
 }

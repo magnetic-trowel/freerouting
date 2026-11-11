@@ -682,6 +682,9 @@ public final class BatchAutorouter extends NamedAlgorithm {
     int kept = 0;
     Set<Integer> pourNets = PlaneFillConnectivity.pourNets(this.board);
     int cutOffCount = PlaneFillConnectivity.cutOffGroupCount(this.board);
+    int budget = pourRepairBudget(cutOffCount);
+    int attempts = 0;
+    this.pourRepair = new PourRepair(cutOffCount, budget);
     Set<Integer> failedGroups = new TreeSet<>(); // by the lowest item id of the group
     boolean progress = cutOffCount > 0;
     while (progress && !this.thread.isStopRequested()) {
@@ -698,6 +701,14 @@ public final class BatchAutorouter extends NamedAlgorithm {
           if (failedGroups.contains(groupId)) {
             continue;
           }
+          if (attempts >= budget) {
+            // the work budget is spent: the board keeps every connection made so far
+            this.pourRepair.stoppedByBudget = true;
+            progress = false;
+            break sweep;
+          }
+          attempts++;
+          this.pourRepair.attempts = attempts;
           long contentVersion = this.board.itemList.getContentVersion();
           this.board.generateSnapshot();
           AutorouteAttemptResult result =
@@ -715,6 +726,8 @@ public final class BatchAutorouter extends NamedAlgorithm {
           if (keep) {
             cutOffCount = newCutOffCount;
             kept++;
+            this.pourRepair.kept = kept;
+            this.pourRepair.left = cutOffCount;
             progress = true;
             break sweep; // the groups of the analysis are out of date
           }
@@ -724,6 +737,53 @@ public final class BatchAutorouter extends NamedAlgorithm {
     }
     return kept;
   }
+
+  /**
+   * The connection attempts {@link #connectPourCutOffs} may make: the setting {@code
+   * autorouter.pour_repair_attempts}, or when it is negative or unset, twice the cut-off groups at
+   * the start plus 10.
+   */
+  int pourRepairBudget(int cutOffGroups) {
+    Integer setting = this.settings.autorouter != null ? this.settings.autorouter.pourRepairAttempts : null;
+    if (setting != null && setting >= 0) {
+      return setting;
+    }
+    return 2 * cutOffGroups + 10;
+  }
+
+  /** What the last {@link #connectPourCutOffs} did: groups at its start, budget, attempts, kept. */
+  static final class PourRepair {
+    final int groups;
+    final int budget;
+    int attempts;
+    int kept;
+    int left;
+    boolean stoppedByBudget;
+
+    PourRepair(int groups, int budget) {
+      this.groups = groups;
+      this.budget = budget;
+      this.left = groups;
+    }
+
+    @Override
+    public String toString() {
+      return "Pour cut-off repair: "
+          + kept
+          + " of "
+          + groups
+          + " cut-off group(s) connected, "
+          + left
+          + " left, in "
+          + attempts
+          + " of "
+          + budget
+          + " attempt(s)"
+          + (stoppedByBudget ? "; stopped at its work budget." : ".");
+    }
+  }
+
+  PourRepair pourRepair;
 
   /**
    * Returns the airline of the current autorouted connection, or null if no such airline exists.
