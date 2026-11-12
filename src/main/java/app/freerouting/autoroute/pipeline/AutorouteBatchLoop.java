@@ -307,6 +307,11 @@ final class AutorouteBatchLoop {
 
     int currentPass = 1;
     int passesCompleted = 0;
+    final long workStart = app.freerouting.datastructures.TimeLimit.threadSteps(); // autorouter.max_work
+    final double passWeight = weight(router.settings.autorouter.workPassWeight);
+    final double unroutedWeight = weight(router.settings.autorouter.workUnroutedWeight);
+    final int boardPins = (passWeight > 0 || unroutedWeight > 0) ? router.board.getPins().size() : 0;
+    double passWork = 0; // the weighted per-pass terms of the passes started
     int consecutiveNoImprovementPasses = 0;
     boolean fanoutRecoveryApplied = false;
     int lastMileAttempts = 0;
@@ -334,6 +339,29 @@ final class AutorouteBatchLoop {
       //   break;
       // }
       // alreadyRoutedBoardHashes.add(currentBoardHash);
+
+      Long maxWork = router.settings.autorouter.maxWork;
+      long workDone =
+          app.freerouting.datastructures.TimeLimit.threadSteps() - workStart + (long) passWork;
+      if (maxWork != null && maxWork > 0 && workDone >= maxWork) {
+        job.logInfo(
+            String.format(
+                java.util.Locale.US,
+                "Stopping the auto-router before pass #%d: its work budget is spent (%d of %d "
+                    + "work units).",
+                currentPass,
+                workDone,
+                maxWork));
+        stopFor(BatchAutorouter.StopReason.WORK_BUDGET);
+        break;
+      }
+      if (passWeight > 0 || unroutedWeight > 0) {
+        passWork +=
+            passWeight * boardPins
+                + (unroutedWeight > 0
+                    ? unroutedWeight * calculateIncompleteCount(router.board) * (double) boardPins
+                    : 0.0);
+      }
 
       if (router.settings.autorouter.maxPasses != null
           && router.settings.autorouter.maxPasses > 0
@@ -377,6 +405,14 @@ final class AutorouteBatchLoop {
         break;
       }
       passesCompleted = currentPass;
+      long passSteps = app.freerouting.datastructures.TimeLimit.threadSteps() - workStart;
+      job.logInfo(
+          String.format(
+              java.util.Locale.US,
+              "Auto-routing pass #%d: %d search steps and %d work units so far in the pass loop.",
+              currentPass,
+              passSteps,
+              passSteps + (long) passWork));
 
       BoardStatistics boardStatisticsAfter = router.board.getStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
@@ -632,7 +668,7 @@ final class AutorouteBatchLoop {
 
     boolean endedOnItsOwn =
         switch (router.lastStopReason) {
-          case COMPLETED, MAX_PASSES, STAGNATION, NO_IMPROVEMENT -> true;
+          case COMPLETED, MAX_PASSES, WORK_BUDGET, STAGNATION, NO_IMPROVEMENT -> true;
           default -> false;
         };
     if (isRouterEnabled && endedOnItsOwn) {
@@ -743,6 +779,10 @@ final class AutorouteBatchLoop {
    * Records why the loop stops on its own criterion. The caller leaves the loop; the decision is
    * not a stop request, so the thread's stop flags keep meaning that someone asked the job to stop.
    */
+  private static double weight(Double w) {
+    return w == null || !(w > 0) ? 0.0 : w;
+  }
+
   private void stopFor(BatchAutorouter.StopReason reason) {
     if (router.lastStopReason == null) {
       router.lastStopReason = reason;

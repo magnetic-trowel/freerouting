@@ -147,6 +147,8 @@ public final class BatchAutorouter extends NamedAlgorithm {
   public enum StopReason {
     COMPLETED,
     MAX_PASSES,
+    /** The pass loop's work budget (autorouter.max_work) was spent. */
+    WORK_BUDGET,
     STAGNATION,
     NO_IMPROVEMENT,
     TIMED_OUT,
