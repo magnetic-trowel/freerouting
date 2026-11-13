@@ -352,15 +352,6 @@ public final class FRLogger {
   }
 
   /**
-   * Returns true if a call to {@link #trace(String, String, String, String, Point[])} can have any
-   * effect: granular trace logging is on, or the debug controller single-steps or delays. Hot paths
-   * use it to skip building trace arguments.
-   */
-  public static boolean isGranularTraceActive() {
-    return granularTraceEnabled || DebugControl.getInstance().isActive();
-  }
-
-  /**
    * Checks if TRACE level logging is enabled.
    *
    * @return true if TRACE logging is enabled, false otherwise.
@@ -373,6 +364,16 @@ public final class FRLogger {
       logger = LogManager.getLogger(LOGGER_NAME);
     }
     return logger.isTraceEnabled();
+  }
+
+  /**
+   * Returns true when a granular {@code trace(method, operation, message, impactedItems)} call has
+   * an effect: granular TRACE output, or a debug session that may pause on it. Hot call sites check
+   * it first, so that they do not build a message nobody reads.
+   */
+  public static boolean isGranularTraceActive() {
+    return (enabled && granularTraceEnabled && isTraceEnabled())
+        || DebugControl.getInstance().isActive();
   }
 
   /**

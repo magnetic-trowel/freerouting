@@ -10,7 +10,9 @@ import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.structure.FixedState;
+import app.freerouting.core.RoutingJob;
 import app.freerouting.core.StoppableThread;
+import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.drc.PlaneFillConnectivity;
 import app.freerouting.geometry.planar.IntPoint;
@@ -93,13 +95,7 @@ class PourCutOffRoutingTest {
     settings.setLayerCount(board.getLayerCount());
     settings.applyBoardSpecificOptimizations(board);
     return new BatchAutorouter(
-        thread,
-        board,
-        settings,
-        true,
-        true,
-        settings.getStartRipupCosts(),
-        500);
+        thread, board, settings, true, true, settings.getStartRipupCosts(), 500);
   }
 
   @Test
@@ -107,10 +103,18 @@ class PourCutOffRoutingTest {
     RoutingBoard board = board();
     int gnd = net(board, "GND");
     cutThePour(board);
-    assertEquals(1, PlaneFillConnectivity.analyze(board, gnd).cutOffGroups.size());
+    Pin[] pins = board.getPins().stream().filter(p -> p.containsNet(gnd)).toArray(Pin[]::new);
+    assertEquals(2, pins.length);
+    // The board follows the fill: the cut-off pin is an ordinary open connection, which the
+    // passes route, and no pour cut-off for the repair after routing.
+    assertFalse(pins[0].getConnectedSet(gnd).contains(pins[1]));
+    assertTrue(PlaneFillConnectivity.analyze(board, gnd).cutOffGroups.isEmpty());
+    assertEquals(1, new BoardStatistics(board, null, false).connections.incompleteCount);
+    assertEquals(0, router(board).connectPourCutOffs());
 
-    assertEquals(1, router(board).connectPourCutOffs());
+    route(board);
 
+    assertTrue(pins[0].getConnectedSet(gnd).contains(pins[1]));
     assertTrue(PlaneFillConnectivity.analyze(board, gnd).cutOffGroups.isEmpty());
     assertTrue(new DesignRulesChecker(board, null).getAllClearanceViolations().isEmpty());
     // The new connection closes a loop through the pour polygon, but not through its fill.
@@ -119,9 +123,6 @@ class PourCutOffRoutingTest {
         assertFalse(trace.isCycle(), trace.toString());
       }
     }
-    Pin[] pins = board.getPins().stream().filter(p -> p.containsNet(gnd)).toArray(Pin[]::new);
-    assertEquals(2, pins.length);
-    assertTrue(pins[0].getConnectedSet(gnd, true).contains(pins[1]));
   }
 
   @Test
@@ -136,7 +137,7 @@ class PourCutOffRoutingTest {
   void connectionThroughAContinuousFillIsACycle() {
     RoutingBoard board = board();
     Trace cut = cutThePour(board);
-    router(board).connectPourCutOffs();
+    route(board);
     Trace gndTrace =
         board.getTraces().stream()
             .filter(t -> t.containsNet(net(board, "GND")))
@@ -148,6 +149,22 @@ class PourCutOffRoutingTest {
     assertTrue(gndTrace.isCycle());
   }
 
+  /** Routes the board with the batch loop of a routing job, as the pipeline does. */
+  private static void route(RoutingBoard board) {
+    RoutingJob job = new RoutingJob();
+    job.board = board;
+    job.thread =
+        new StoppableThread() {
+          @Override
+          protected void threadAction() {}
+        };
+    job.routerSettings = new SettingsMerger(new DefaultSettings()).merge();
+    job.routerSettings.setLayerCount(board.getLayerCount());
+    job.routerSettings.setRunRouter(true);
+    job.routerSettings.autorouter.maxPasses = 4;
+    new BatchAutorouter(job).runBatchLoop();
+  }
+
   /** The routed board as it stands: every trace, by net and corners. */
   private static java.util.List<String> routing(RoutingBoard board) {
     return board.getTraces().stream()
@@ -157,7 +174,7 @@ class PourCutOffRoutingTest {
   }
 
   @Test
-  void spentBudgetLeavesTheRoutedBoardAsItIs() {
+  void aSplitFillLeavesTheRepairNothingToDo() {
     RoutingBoard board = board();
     cutThePour(board);
     java.util.List<String> routed = routing(board);
@@ -166,10 +183,9 @@ class PourCutOffRoutingTest {
     assertEquals(0, router.connectPourCutOffs());
 
     assertEquals(routed, routing(board));
-    assertTrue(router.pourRepair.stoppedByBudget);
+    assertFalse(router.pourRepair.stoppedByBudget);
     assertEquals(0, router.pourRepair.attempts);
-    assertEquals(1, router.pourRepair.left);
-    assertTrue(new DesignRulesChecker(board, null).getAllClearanceViolations().isEmpty());
+    assertEquals(0, router.pourRepair.left);
   }
 
   @Test
@@ -184,16 +200,8 @@ class PourCutOffRoutingTest {
   }
 
   @Test
-  void budgetCountsAttempts() {
-    RoutingBoard board = board();
-    cutThePour(board);
-    BatchAutorouter router = router(board, 1, false);
-
-    assertEquals(1, router.connectPourCutOffs());
-
-    assertEquals(1, router.pourRepair.attempts);
-    assertEquals(1, router.pourRepair.kept);
-    assertEquals(0, router.pourRepair.left);
+  void budgetFollowsTheSettingOrTheGroups() {
+    assertEquals(1, router(board(), 1, false).pourRepairBudget(5), "the setting");
     assertEquals(12, router(board()).pourRepairBudget(1), "automatic: twice the groups plus 10");
   }
 }

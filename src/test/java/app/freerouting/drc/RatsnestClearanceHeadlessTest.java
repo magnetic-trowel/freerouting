@@ -31,8 +31,8 @@ class RatsnestClearanceHeadlessTest {
   private static final String VIOLATION_FIXTURE =
       "Issue575-drc_BBD_Mars-64_6_track_1_hole_clearance_violations.dsn";
 
-  // KiCad reports 7 unconnected items on this board (-kicad_drc.json); Freerouting counts the
-  // airlines that join them. Wire ends inside same-net pads are connected, as in KiCad.
+  // 8 unconnected components remain on Natural Tone Preamp (KiCad reports 7 unconnected items).
+  // The dev-board fixture used before is fully connected since wire ends inside pads are joined.
   private static final int EXPECTED_UNCONNECTED = 8;
   private static final int EXPECTED_UNIQUE_VIOLATIONS = 67;
 

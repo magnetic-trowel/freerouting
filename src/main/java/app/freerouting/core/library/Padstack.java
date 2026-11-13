@@ -11,6 +11,7 @@ import java.io.Serializable;
 import java.util.Collection;
 import java.util.LinkedList;
 import java.util.Locale;
+import java.util.Objects;
 
 /** Describes padstack masks for pins or vias located at the origin. */
 public class Padstack implements Comparable<Padstack>, ItemInfoPrinter.Printable, Serializable {
@@ -52,6 +53,9 @@ public class Padstack implements Comparable<Padstack>, ItemInfoPrinter.Printable
    */
   public boolean holeOnly;
 
+  /** Native drill radius in board units; zero means no drill. Null retains DSN inference. */
+  public Double explicitDrillRadius;
+
   /** Cached drill radius to avoid repeated regex parsing on every render call. */
   private Double cachedDrillRadius;
 
@@ -87,7 +91,25 @@ public class Padstack implements Comparable<Padstack>, ItemInfoPrinter.Printable
   /** Compares 2 padstacks by name. Useful for example to display padstacks in alphabetic order. */
   @Override
   public int compareTo(Padstack other) {
-    return this.name.compareToIgnoreCase(other.name);
+    Objects.requireNonNull(other, "other padstack cannot be null");
+    int res = this.name.compareToIgnoreCase(other.name);
+    if (res != 0) {
+      return res;
+    }
+    res = this.name.compareTo(other.name);
+    if (res != 0) {
+      return res;
+    }
+    return Integer.compare(this.id, other.id);
+  }
+
+  public Double getExplicitDrillRadius() {
+    return this.explicitDrillRadius;
+  }
+
+  public void setExplicitDrillRadius(Double explicitDrillRadius) {
+    this.explicitDrillRadius = explicitDrillRadius;
+    this.cachedDrillRadius = null;
   }
 
   /**
@@ -95,6 +117,9 @@ public class Padstack implements Comparable<Padstack>, ItemInfoPrinter.Printable
    * computation to avoid repeated regex parsing.
    */
   public double getDrillRadius() {
+    if (this.explicitDrillRadius != null) {
+      return this.explicitDrillRadius;
+    }
     if (cachedDrillRadius != null) {
       return cachedDrillRadius;
     }

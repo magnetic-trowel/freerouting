@@ -51,6 +51,17 @@ class IdentifierTypeTest {
   }
 
   @Test
+  void writeQuotesEmptyName() throws Exception {
+    IdentifierType identifierType = new IdentifierType(new String[] {"(", ")", " ", "-"}, "\"");
+
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    OutputStreamWriter osw = new OutputStreamWriter(baos);
+    identifierType.write("", osw);
+    osw.flush();
+    assertEquals("\"\"", baos.toString());
+  }
+
+  @Test
   void strictWriteQuotesEveryNameWithAPunctuationCharacter() throws Exception {
     IdentifierType identifierType = new IdentifierType(new String[] {"(", ")", " "}, "\"");
     // KiCad 10 rejects a whole session that holds a bare ADD|SUB.

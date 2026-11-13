@@ -1,6 +1,7 @@
 package app.freerouting.drc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.board.facade.RoutingBoard;
@@ -92,22 +93,21 @@ class PlaneFillConnectivityTest {
   }
 
   @Test
-  void foreignTrackAcrossThePourCutsTheFartherViaOff() {
+  void foreignTrackAcrossThePourSplitsTheBoardsOwnConnectivity() {
     Via left = gndVia(500000, 2000000);
     Via right = gndVia(3500000, 2000000);
     trace(0, sigNet.netNumber, 2000000, 0, 2000000, 4000000);
-    // The board still counts both vias as connected through the pour polygon.
-    assertTrue(left.getConnectedSet(gndNet.netNumber).contains(right));
+    // The board follows the fill (plane fracture analysis): the vias are an ordinary open
+    // connection, which the router sees, and no cut-off of the pour polygon.
+    assertFalse(left.getConnectedSet(gndNet.netNumber).contains(right));
 
     PlaneFillConnectivity.Result result = PlaneFillConnectivity.analyze(board, gndNet.netNumber);
 
-    assertEquals(1, result.cutOffGroups.size());
-    assertTrue(result.mainGroup.contains(left), "ties go to the group with the lowest item id");
-    assertTrue(result.cutOffGroups.get(0).contains(right));
+    assertTrue(result.cutOffGroups.isEmpty());
   }
 
   @Test
-  void resultStatisticsCountCutOffGroupAsOpenConnection() {
+  void resultStatisticsCountTheSplitFillOnce() {
     gndVia(500000, 2000000);
     gndVia(3500000, 2000000);
     assertEquals(0, BoardStatistics.ofResult(board).connections.incompleteCount);
@@ -115,10 +115,12 @@ class PlaneFillConnectivityTest {
 
     BoardStatisticsConnections result = BoardStatistics.ofResult(board).connections;
 
-    assertEquals(1, result.pourCutOffCount);
-    assertEquals(1, result.incompleteCount);
-    // The routing view follows the pour polygon, as the router's item selection does.
-    assertEquals(0, new BoardStatistics(board, null, false).connections.incompleteCount);
+    // A split the board sees is not counted again as a pour cut-off. (The ratsnest leaves these
+    // vias out as tails: each has a contact on one layer only.)
+    assertEquals(0, result.pourCutOffCount);
+    assertEquals(
+        new BoardStatistics(board, null, false).connections.incompleteCount,
+        result.incompleteCount);
   }
 
   @Test
@@ -153,14 +155,15 @@ class PlaneFillConnectivityTest {
 
   @Test
   void itemOutsideThePourIsAnOrdinaryIncomplete() {
-    gndVia(500000, 2000000);
+    Via left = gndVia(500000, 2000000);
     gndVia(3500000, 2000000);
-    gndVia(8000000, 8000000);
+    Via outside = gndVia(8000000, 8000000);
     trace(0, sigNet.netNumber, 2000000, 0, 2000000, 4000000);
 
     PlaneFillConnectivity.Result result = PlaneFillConnectivity.analyze(board, gndNet.netNumber);
 
-    assertEquals(1, result.cutOffGroups.size());
-    assertEquals(1, result.cutOffItemCount());
+    assertTrue(result.cutOffGroups.isEmpty());
+    assertFalse(left.getConnectedSet(gndNet.netNumber).contains(outside));
+    assertEquals(0, BoardStatistics.ofResult(board).connections.pourCutOffCount);
   }
 }

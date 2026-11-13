@@ -14,8 +14,9 @@ import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 /**
- * Legacy short optimizer flags from docs/command_line_arguments.md. They must either reach the
- * merged router settings or say that they no longer do anything.
+ * Legacy short optimizer and autorouter flags from docs/command_line_arguments.md. They must either
+ * reach the merged router settings with a deprecation warning, or warn that they no longer do
+ * anything.
  */
 class LegacyCliFlagsTest {
 
@@ -40,17 +41,23 @@ class LegacyCliFlagsTest {
   }
 
   @Test
-  void itemSelectionStrategyFlagSetsPrioritized() {
+  void itemSelectionStrategyFlagSetsPrioritizedAndWarns() {
+    Instant mark = logMark();
+
     RouterSettings merged = merge("-is", "prioritized");
 
     assertEquals(ItemSelectionStrategy.PRIORITIZED, merged.optimizer.itemSelectionStrategy);
+    assertTrue(warnedAbout(mark, "-is"));
   }
 
   @Test
-  void itemSelectionStrategyFlagSetsSequential() {
+  void itemSelectionStrategyFlagSetsSequentialAndWarns() {
+    Instant mark = logMark();
+
     RouterSettings merged = merge("-is", "prioritized", "-is", "sequential");
 
     assertEquals(ItemSelectionStrategy.SEQUENTIAL, merged.optimizer.itemSelectionStrategy);
+    assertTrue(warnedAbout(mark, "-is"));
   }
 
   @Test
@@ -61,6 +68,38 @@ class LegacyCliFlagsTest {
 
     assertEquals(ItemSelectionStrategy.SEQUENTIAL, merged.optimizer.itemSelectionStrategy);
     assertTrue(warnedAbout(mark, "-is"));
+  }
+
+  @Test
+  void deprecatedMaxPassesFlagWarns() {
+    Instant mark = logMark();
+
+    RouterSettings merged = merge("-mp", "5");
+
+    assertEquals(5, merged.autorouter.maxPasses);
+    assertTrue(warnedAbout(mark, "-mp"));
+  }
+
+  @Test
+  void deprecatedMaxThreadsFlagWarns() {
+    Instant mark = logMark();
+
+    RouterSettings merged = merge("-mt", "2");
+
+    assertEquals(2, merged.getOptimizerMaxThreads());
+    assertTrue(warnedAbout(mark, "-mt"));
+  }
+
+  @Test
+  void deprecatedMaxThreadsZeroOrNegativeWarns() {
+    Instant mark = logMark();
+
+    merge("-mt", "0");
+    assertTrue(warnedAbout(mark, "-mt"));
+
+    Instant markNeg = logMark();
+    merge("-mt", "-1");
+    assertTrue(warnedAbout(markNeg, "-mt"));
   }
 
   @Test

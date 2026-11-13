@@ -18,7 +18,6 @@ import app.freerouting.rules.BoardRules;
 import app.freerouting.rules.ClearanceMatrix;
 import app.freerouting.settings.GlobalSettings;
 import java.util.List;
-import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -52,15 +51,17 @@ class PolylineTraceSplitAtFixedTraceTest {
   }
 
   @Test
-  void crossingAtRationalPointLeavesTheTraceWhole() {
-    // The vertical line x = 100 meets the fixed trace at (100, 173.21...).
+  void crossingAtRationalPointIsSplitAtTheExactJunction() {
+    // The vertical line x = 100 meets the fixed trace at (100, 173.21...). Traces keep rational
+    // junctions exactly (upstream #1010), so the crossing is split there once and the pieces stay
+    // apart instead of being combined and split again until the normalization depth cap.
     PolylineTrace crossing =
         insertTrace(
             new Polyline(new IntPoint(100, -500), new IntPoint(100, 1500)), FixedState.UNFIXED);
 
-    assertFalse(crossing.normalize(null), "nothing to normalize");
-    assertTrue(crossing.isOnTheBoard());
-    assertEquals(Set.of(fixedTrace, crossing), Set.copyOf(board.getTraces()));
+    assertTrue(crossing.normalize(null), "split at the junction");
+    assertTrue(fixedTrace.isOnTheBoard());
+    assertEquals(3, board.getTraces().size());
   }
 
   @Test

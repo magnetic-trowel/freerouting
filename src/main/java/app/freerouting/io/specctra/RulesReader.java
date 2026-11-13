@@ -168,6 +168,10 @@ public final class RulesReader {
       closeQuietly(in);
       // Widths, clearances and vias may have changed, and the optimizer's score bounds use them.
       board.forgetStatistics();
+      // The width rules read above, net class rules included, can lower the smallest trace width.
+      if (board.getOutline() != null) {
+        board.getOutline().updateSlicesToTraceWidths();
+      }
     }
   }
 

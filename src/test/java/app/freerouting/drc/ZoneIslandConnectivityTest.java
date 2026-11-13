@@ -279,6 +279,6 @@ class ZoneIslandConnectivityTest {
             .findFirst()
             .orElseThrow();
 
-    assertEquals(1, DesignRulesChecker.decomposeAreaIntoIslands(pour.getDetailedFillArea()).size());
+    assertEquals(1, pour.getDetailedFillArea().decomposeIntoIslands().size());
   }
 }

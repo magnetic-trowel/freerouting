@@ -19,7 +19,8 @@ public final class LegacyRouterSettingsBridge {
           "algorithm", "algorithm",
           "max_passes", "maxPasses",
           "max_items", "maxItems",
-          "ignore_net_classes", "ignoreNetClasses");
+          "ignore_net_classes", "ignoreNetClasses",
+          "stagnation_pass_limit", "stagnationPassLimit");
 
   private LegacyRouterSettingsBridge() {}
 
@@ -83,6 +84,12 @@ public final class LegacyRouterSettingsBridge {
         names[index++] = element.isJsonNull() ? null : element.getAsString();
       }
       autorouter.ignoreNetClasses = names;
+      warned = true;
+    }
+    if (autorouter.stagnationPassLimit == null
+        && json.has("stagnation_pass_limit")
+        && !json.get("stagnation_pass_limit").isJsonNull()) {
+      autorouter.stagnationPassLimit = json.get("stagnation_pass_limit").getAsInt();
       warned = true;
     }
     if (warned) {

@@ -1,8 +1,6 @@
 package app.freerouting.geometry.planar;
 
 import app.freerouting.logger.FRLogger;
-import java.awt.geom.Path2D;
-import java.awt.geom.PathIterator;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -13,6 +11,11 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.operation.polygonize.Polygonizer;
+import org.locationtech.jts.operation.union.UnaryUnionOp;
 
 /**
  * Shape described bei a closed polygon of corner points. The corners are ordered in counterclock
@@ -557,6 +560,20 @@ public class PolygonShape extends PolylineShape {
   }
 
   /**
+   * Takes the convex pieces of source, if source is split already and has the same corners, so that
+   * a copy of a shape, read back from bytes, need not be split again. Both shapes share the pieces,
+   * which are immutable shapes.
+   */
+  public void reuseConvexPiecesOf(PolygonShape source) {
+    TileShape[] sourcePieces = source.precalculatedConvexPieces;
+    if (this.precalculatedConvexPieces == null
+        && sourcePieces != null
+        && Arrays.equals(this.corners, source.corners)) {
+      this.precalculatedConvexPieces = sourcePieces;
+    }
+  }
+
+  /**
    * Splits this polygon shape into convex pieces. The result is not exact, because rounded
    * intersections of lines are used in the result pieces. It can be made exact, if Polylines are
    * returned instead of Polygons, so that no intersection points are needed in the result.
@@ -697,25 +714,15 @@ public class PolygonShape extends PolylineShape {
   /**
    * Splits the region that this polygon encloses under the non-zero winding rule into convex
    * pieces, for a border that crosses or touches itself or that the division-line split fails on.
-   * The region is resolved into simple outer borders and holes with {@link java.awt.geom.Area};
-   * each outer border is split as a simple polygon, with the holes inside it cut out. Crossing
-   * points are rounded to integer corners, as the division-line split also does. Loops that still
-   * cannot be split are left out with a warning, so the result may be empty but is never null.
+   * The region (non-zero winding) is resolved into simple outer borders and holes with JTS; each
+   * outer border is split as a simple polygon, with the holes inside it cut out. Crossing points
+   * are rounded to integer corners, as the division-line split also does. Loops that still cannot
+   * be split are left out with a warning, so the result may be empty but is never null.
    */
   private TileShape[] splitEnclosedRegion() {
-    Path2D.Double path = new Path2D.Double(Path2D.WIND_NON_ZERO);
-    for (int i = 0; i < corners.length; i++) {
-      FloatPoint corner = corners[i].toFloat();
-      if (i == 0) {
-        path.moveTo(corner.x, corner.y);
-      } else {
-        path.lineTo(corner.x, corner.y);
-      }
-    }
-    path.closePath();
-    // java.awt.geom.Area orients holes against the outer borders, and the largest loop is an outer
+    // The region resolves holes against the outer borders, and the largest loop is an outer
     // border, so the sign of its area tells the two apart.
-    List<List<Point>> loops = loopsOf(new java.awt.geom.Area(path));
+    List<List<Point>> loops = nonZeroRegionLoops(corners);
     double outerSign = 0;
     double largestArea = 0;
     for (List<Point> loop : loops) {
@@ -788,28 +795,86 @@ public class PolygonShape extends PolylineShape {
   }
 
   /**
-   * Returns the closed loops of the border of an area, with corners rounded to integers. A loop
-   * that touches itself is split where it touches, so that the loops only meet in corners.
+   * Returns the closed loops of the border of the region that the closed polyline through corners
+   * winds around (non-zero winding), with corners rounded to integers: its outer borders and holes,
+   * oriented oppositely. A loop that touches itself is split where it touches, so that the loops
+   * only meet in corners.
    */
-  private static List<List<Point>> loopsOf(java.awt.geom.Area area) {
+  private static List<List<Point>> nonZeroRegionLoops(Point[] corners) {
     List<List<Point>> loops = new ArrayList<>();
-    List<IntPoint> loop = new ArrayList<>();
-    double[] coords = new double[6];
-    for (PathIterator it = area.getPathIterator(null); !it.isDone(); it.next()) {
-      int type = it.currentSegment(coords);
-      if (type == PathIterator.SEG_MOVETO) {
-        addSplitWhereTouching(loop, loops);
-        loop = new ArrayList<>();
-      }
-      if (type == PathIterator.SEG_MOVETO || type == PathIterator.SEG_LINETO) {
-        IntPoint corner = new IntPoint((int) Math.round(coords[0]), (int) Math.round(coords[1]));
-        if (loop.isEmpty() || !loop.getLast().equals(corner)) {
-          loop.add(corner);
-        }
+    int n = corners.length;
+    if (n < 3) {
+      return loops;
+    }
+    Coordinate[] ring = new Coordinate[n + 1];
+    for (int i = 0; i < n; i++) {
+      FloatPoint corner = corners[i].toFloat();
+      ring[i] = new Coordinate(corner.x, corner.y);
+    }
+    ring[n] = ring[0];
+    GeometryFactory factory = new GeometryFactory();
+    // The union of the border with itself nodes it at its self-crossings; the faces of the noded
+    // border inside the region are those the border winds around.
+    Geometry noded = factory.createLineString(ring).union();
+    Polygonizer polygonizer = new Polygonizer();
+    polygonizer.add(noded);
+    List<Geometry> inside = new ArrayList<>();
+    for (Object face : polygonizer.getPolygons()) {
+      org.locationtech.jts.geom.Polygon polygon = (org.locationtech.jts.geom.Polygon) face;
+      Coordinate probe = polygon.getInteriorPoint().getCoordinate();
+      if (windingNumber(ring, probe.x, probe.y) != 0) {
+        inside.add(polygon);
       }
     }
-    addSplitWhereTouching(loop, loops);
+    if (inside.isEmpty()) {
+      return loops;
+    }
+    Geometry region = UnaryUnionOp.union(inside);
+    region.normalize();
+    for (int g = 0; g < region.getNumGeometries(); g++) {
+      if (!(region.getGeometryN(g) instanceof org.locationtech.jts.geom.Polygon polygon)) {
+        continue;
+      }
+      addRingLoop(polygon.getExteriorRing().getCoordinates(), loops);
+      for (int h = 0; h < polygon.getNumInteriorRing(); h++) {
+        addRingLoop(polygon.getInteriorRingN(h).getCoordinates(), loops);
+      }
+    }
     return loops;
+  }
+
+  /** Adds a closed JTS ring to loops with its corners rounded to integers. */
+  private static void addRingLoop(Coordinate[] ring, List<List<Point>> loops) {
+    List<IntPoint> loop = new ArrayList<>();
+    // the last coordinate of a ring repeats the first
+    for (int i = 0; i < ring.length - 1; i++) {
+      IntPoint corner = new IntPoint((int) Math.round(ring[i].x), (int) Math.round(ring[i].y));
+      if (loop.isEmpty() || !loop.getLast().equals(corner)) {
+        loop.add(corner);
+      }
+    }
+    if (loop.size() > 1 && loop.getFirst().equals(loop.getLast())) {
+      loop.removeLast();
+    }
+    addSplitWhereTouching(loop, loops);
+  }
+
+  /** The winding number of the closed ring around the point (x, y). */
+  private static int windingNumber(Coordinate[] ring, double x, double y) {
+    int winding = 0;
+    for (int i = 0; i + 1 < ring.length; i++) {
+      Coordinate a = ring[i];
+      Coordinate b = ring[i + 1];
+      double cross = (b.x - a.x) * (y - a.y) - (x - a.x) * (b.y - a.y);
+      if (a.y <= y) {
+        if (b.y > y && cross > 0) {
+          winding++;
+        }
+      } else if (b.y <= y && cross < 0) {
+        winding--;
+      }
+    }
+    return winding;
   }
 
   /**

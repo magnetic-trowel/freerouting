@@ -5,6 +5,7 @@ import app.freerouting.logger.FRLogger;
 import app.freerouting.util.TextManager;
 import java.io.Serializable;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.Locale;
 import java.util.Vector;
@@ -38,44 +39,33 @@ public class Nets implements Serializable {
     return nets.size();
   }
 
-  /**
-   * Returns the net with the given name and subnet number, or null if no such net exists. Net names
-   * are case-sensitive in KiCad: an exact match wins, and a match that differs only in case is the
-   * fallback for writers that change the case of references.
-   */
+  /** Returns the net with the given name and subnet number, or null if no such net exists. */
   public Net get(String name, int subnetNumber) {
-    Net caseInsensitiveMatch = null;
+    if (name == null) {
+      return null;
+    }
     for (Net currentNet : nets) {
       if (currentNet != null
           && currentNet.subnetNumber == subnetNumber
-          && currentNet.name.equalsIgnoreCase(name)) {
-        if (currentNet.name.equals(name)) {
-          return currentNet;
-        }
-        if (caseInsensitiveMatch == null) {
-          caseInsensitiveMatch = currentNet;
-        }
+          && name.equals(currentNet.name)) {
+        return currentNet;
       }
     }
-    return caseInsensitiveMatch;
+    return null;
   }
 
-  /**
-   * Returns all subnets with the given name: the exact matches, or if there are none, the nets
-   * whose name differs only in case.
-   */
+  /** Returns all subnets with the given name. */
   public Collection<Net> get(String name) {
-    Collection<Net> exact = new LinkedList<>();
-    Collection<Net> caseInsensitive = new LinkedList<>();
+    if (name == null) {
+      return Collections.emptyList();
+    }
+    Collection<Net> result = new LinkedList<>();
     for (Net currentNet : nets) {
-      if (currentNet != null && currentNet.name.equalsIgnoreCase(name)) {
-        caseInsensitive.add(currentNet);
-        if (currentNet.name.equals(name)) {
-          exact.add(currentNet);
-        }
+      if (currentNet != null && name.equals(currentNet.name)) {
+        result.add(currentNet);
       }
     }
-    return exact.isEmpty() ? caseInsensitive : exact;
+    return result;
   }
 
   /** Returns the net with the given net number, or null if no such net exists. */
@@ -83,7 +73,7 @@ public class Nets implements Serializable {
     if (netNumber < 1 || netNumber > nets.size()) {
       return null;
     }
-    Net result = nets.elementAt(netNumber - 1);
+    Net result = nets.get(netNumber - 1);
     if (result != null && result.netNumber != netNumber) {
       FRLogger.warn("Nets.get: inconsistent netNumber");
     }

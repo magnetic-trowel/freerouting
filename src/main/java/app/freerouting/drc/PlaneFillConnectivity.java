@@ -17,14 +17,18 @@ import java.util.TreeSet;
 /**
  * Connectivity of a net through the actual fill of its pours instead of the pour polygons.
  *
- * <p>The board's connectivity ({@link Item#getConnectedSet(int)}) treats a pour (a {@link
- * ConductionArea} without a component) as one conductor wherever its polygon reaches. Its copper is
- * the polygon minus the clearances of foreign copper ({@link ConductionArea#getConnectingFill}), so
- * foreign tracks routed through a pour can cut a pad or via off from the copper around it. This
- * class groups the net's items by the copper that joins them without a pour, joins the groups whose
- * drill centres or trace ends lie in the same fill island of a pour of the net (on any layer, so a
+ * <p>A pour (a {@link ConductionArea} without a component) conducts through its copper: the polygon
+ * minus the clearances of foreign copper ({@link ConductionArea#getConnectingFill}), so foreign
+ * tracks routed through a pour can cut a pad or via off from the copper around it. The board's
+ * connectivity ({@link Item#getConnectedSet(int)}) follows such splits through the plane fracture
+ * analysis of {@link ConductionArea#getFractureResult}, a raster approximation of the fill; a split
+ * it finds is an ordinary open connection, which the router routes. This class groups the net's
+ * items by the copper that joins them without a pour, joins the groups whose drill centres or trace
+ * ends lie in the same island of the exact fill of a pour of the net (on any layer, so a
  * through-hole pin joins the islands of every layer it is on), and reports the groups the board
- * counts as connected to the largest group although no copper and no fill joins them.
+ * still counts as connected to the largest group although no copper and no fill joins them: the
+ * splits the raster misses (or a pour the analysis does not cover). Such a group is never also an
+ * open connection of the board, so the two counts do not overlap.
  *
  * <p>The fill is the one that connects ({@link ConductionArea#getConnectingFill}): it keeps no
  * clearance to other nets' pours, whose priorities the design file does not give, so a pad that

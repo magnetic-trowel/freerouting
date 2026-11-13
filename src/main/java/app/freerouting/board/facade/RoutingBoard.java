@@ -42,6 +42,7 @@ import app.freerouting.geometry.planar.LineSegment;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.Polyline;
 import app.freerouting.geometry.planar.PolylineShape;
+import app.freerouting.geometry.planar.Shape;
 import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.geometry.planar.Vector;
 import app.freerouting.logger.FRLogger;
@@ -146,6 +147,21 @@ public class RoutingBoard extends BasicBoard implements Serializable {
   /** Marks the whole board as changed. */
   public void markAllChangedArea() {
     getOperations().markAllChangedArea();
+  }
+
+  /**
+   * Optimizes the route in the internally marked area without a time limit, so that the result does
+   * not depend on the speed or load of the machine. The autorouter uses this; the parameters are
+   * those of {@link #optChangedArea(int[], IntOctagon, int, ExpansionCostFactor[], Stoppable,
+   * int)}.
+   */
+  public void optChangedArea(
+      int[] onlyNetNoArr,
+      IntOctagon clipShape,
+      int accuracy,
+      ExpansionCostFactor[] traceCosts,
+      Stoppable stoppableThread) {
+    optChangedArea(onlyNetNoArr, clipShape, accuracy, traceCosts, stoppableThread, 0);
   }
 
   /**
@@ -780,7 +796,7 @@ public class RoutingBoard extends BasicBoard implements Serializable {
     Net routeNet = rules.nets.get(routeNetNo);
     if (routeNet != null && routeNet.containsPlane()) {
       for (Item currentItem : routeStartSet) {
-        if (currentItem instanceof ConductionArea) {
+        if (currentItem instanceof ConductionArea ca && !ca.isFractured()) {
           return new AutorouteAttemptResult(
               AutorouteAttemptState.CONNECTED_TO_PLANE,
               "The item '" + currentItem + "' is connected to a plane.");
@@ -808,14 +824,12 @@ public class RoutingBoard extends BasicBoard implements Serializable {
             rippedItemList,
             null); // null: costs not needed here
     if (result.state == AutorouteAttemptState.ROUTED) {
-      final int timeLimitToPreventEndlessLoop = 1000;
       optChangedArea(
           new int[] {routeNetNo},
           null,
           routerSettings.tracePullTightAccuracy,
           ctrlSettings.traceCosts,
-          stoppableThread,
-          timeLimitToPreventEndlessLoop);
+          stoppableThread);
     }
     return result;
   }
@@ -876,7 +890,25 @@ public class RoutingBoard extends BasicBoard implements Serializable {
           return Double.compare(distSq1, distSq2);
         });
 
-    AutorouteControl ctrlSettings = new AutorouteControl(this, pinNetNo, routerSettings);
+    // A pin of a plane net escapes into its plane: the plane is the first target, and the via
+    // that drops into it is priced as a plane via, not as a signal layer change. Sorting by the
+    // centre of the bounding box would otherwise always prefer a neighbouring pin of the net,
+    // since the centre of a plane is the centre of the board.
+    Net pinNet = this.rules.nets.get(pinNetNo);
+    boolean planeNet = pinNet != null && pinNet.containsPlane();
+    if (planeNet) {
+      sortedUnconnectedList.sort(
+          (item1, item2) ->
+              Boolean.compare(isPlaneOnPowerLayer(item2), isPlaneOnPowerLayer(item1)));
+    }
+    boolean routedFirst = pinNet != null && pinNet.isRoutedFirst();
+    int fanoutViaCosts =
+        planeNet
+            ? routerSettings.getPlaneViaCosts()
+            : (routedFirst ? routerSettings.getPriorityViaCosts() : routerSettings.getViaCosts());
+    AutorouteControl ctrlSettings =
+        new AutorouteControl(
+            this, pinNetNo, routerSettings, fanoutViaCosts, routerSettings.getTraceCosts());
     ctrlSettings.isFanout = true;
     if (routerSettings.fanout != null
         && Boolean.TRUE.equals(routerSettings.fanout.fallbackToBoardVias)
@@ -895,7 +927,7 @@ public class RoutingBoard extends BasicBoard implements Serializable {
       ctrlSettings.viaRule =
           fanoutFallbackViaRule(
               ctrlSettings.viaRule, boardDefaultViaRule, netViaClearance, this.rules);
-      ctrlSettings.rebuildViaInfo(this, routerSettings.getViaCosts(), pinNetNo);
+      ctrlSettings.rebuildViaInfo(this, fanoutViaCosts, pinNetNo);
     }
     Component pinComponent = this.components.get(pin.getComponentId());
     if (pinComponent != null && pin.name() != null) {
@@ -916,6 +948,47 @@ public class RoutingBoard extends BasicBoard implements Serializable {
             pinNetNo, ctrlSettings.traceClearanceClassIndex, stoppableThread, null, false);
 
     AutorouteAttemptResult result = null;
+    // plane_as_priority: the pin first drops into its plane through a via of its own; the fanout
+    // targets below (closest item, or the whole net at once on a large net) would join it to the
+    // nearest pad of the net, typically its decoupling capacitor.
+    if (planeNet
+        && routerSettings.autorouter != null
+        && Boolean.TRUE.equals(routerSettings.autorouter.planeAsPriority)) {
+      Set<Item> planes = new java.util.HashSet<>();
+      for (Item target : unconnectedSet) {
+        if (isPlaneOnPowerLayer(target)) {
+          planes.add(target);
+        }
+      }
+      if (!planes.isEmpty()) {
+        Set<Item> obstacles = planeEscapeObstacles(pin, pinNetNo, pinConnectedSet, planes);
+        obstacles.forEach(obstacle -> obstacle.setPlaneEscapeObstacle(true));
+        try {
+          result =
+              currentAutorouteEngine.autorouteConnection(
+                  pinConnectedSet, planes, ctrlSettings, rippedItemList, null);
+        } finally {
+          obstacles.forEach(obstacle -> obstacle.setPlaneEscapeObstacle(false));
+        }
+        if (result.state == AutorouteAttemptState.ROUTED) {
+          optChangedArea(
+              new int[] {pinNetNo},
+              null,
+              routerSettings.tracePullTightAccuracy,
+              ctrlSettings.traceCosts,
+              stoppableThread);
+          return result;
+        }
+        if (result.state == AutorouteAttemptState.ALREADY_CONNECTED) {
+          return result;
+        }
+        result = null;
+        // rooms and drill pages of the search above saw the obstacles
+        currentAutorouteEngine =
+            initAutoroute(
+                pinNetNo, ctrlSettings.traceClearanceClassIndex, stoppableThread, null, false);
+      }
+    }
     if (sortedUnconnectedList.size() <= 4) {
       if (!sortedUnconnectedList.isEmpty()) {
         // 1. Try to route to the closest target first
@@ -961,16 +1034,49 @@ public class RoutingBoard extends BasicBoard implements Serializable {
     }
 
     if (result.state == AutorouteAttemptState.ROUTED) {
-      final int timeLimitToPreventEndlessLoop = 1000;
       optChangedArea(
           new int[] {pinNetNo},
           null,
           routerSettings.tracePullTightAccuracy,
           ctrlSettings.traceCosts,
-          stoppableThread,
-          timeLimitToPreventEndlessLoop);
+          stoppableThread);
     }
     return result;
+  }
+
+  /**
+   * The copper of its net a plane pad must not reach its plane through, while it searches its own
+   * way in ({@code plane_as_priority}): the pads of other packages and everything joined to them.
+   * The maze would otherwise cross them as free space, a short trace to a neighbour's via costing
+   * less than a via. The pad's own package stays open (pins of one QFN may share a via), and so do
+   * the destinations and the pads joined to a destination pad.
+   */
+  public Set<Item> planeEscapeObstacles(
+      Pin pin, int netNo, Set<Item> connectedSet, Set<Item> destinations) {
+    Set<Item> open = new java.util.HashSet<>(connectedSet);
+    open.addAll(destinations);
+    for (Item destination : destinations) {
+      if (destination instanceof Pin sharedPin) {
+        open.addAll(sharedPin.getConnectedSet(netNo, true));
+      }
+    }
+    for (Pin other : getPins()) {
+      if (other.getComponentId() == pin.getComponentId() && other.containsNet(netNo)) {
+        open.addAll(other.getConnectedSet(netNo, true));
+      }
+    }
+    Set<Item> obstacles = new java.util.HashSet<>();
+    for (Item other : getItems()) {
+      if (other.containsNet(netNo) && !(other instanceof ConductionArea) && !open.contains(other)) {
+        obstacles.add(other);
+      }
+    }
+    return obstacles;
+  }
+
+  private boolean isPlaneOnPowerLayer(Item item) {
+    return item instanceof ConductionArea
+        && !this.layerStructure.layers[item.firstLayer()].isSignal;
   }
 
   public static app.freerouting.rules.ViaRule fanoutFallbackViaRule(
@@ -1109,6 +1215,10 @@ public class RoutingBoard extends BasicBoard implements Serializable {
         continue;
       }
       if (currentItem.isTail()) {
+        // A dangling endpoint is a DRC finding, not permission to delete an entire junction.
+        if (currentItem instanceof Trace trace && trace.hasInteriorContacts()) {
+          continue;
+        }
         if (currentItem instanceof Via) {
           if (stopConnectionOption == Item.StopConnectionOption.VIA) {
             continue;
@@ -1181,6 +1291,16 @@ public class RoutingBoard extends BasicBoard implements Serializable {
       somethingChanged = true;
     }
     if (somethingChanged) {
+      Iterator<UndoableObjects.UndoableObjectNode> clearIt = itemList.startReadObject();
+      for (; ; ) {
+        Item currentItem = (Item) itemList.readObject(clearIt);
+        if (currentItem == null) {
+          break;
+        }
+        if (currentItem instanceof ConductionArea ca) {
+          ca.clearDerivedData();
+        }
+      }
       this.searchTreeManager.reinsertTreeItems();
     }
   }
@@ -1212,8 +1332,7 @@ public class RoutingBoard extends BasicBoard implements Serializable {
           break;
         }
         Item currentItem = (Item) currentObject;
-        if (currentItem.netNumbers.length <= 1
-            || currentItem.getFixedState() == FixedState.SYSTEM_FIXED) {
+        if (currentItem.netNumbers.length <= 1 || currentItem.getFixedState().isFix()) {
           continue;
         }
         if (currentObject instanceof Via) {
@@ -1422,6 +1541,98 @@ public class RoutingBoard extends BasicBoard implements Serializable {
     return parent[i] = findRoot(parent, parent[i]);
   }
 
+  /**
+   * Identifies physically overlapping pins within each footprint and clusters them into net-ties.
+   *
+   * <p>Pins sharing physical copper on a common layer within the same component (footprint) are
+   * assigned a shared positive {@code netTieClusterId}. This enables O(1) clearance exemption and
+   * maze routing escape corridors across distinct nets without repeated spatial intersection
+   * checks.
+   *
+   * @return the total number of multi-pin net-tie clusters identified on the board.
+   */
+  public int clusterNetTies() {
+    // 1. Group pins by component ID (excluding board pins with componentId <= 0)
+    Map<Integer, List<Pin>> pinsByComponent = new HashMap<>();
+    for (Pin pin : getPins()) {
+      if (pin.getComponentId() > 0) {
+        pinsByComponent.computeIfAbsent(pin.getComponentId(), _ -> new ArrayList<>()).add(pin);
+      }
+    }
+
+    int nextClusterId = 1;
+    int multiPinClusters = 0;
+
+    for (List<Pin> compPins : pinsByComponent.values()) {
+      int count = compPins.size();
+      if (count <= 1) {
+        continue;
+      }
+
+      int[] parent = new int[count];
+      for (int i = 0; i < count; i++) {
+        parent[i] = i;
+      }
+
+      // Check pairwise physical copper overlap between pins of the same component
+      for (int i = 0; i < count; i++) {
+        Pin p1 = compPins.get(i);
+        IntBox b1 = p1.boundingBox();
+        for (int j = i + 1; j < count; j++) {
+          Pin p2 = compPins.get(j);
+          if (!p1.sharesLayer(p2) || !b1.intersects(p2.boundingBox())) {
+            continue;
+          }
+          if (pinsOverlapCopper(p1, p2)) {
+            int rootI = findRoot(parent, i);
+            int rootJ = findRoot(parent, j);
+            if (rootI != rootJ) {
+              parent[rootI] = rootJ;
+            }
+          }
+        }
+      }
+
+      // Group pin indices by their root representative
+      Map<Integer, List<Pin>> groups = new HashMap<>();
+      for (int i = 0; i < count; i++) {
+        int root = findRoot(parent, i);
+        groups.computeIfAbsent(root, _ -> new ArrayList<>()).add(compPins.get(i));
+      }
+
+      for (List<Pin> cluster : groups.values()) {
+        if (cluster.size() > 1) {
+          int clusterId = nextClusterId++;
+          for (Pin pin : cluster) {
+            pin.setNetTieClusterId(clusterId);
+          }
+          multiPinClusters++;
+        }
+      }
+    }
+
+    return multiPinClusters;
+  }
+
+  private static boolean pinsOverlapCopper(Pin p1, Pin p2) {
+    for (int i = 0; i < p1.tileShapeCount(); i++) {
+      Shape s1 = p1.getShape(i);
+      if (s1 == null) {
+        continue;
+      }
+      int layer1 = p1.shapeLayer(i);
+      for (int j = 0; j < p2.tileShapeCount(); j++) {
+        if (layer1 == p2.shapeLayer(j)) {
+          Shape s2 = p2.getShape(j);
+          if (s2 != null && s1.intersects(s2)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
   /** Returns the obstacle responsible for the last shove to fail. */
   public Item getShoveFailingObstacle() {
     return shoveFailingObstacle;
@@ -1519,7 +1730,7 @@ public class RoutingBoard extends BasicBoard implements Serializable {
    * Create a deep copy of the routing board. This method is similar to the BasicBoard.clone method,
    * but it copies the routing related values as well.
    */
-  public synchronized RoutingBoard deepCopy() {
+  public RoutingBoard deepCopy() {
     return getUndoFacade().deepCopy();
   }
 

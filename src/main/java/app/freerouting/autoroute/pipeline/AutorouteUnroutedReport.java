@@ -58,10 +58,11 @@ final class AutorouteUnroutedReport {
   }
 
   /**
-   * Returns a report of the pads and vias that the board counts as connected only through a pour
-   * polygon, although foreign copper cuts them off from the pour's fill, or null if there are none.
-   * The router does not see these open connections: it routes nothing to them, and the ratsnest and
-   * the session file show the net as complete.
+   * Returns a report of the pads and vias that the board counts as connected through a pour (its
+   * plane fracture analysis missing the cut), although foreign copper cuts them off from the pour's
+   * fill, or null if there are none. Splits the analysis finds are unrouted connections. The router
+   * does not see these open connections: it routes nothing to them, and the ratsnest and the
+   * session file show the net as complete.
    */
   static String planeFillCutOffs(RoutingBoard board) {
     StringBuilder result = new StringBuilder();

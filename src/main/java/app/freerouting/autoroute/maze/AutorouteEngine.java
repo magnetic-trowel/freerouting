@@ -165,6 +165,24 @@ public class AutorouteEngine {
       }
     }
 
+    if (searchResult != null) {
+      if (ctrl.netNumber == 33 || ctrl.netNumber == 66 || ctrl.netNumber == 67) {
+        String destinationType =
+            searchResult.destinationDoor != null
+                ? searchResult.destinationDoor.getClass().getSimpleName()
+                : "null";
+        if (FRLogger.isTraceEnabled()) {
+          FRLogger.trace(
+              "compare_trace_maze_result_raw net="
+                  + ctrl.netNumber
+                  + ", section="
+                  + searchResult.sectionNoOfDoor
+                  + ", destination_type="
+                  + destinationType);
+        }
+      }
+    }
+
     FoundConnectionLocator autorouteResult = null;
     if (searchResult != null) {
       try {
@@ -207,8 +225,8 @@ public class AutorouteEngine {
           "Failed to route connection between " + describeConnection(startSet, destSet) + ".");
     }
 
-    if (!ctrl.layerActive[autorouteResult.startLayer]
-        || !ctrl.layerActive[autorouteResult.targetLayer]) {
+    if (isDisabledSignalLayer(ctrl, autorouteResult.startLayer)
+        || isDisabledSignalLayer(ctrl, autorouteResult.targetLayer)) {
       return new AutorouteAttemptResult(
           AutorouteAttemptState.FAILED,
           "Failed to route connection between "
@@ -271,6 +289,16 @@ public class AutorouteEngine {
       board.removeTraceTails(currentNetNumber, stopConnectionOption);
     }
     return changedNets;
+  }
+
+  /**
+   * Returns true if a found connection must not start or end on this layer. A signal layer that is
+   * not active for this net is off limits. A power layer is never active for routing (traces are
+   * not allowed on it), but a via that drops into a plane on that layer is the normal way to
+   * connect a plane net, so a connection that starts or ends there is kept.
+   */
+  private boolean isDisabledSignalLayer(AutorouteControl ctrl, int layer) {
+    return !ctrl.layerActive[layer] && board.layerStructure.layers[layer].isSignal;
   }
 
   private static String describeConnection(Set<Item> startSet, Set<Item> destSet) {

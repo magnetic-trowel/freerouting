@@ -29,10 +29,10 @@ import org.junit.jupiter.api.Test;
 
 /**
  * A pull-tight result whose corners collapse into one point has no lines. It must not count as a
- * change: before the fix, PolylineTrace.pullTight reported it as one while change() left the
- * trace as it was, so TraceTightener.optChangedArea pulled the same trace tight without end (one
- * board logged 5.9 million "Polyline: must contain at least 2 different points" warnings and spent
- * its whole job timeout there).
+ * change: before the fix, PolylineTrace.pullTight reported it as one while change() left the trace
+ * as it was, so TraceTightener.optChangedArea pulled the same trace tight without end (one board
+ * logged 5.9 million "Polyline: must contain at least 2 different points" warnings and spent its
+ * whole job timeout there).
  */
 class DegeneratePullTightTest {
   private RoutingBoard board;
@@ -89,7 +89,8 @@ class DegeneratePullTightTest {
   @Test
   void collapsedResultIsNoChange() {
     PolylineTrace trace =
-        insertTrace(new IntPoint(10000, 10000), new IntPoint(40000, 10000), new IntPoint(40000, 40000));
+        insertTrace(
+            new IntPoint(10000, 10000), new IntPoint(40000, 10000), new IntPoint(40000, 40000));
     Polyline before = trace.polyline();
     assertFalse(trace.pullTight(collapsing()));
     assertEquals(before, trace.polyline());
@@ -98,7 +99,8 @@ class DegeneratePullTightTest {
   @Test
   void changedAreaOptimizationEndsOnACollapsedResult() {
     PolylineTrace trace =
-        insertTrace(new IntPoint(10000, 10000), new IntPoint(40000, 10000), new IntPoint(40000, 40000));
+        insertTrace(
+            new IntPoint(10000, 10000), new IntPoint(40000, 10000), new IntPoint(40000, 40000));
     board.changedArea = new ChangedArea(board.getLayerCount());
     board.changedArea.join(new IntPoint(10000, 10000).toFloat(), 0);
     board.changedArea.join(new IntPoint(40000, 40000).toFloat(), 0);
@@ -123,6 +125,8 @@ class DegeneratePullTightTest {
     TraceTightener tightener =
         TraceTightener.getInstance(board, new int[0], null, 100, null, -1, null, -1);
     Polyline result = tightener.pullTight(loop, 0, 100, new int[] {1}, 1, Set.of());
-    assertTrue(result.lines.length >= 3, "pull-tight collapsed the loop to " + result.lines.length + " lines");
+    assertTrue(
+        result.lines.length >= 3,
+        "pull-tight collapsed the loop to " + result.lines.length + " lines");
   }
 }

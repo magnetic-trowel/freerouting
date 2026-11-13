@@ -40,12 +40,13 @@ flowchart TD
         IO["**io.specctra**\nDSN / SES reader-writer"]
         BOARD["**board.model/facade/state/actions/trace + searchtree + optimize**\nLive board model · search trees · optimization"]
         RULES["**rules**\nNets · clearances"]
-        AR["**autoroute.pipeline + maze + expansion + drill + path**\nRouting stages · maze · expansion · path"]
+        AR["**autoroute.pipeline + maze + expansion + drill + path + decoupling + plane**\nRouting stages · maze · expansion · path · decoupling · plane"]
         DRC["**drc**\nDesign-rule checking"]
         GEO["**geometry.planar**\nShapes · points · math"]
     end
 
     DSN --> IO --> BOARD
+    MGMT -->|resolved import options| IO
     RULES --> AR
     BOARD --> AR
     AR --> DRC --> IO --> SES
@@ -197,6 +198,44 @@ This contract does not change the separate search/insertion envelope tolerance
 problem (#961), circle discretization (#954), or preserved-junction connectivity
 and normalization (#958/#960). The default tree remains uncompensated.
 
+### Net-tie clustering and pad-stacking DRC contracts
+
+Footprints often place multiple pads or through-holes at overlapping coordinates across
+distinct electrical nets (e.g. net-ties, star grounds, power distribution connectors).
+At board post-load time, `RoutingBoard.clusterNetTies()` identifies physically overlapping
+pads sharing copper layers within each footprint via Disjoint-Set Union (union-find) and
+assigns a shared positive `netTieClusterId` to each participating `Pin`.
+
+`Pin.isObstacle(Item other)` consults `netTieClusterId` in $O(1)$ time without allocations:
+pins sharing the same positive cluster ID within a footprint are treated as non-obstacles.
+`Item.clearanceViolations()` correspondingly exempts traces contacting their designated pin
+from clearance violations against foreign partner pins in the same net-tie cluster. Distinct
+clusters on the same footprint or overlapping pins on different footprints remain isolated
+and enforce standard clearance rules (#718).
+
+### Net topology: `fromto` and `order`
+
+A net is normally routed as a tree that joins its pins in any order. The Specctra DSN can
+constrain that topology inside the `net` scope, and `Network.readNetScope` turns it into subnets:
+
+- each `(fromto P1 P2)` becomes a subnet of its own that connects these two pins;
+- `(order P1 P2 P3 ...)` becomes a chain of two-pin subnets, P1-P2, P2-P3 and so on.
+
+The subnets get distinct net numbers and keep the name of the net, so the SES output lists one
+`net` block per subnet under the same name. A pin named in several subnets carries all their net
+numbers, like a net-tie pad. Copper of different subnets keeps its clearance from each other: two
+subnets only meet at the pins they share.
+
+A star ground is therefore written as one `fromto` per branch, all starting at the star point:
+
+```
+(net GND (fromto R-1 A-1) (fromto R-1 B-1) (fromto R-1 C-1))
+```
+
+Each of A, B and C then gets its own trace to R (`StarGroundFromtoTest`). The star point is the
+pin named in the `fromto` scopes; the router does not choose it. KiCad does not write `fromto`
+scopes when it exports a DSN, so they have to be added to the file before routing.
+
 ## Module Boundaries (ArchUnit)
 
 Architectural boundaries are codified in `src/test/java/app/freerouting/architecture/ModuleBoundariesArchTest.java`.
@@ -213,8 +252,8 @@ Architectural boundaries are codified in `src/test/java/app/freerouting/architec
     and action threads; it must not depend on `gui.interactive`.
   - `board` and `autoroute` must not depend on `gui.rendering`; rendering is GUI-owned.
   - Pipeline/support packages (`board`, `rules`, `autoroute`, `drc`, `geometry`, `datastructures`,
-    `settings`, `logger`, `debug`, `util`, `io`, `core`, `analytics`) must not depend on Swing or on
-    AWT types outside `java.awt.geom`.
+    `settings`, `logger`, `debug`, `util`, `io`, `core`, `analytics`, `cli`, `startup`) must not depend on Swing or on
+    any AWT / `java.desktop` types (`java.awt..`).
   - `io.specctra.parser` internals must not be used outside `io..` (the `io.kicad` importer is an allowed consumer).
   - `gui.workspace`, `gui.interactive`, and `gui.rendering` must stay cycle-free (slices rule).
   - Background workspace workers (`InteractiveActionThread`, `GuiRoutingJobWorker`) must reach
@@ -245,6 +284,13 @@ Application bootstrap and top-level wiring. Start here when you need the entry p
 ### `app.freerouting.io.specctra`
 
 Import and export for board files. The public DSN and SES entry points are in this package, and parser internals live in `io.specctra.parser`.
+
+`DsnReadOptions` carries immutable allocation decisions into `DsnReader`; the parser does not
+inspect application settings or GUI state. Placements are allocated canonically in exact
+reference-name order by default across all imports (headless jobs, composite/API inputs, GUI
+sessions, and standalone reader overloads). Legacy file-order allocation remains accessible via
+explicit `DsnReadOptions.INPUT_ORDER`. Any configured `router.autorouter.item_order_seed` is
+applied after item identities exist as an explicit shuffle.
 
 ### `app.freerouting.board`
 
@@ -292,6 +338,18 @@ Drill-page indexing and expansion-drill support used during maze expansion.
 
 Found-connection reconstruction and insertion, including path connection value objects.
 
+### `app.freerouting.autoroute.decoupling`
+
+Read-only, deterministic identification of IC supply decoupling capacitors on a `RoutingBoard`.
+Computes confidence scores, explainable bitmask reason codes, and candidate IC supply owners
+without modifying board items, routing traces, or locking copper.
+
+### `app.freerouting.autoroute.plane`
+
+High-performance topological plane connectivity analysis and fracture detection.
+
+- `FastPlaneConnectivityGrid` — Flat `long[]` bitset ($<32\text{ KB}$ RAM) with adaptive cell resolution. Replaces slow $O(N \cdot V^2)$ 2D polygon clipping (`Area.subtract`) with sub-millisecond dilated span rasterization and queue-based flood fill. Evaluates plane reachability on signal layers (`--router.plane_as_obstacle=false`), detects severed topological islands caused by foreign trace cuts, and enables `BatchAutorouter` to route DRC-clean physical bridge traces connecting disconnected plane pins across all CAD formats (Altium, EAGLE, KiCad).
+
 ### `app.freerouting.autoroute`
 
 Remaining autoroute support types and routing diagnostics. The implementation families are kept in
@@ -315,6 +373,8 @@ The rule model that defines nets, clearance classes, via rules, layer constraint
 ### `app.freerouting.drc`
 
 Design-rule checking and violation reporting. Use this package when you need to understand why a routed board is still invalid.
+
+- `NetRoutingLedger` — Incremental incomplete-connection ledger and net tracker. Dynamically tracks conduction areas and invalidates plane net caches whenever items on their layers are inserted or removed, ensuring real-time DRC accuracy for severed and bridged plane islands.
 
 ### Precise component placement
 
@@ -383,7 +443,7 @@ Analytics telemetry and metrics dispatch (`FRAnalytics`, `BigQueryClient`, `Segm
 
 ### `app.freerouting.io`
 
-Board and design file input/output serialization, parsing, and multi-format generation. Specific formats include Specctra (`io.specctra`), KiCad JSON (`io.kicad`), and multi-output synthesis (`MultiOutputGenerator`).
+Board and design file input/output serialization, parsing, and multi-format generation. Specific formats include Specctra (`io.specctra`), KiCad JSON and KiCad custom design rules (`io.kicad`; `KiCadDesignRulesTranslator` applies a `.kicad_dru` to a board loaded from DSN), and multi-output synthesis (`MultiOutputGenerator`).
 
 ### `app.freerouting.management`
 
@@ -490,15 +550,39 @@ The autorouter is the "make it work" stage. It solves missing connections one at
 
 The autorouter may also temporarily rip up nearby conflicting traces or vias if needed to find a legal route. Its job is to turn an incomplete design into one that is electrically connected.
 
+- Remember who moved whom.
+
+    Two nets that want the same space can otherwise take it from each other pass after pass: net A rips net B to route, B rips A back on its next attempt, A rips B again, or a board restore replays the same rip-up, and the board never gets both. `RipupMemory` (in `autoroute.pipeline`) records every rip-up of the stage: which net was being routed and which nets it removed. Recording changes nothing; the memory only steps in when the same rip-up (A removes B) happens again in a later pass. B is then kept away from A: its maze search may not rip A (`AutorouteControl.netsNotToRip`, checked in `MazeRipupResolver.checkRipup`), and B is routed after A in the pass. B has to find another way, for example a via to the other layer.
+
+    The restriction is bounded. When B fails twice while kept away, the relation flips: A's traces and vias across B's open connections are removed and A is kept away from B, so B routes first and A looks for the other way. When the flipped relation fails twice as well, the pair is released and never restricted again. The memory is kept across board restores within a stage and is keyed by net number, so routing stays deterministic. A board that routes without such a repeat is routed exactly as before. The events are logged at debug level (`Pass #n: net 'B' ...`).
+
 #### Preserved Traces and Centerline Junction Connectivity
 
 Preserved traces (`USER_FIXED` and `SYSTEM_FIXED`, such as KiCad footprint tracks or SPECCTRA DSN `route`/`fix` wires) must retain their exact geometry without mutation or splitting throughout routing, normalization, and export:
 
 - **Centerline Contact Model:** Rather than splitting preserved geometry into separate sub-traces (which would mutate user geometry and emit fragmented wires upon export), Freerouting recognizes electrical junctions where branch trace endpoints or drill items lie along the centerline or internal bends of an existing trace via `Trace.contains(Point)`.
+- **Exact Finite Membership:** Integer points and finite rational line intersections are supported at trace endpoints, internal bends, and segment interiors. Membership requires exact collinearity and closed finite bounds, without coordinate rounding or a distance tolerance. Contact queries retain net/layer filtering, and multiple distinct shared points remain ambiguous to `normalContactPoint()`.
 - **Bidirectional Contact Symmetry:** `Trace.getNormalContacts()`, `Trace.getNormalContacts(Point, boolean)`, `Trace.normalContactPoint()`, and `DrillItem.getNormalContacts()` inspect overlapping items to ensure symmetric reachability for connected set traversal (`getConnectedSetRecu`).
-- **Tail Cleanup Safety:** Branches meeting preserved trace centerlines report valid contact points and are not misclassified as dangling tails (`isTail() == false`), ensuring `RoutingBoard.removeTraceTails()` preserves valid junctions.
+- **Tail Cleanup Safety:** `isTail()` retains its diagnostic meaning: an outer endpoint dangles, including on traces with unsplit interior junctions. Cleanup separately protects whole traces containing interior trace/drill contacts. Endpoint-tail lookup and whole-connection collection preserve those junctions; normalization can split them before trimming the dangling portions. Ordinary endpoint-only stubs remain removable, and DRC still reports dangling endpoints.
+- **Exact Rational Splitting:** Rational split points use integer-defined nonparallel caps with exact intersection checks. Existing endpoint caps are reused; interior points try bounded nearby lattice anchors without moving the point. If no supported cap is found, splitting safely returns no change before mutation. The bounded search is not a complete solver for all representable rational points.
+- **Supporting-Line Invariant:** `Line` operations retain bounded integer defining points. Point-based constructors convert representable rational input to an exact integer lattice line, preserving direction, and reject unsupported lines before creating invalid geometry. Polyline endpoint caps may be nonperpendicular when required to retain an exact rational endpoint. Projection connectors decline geometry that cannot satisfy this representation.
+- **Rational Queries and Integer Placement:** Rational projections retain their denominator and exact orientation; surrounding bounds round outward using integer arithmetic. Drill centres and primitive circle/box/octagon translations require integer board positions. Integral rational representations are canonicalized exactly; fractional drill moves are rejected before undo/search-tree mutation. This is a placement boundary, not a rounding policy for routing intersections.
 - **Normalization Stability:** Traces meeting preserved copper do not oscillate between split and combine passes in `BasicBoard.normalizeTraces()`, preventing infinite ping-pong loops.
 - **Export Fidelity:** Preserved traces are written to Specctra SES files (`SesWriter`) with their original unbroken coordinate spans, preserving 1:1 parity with KiCad and other EDA tools.
+
+`FoundConnectionInserter` completes both endpoint attachments before stub cleanup and
+normalization, checks each attachment result using that endpoint's layer width, and
+requires same-net normal-contact reachability between the terminal components before
+reporting success. Mutable terminal traces can be replaced by splitting or combining;
+captured component witnesses and exact-point lookup resolve the surviving board items.
+Both fixed and mutable terminals capture their original components, including mutable
+branches. A single live graph traversal must reach every surviving witness from both
+components, rather than accepting one member from each or seeding disconnected members.
+This verifies surviving-item reachability; replacement of an entirely removed component
+uses its exact anchor, rather than asserting preservation of every old geometric span.
+A fanout without a destination item must reach its newly inserted via. Failed insertion
+returns failure while leaving successfully inserted copper to the existing retry and
+cleanup flow.
 
 #### Optimizer
 
@@ -582,13 +666,19 @@ File parsing and export live in `io.specctra`.
 
 When diagnosing a load or export issue, begin here.
 
-SES geometry conversion stays in `io.specctra`, independently of the routing algorithms.
-`SesTracePath` writes finite decimal coordinates and widths using the board's existing
-coordinate transform. Endpoint snapping must not collapse any nonzero segment, including
-an interior segment of a longer path. Real point copper keeps its width and two coincident
-endpoints in the standard `path` syntax accepted by KiCad.
+SES geometry conversion stays in `io.specctra`, independently of routing algorithms.
+`SesTracePath` uses `Point.exactCoordinates()` and exact unit/resolution scaling rather
+than converting rational corners through floating point. `SesNumbers` emits ordinary
+decimal tokens accepted by KiCad. Noninteger coordinates retain a fixed fractional
+scale of at least 24 places and more than twice the reduced denominator's decimal
+length. Trailing zeros certify a rounding interval narrow enough to recover the
+original as its unique lowest-denominator fraction. Endpoint snapping cannot collapse
+a nonzero segment; real point copper retains its width and two coincident endpoints.
 
-`SesReader` applies the session's unit and resolution before constructing board objects.
+`SesReader` enables exact decimal tokens on `SpecctraDsnStreamReader`; the default DSN
+scanner keeps its existing integer/double token types. Decimal text and session scaling
+remain exact through `SesNumbers` and `SesPathGeometry`, and the reader applies the
+session's unit and resolution before constructing board objects.
 `SesPathGeometry` restores the board's integer-line representation of each path. A
 corner on the board is the intersection of two integer lines and can have a denominator
 far beyond what a 17-digit decimal identifies, so the reader recovers lines, not corners:
@@ -600,12 +690,15 @@ An end corner is a grid point, or the meeting point with another wire of the sam
 piece's line; the wires of a net are therefore restored together), or else the simplest
 rational position on its segment within the tolerance. A rational end or point copper
 needs a crossing integer line: a reduced basis of the corner's line lattice is searched
-for combinations with coprime components. The main and standalone CLI runtime classpaths
-both include the fraction dependency, and the executable JAR preserves the core and
-fraction modules' licence and notice files under distinct
-`META-INF/licenses/commons-numbers-*` paths. This is SES representation recovery; no
-routing decision or board grid is changed. A path with one corner (point copper as
-v2.5.0 wrote it) is read as point copper.
+for combinations with coprime components. Legacy widths and via centres may recover an
+integer only inside the same four-ULP envelope. The main and standalone CLI runtime
+classpaths both include the fraction dependency, and the executable JAR preserves the
+core and fraction modules' licence and notice files under distinct
+`META-INF/licenses/commons-numbers-*` paths. This is SES representation recovery, not a
+contact-matching or manufacturing tolerance; no routing decision or board grid is
+changed. A path with one corner (point copper as v2.5.0 wrote it) is read as point
+copper. Exact integer coordinates beyond the scanner's old 32-bit raw-token limit are
+permitted when the scaled board geometry is representable.
 
 The reader checks actual insertion before counting an imported wire. It rejects widths,
 coordinates and segments with no integer line within the tolerance (for example decimal
@@ -614,6 +707,10 @@ that collapse at serialization precision, and collinear reversals that `Polyline
 otherwise shorten. Monotone collinear simplification is allowed because it preserves the
 same copper. Rejected wires are reported as errors rather than moved, removed or counted
 as successful imports. KiCad performs its own final nanometre-grid conversion.
+Via centres must remain integer board positions. Files reformatted by another program
+need not retain the writer's precision guarantee. Validate live connectivity, SES
+reimport, preserved geometry and comprehensive DRC independently, then check the host
+EDA import.
 
 
 ### Native CLI and Startup Path

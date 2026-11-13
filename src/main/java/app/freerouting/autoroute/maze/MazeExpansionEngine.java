@@ -11,6 +11,7 @@ import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.core.library.Padstack;
+import app.freerouting.geometry.planar.Circle;
 import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.FloatLine;
 import app.freerouting.geometry.planar.FloatPoint;
@@ -86,7 +87,7 @@ final class MazeExpansionEngine {
       expansionValue += ctrl.minNormalViaCost;
     }
     double sortingValue =
-        expansionValue + search.destinationDistance.calculate(nearestPoint, layer);
+        expansionValue + search.destinationDistance.calculateWithPrepaidVia(nearestPoint, layer);
     MazeListElement newElement =
         new MazeListElement(
             drill,
@@ -129,7 +130,7 @@ final class MazeExpansionEngine {
                 fromElementShapeEntryMiddle,
                 ctrl.traceCosts[layer].horizontal(),
                 ctrl.traceCosts[layer].vertical())
-            + search.destinationDistance.calculate(nearestPoint, layer);
+            + search.destinationDistance.calculateWithPrepaidVia(nearestPoint, layer);
     MazeListElement newElement =
         new MazeListElement(
             drillPage,
@@ -151,7 +152,8 @@ final class MazeExpansionEngine {
     int fromRoomLayer = fromElement.sectionNoOfDoor;
     DrillPage drillPage = (DrillPage) fromElement.door;
     Collection<ExpansionDrill> drillList =
-        drillPage.getDrills(search.autorouteEngine, ctrl.attachSmdAllowed);
+        drillPage.getDrills(
+            search.autorouteEngine, ctrl.attachSmdAllowed, ctrl.centreOfGravityViaCandidate);
     if (search.fanoutDiagnostics.enabled()) {
       search.fanoutDiagnostics.trace(
           "drill_page_scan",
@@ -164,7 +166,9 @@ final class MazeExpansionEngine {
               + ", from_door="
               + MazeSearchEngine.describeExpandable(fromElement.door));
       if (drillList.isEmpty()) {
-        search.fanoutDiagnostics.trace("drill_page_empty", "no_candidates=true");
+        if (search.fanoutDiagnostics.enabled()) {
+          search.fanoutDiagnostics.trace("drill_page_empty", "no_candidates=true");
+        }
       }
     }
     boolean firstMismatchLogged = false;
@@ -198,34 +202,36 @@ final class MazeExpansionEngine {
           firstMismatchLogged = true;
           CompleteExpansionRoom expansionRoom = fromElement.nextRoom;
           CompleteExpansionRoom drillRoom = currentDrill.roomArr[sectionIndex];
-          FRLogger.trace(
-              "FANOUT_DIAG event=first_room_mismatch_detail"
-                  + ", pin="
-                  + search.fanoutDiagnostics.labelForLog()
-                  + ", net="
-                  + ctrl.netNumber
-                  + ", drillLocation="
-                  + currentDrill.location
-                  + ", expansion_room_id="
-                  + System.identityHashCode(expansionRoom)
-                  + ", expansion_room_bounds="
-                  + (expansionRoom != null ? expansionRoom.getShape() : "null")
-                  + ", drill_room_id="
-                  + System.identityHashCode(drillRoom)
-                  + ", drill_room_bounds="
-                  + (drillRoom != null ? drillRoom.getShape() : "null")
-                  + ", from_door_type="
-                  + (fromElement.door != null
-                      ? fromElement.door.getClass().getSimpleName()
-                      : "null")
-                  + ", backtrack_door_type="
-                  + (fromElement.backtrackDoor != null
-                      ? fromElement.backtrackDoor.getClass().getSimpleName()
-                      : "null")
-                  + ", sectionIndex="
-                  + sectionIndex
-                  + ", layer="
-                  + fromRoomLayer);
+          if (FRLogger.isTraceEnabled()) {
+            FRLogger.trace(
+                "FANOUT_DIAG event=first_room_mismatch_detail"
+                    + ", pin="
+                    + search.fanoutDiagnostics.labelForLog()
+                    + ", net="
+                    + ctrl.netNumber
+                    + ", drillLocation="
+                    + currentDrill.location
+                    + ", expansion_room_id="
+                    + System.identityHashCode(expansionRoom)
+                    + ", expansion_room_bounds="
+                    + (expansionRoom != null ? expansionRoom.getShape() : "null")
+                    + ", drill_room_id="
+                    + System.identityHashCode(drillRoom)
+                    + ", drill_room_bounds="
+                    + (drillRoom != null ? drillRoom.getShape() : "null")
+                    + ", from_door_type="
+                    + (fromElement.door != null
+                        ? fromElement.door.getClass().getSimpleName()
+                        : "null")
+                    + ", backtrack_door_type="
+                    + (fromElement.backtrackDoor != null
+                        ? fromElement.backtrackDoor.getClass().getSimpleName()
+                        : "null")
+                    + ", sectionIndex="
+                    + sectionIndex
+                    + ", layer="
+                    + fromRoomLayer);
+          }
         }
         continue;
       }
@@ -260,6 +266,13 @@ final class MazeExpansionEngine {
       Item currentObstacleItem = room.getItem();
       if (!(currentObstacleItem instanceof Via)) {
         return;
+      }
+      if (!ctrl.netsNotToRip.isEmpty()) {
+        for (int i = 0; i < currentObstacleItem.netCount(); i++) {
+          if (ctrl.netsNotToRip.contains(currentObstacleItem.getNetNumber(i))) {
+            return;
+          }
+        }
       }
       Padstack currentObstaclePadstack = ((Via) currentObstacleItem).getPadstack();
       if (!ctrl.viaRule.containsPadstack(currentObstaclePadstack)
@@ -394,6 +407,13 @@ final class MazeExpansionEngine {
       if (layer < viaPadstack.fromLayer() || layer > viaPadstack.toLayer()) {
         continue;
       }
+      if (!app.freerouting.rules.HoleSpacing.clear(
+          search.autorouteEngine.board, viaPadstack, drill.location)) {
+        continue;
+      }
+      if (!ctrl.viaHoleAllowed(search.autorouteEngine.board, viaInfo, drill.location, netNumbers)) {
+        continue;
+      }
       ConvexShape viaShape = viaPadstack.getShape(layer);
       double viaRadius = viaShape == null ? 0 : 0.5 * viaShape.maxWidth();
       double requiredRadius = Math.max(viaRadius, ctrl.traceHalfWidth[layer]);
@@ -401,7 +421,7 @@ final class MazeExpansionEngine {
           ForcedViaInserter.checkLayer(
               requiredRadius,
               viaInfo.getClearanceClassIndex(),
-              viaInfo.attachSmdAllowed(),
+              ctrl.viaAttachAllowed(viaInfo),
               roomShape,
               drill.location,
               layer,
@@ -410,7 +430,8 @@ final class MazeExpansionEngine {
               0,
               search.autorouteEngine.board,
               ctrl.traceHalfWidth[layer],
-              ctrl.traceClearanceClassIndex);
+              ctrl.traceClearanceClassIndex,
+              viaShape instanceof Circle);
       if (result == ForcedPadRouter.CheckDrillResult.DRILLABLE) {
         return result;
       }

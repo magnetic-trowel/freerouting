@@ -1,6 +1,7 @@
 package app.freerouting.io.specctra.parser;
 
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.board.model.structure.Unit;
 import app.freerouting.core.library.Packages;
 import app.freerouting.core.library.Padstack;
 import app.freerouting.core.library.Padstacks;
@@ -107,6 +108,15 @@ public class Library extends ScopeKeyword {
       scopeParameter.file.newLine();
       scopeParameter.file.write("(absolute on)");
     }
+    if (!scopeParameter.compatMode && padstack.explicitDrillRadius != null) {
+      scopeParameter.file.newLine();
+      double dsnDia =
+          scopeParameter.coordinateTransform.boardToDsn(2 * padstack.explicitDrillRadius);
+      scopeParameter.file.write(
+          "(freerouting_drill_diameter "
+              + (dsnDia == (long) dsnDia ? String.valueOf((long) dsnDia) : String.valueOf(dsnDia))
+              + ")");
+    }
     scopeParameter.file.endScope();
   }
 
@@ -115,9 +125,24 @@ public class Library extends ScopeKeyword {
       LayerStructure layerStructure,
       CoordinateTransform coordinateTransform,
       Padstacks boardPadstacks) {
+    return readPadstackScope(scanner, layerStructure, coordinateTransform, boardPadstacks, null);
+  }
+
+  /**
+   * Reads a padstack scope. If {@code kicadDsnUnit} is not null, the file was written by KiCad in
+   * that unit, and the rounded-rectangle pads of its legacy exporter are corrected (see {@link
+   * KiCadRoundRectPad}).
+   */
+  public static boolean readPadstackScope(
+      IJFlexScanner scanner,
+      LayerStructure layerStructure,
+      CoordinateTransform coordinateTransform,
+      Padstacks boardPadstacks,
+      Unit kicadDsnUnit) {
     String padstackName;
     boolean isDrilllable = true;
     boolean placedAbsolute = false;
+    Double drillDiameter = null;
     Collection<Shape> shapeList = new LinkedList<>();
     try {
       Object nextToken = scanner.nextToken();
@@ -146,6 +171,11 @@ public class Library extends ScopeKeyword {
           if (nextToken == Keyword.SHAPE) {
             Shape currentShape = Shape.readScope(scanner, layerStructure);
             if (currentShape != null) {
+              if (kicadDsnUnit != null) {
+                currentShape =
+                    KiCadRoundRectPad.correct(
+                        padstackName, currentShape, kicadDsnUnit, coordinateTransform);
+              }
               shapeList.add(currentShape);
             }
             // overread the closing bracket and unknown scopes.
@@ -165,6 +195,23 @@ public class Library extends ScopeKeyword {
             isDrilllable = DsnFile.readOnOffScope(scanner);
           } else if (nextToken == Keyword.ABSOLUTE) {
             placedAbsolute = DsnFile.readOnOffScope(scanner);
+          } else if ("freerouting_drill_diameter".equals(nextToken)) {
+            Object diaToken = scanner.nextToken();
+            double diameter = Double.NaN;
+            if (diaToken instanceof Integer intVal) {
+              diameter = intVal.doubleValue();
+            } else if (diaToken instanceof Double doubleVal) {
+              diameter = doubleVal;
+            } else if (diaToken instanceof Float floatVal) {
+              diameter = floatVal.doubleValue();
+            }
+            if (!Double.isFinite(diameter)
+                || diameter < 0
+                || scanner.nextToken() != Keyword.CLOSED_BRACKET) {
+              FRLogger.warn("Invalid native drill diameter in padstack '" + padstackName + "'");
+              return false;
+            }
+            drillDiameter = diameter;
           } else {
             ScopeKeyword.skipScope(scanner);
           }
@@ -342,6 +389,9 @@ public class Library extends ScopeKeyword {
     Padstack padstack =
         boardPadstacks.add(
             padstackName, padstackShapes, auxiliaryShapes, isDrilllable, placedAbsolute);
+    if (drillDiameter != null) {
+      padstack.explicitDrillRadius = coordinateTransform.dsnToBoard(drillDiameter) / 2.0;
+    }
     if (hasNonConvex) {
       padstack.hasNonConvexGeometry = true;
     }
@@ -383,7 +433,8 @@ public class Library extends ScopeKeyword {
               scopeParameter.scanner,
               scopeParameter.layerStructure,
               scopeParameter.coordinateTransform,
-              board.library.padstacks)) {
+              board.library.padstacks,
+              isKiCad(scopeParameter) ? scopeParameter.unit : null)) {
             return false;
           }
         } else if (nextToken == Keyword.IMAGE) {
@@ -494,6 +545,11 @@ public class Library extends ScopeKeyword {
       }
     }
     return result.toArray(new app.freerouting.core.library.Package.Keepout[0]);
+  }
+
+  private static boolean isKiCad(ReadScopeParameter scopeParameter) {
+    return scopeParameter.hostCad != null
+        && scopeParameter.hostCad.toLowerCase(java.util.Locale.ROOT).contains("kicad");
   }
 
   private void generateMissingKeepoutNames(

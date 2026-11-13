@@ -23,6 +23,7 @@ import app.freerouting.drc.ClearanceViolation;
 import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.settings.OptimizerSettings;
 import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.sources.DefaultSettings;
 import com.sun.management.ThreadMXBean;
@@ -47,8 +48,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Optimizes routes using a deterministic thread pool pipeline on a board that has completed
- * auto-routing.
+ * Optimizes the routed connections of a board after auto-routing, using a deterministic thread pool
+ * pipeline.
  */
 public final class BatchOptimizer extends NamedAlgorithm {
 
@@ -193,14 +194,6 @@ public final class BatchOptimizer extends NamedAlgorithm {
       return null;
     }
 
-    // Guard 1: Incomplete connections
-    if (stats.connections.incompleteCount > 0) {
-      return String.format(
-          Locale.US,
-          "the board has %d unrouted connection(s) (optimizer only runs on completely routed boards)",
-          stats.connections.incompleteCount);
-    }
-
     float initialScore = stats.getOptimizerScore(this.job.routerSettings);
 
     // Guard 2: Score ceiling / theoretical optimum
@@ -263,7 +256,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     // Capture initial board state for baseline and session summary
     BoardStatistics initialStats = board.getStatistics();
     float initialRouterScore = initialStats.getRouterScore(job.routerSettings);
-    float initialOptimizerScore = initialStats.getOptimizerScore(job.routerSettings);
+    float initialOptimizerScore = initialStats.getOptimizerRank(job.routerSettings);
     RoutingResultManifest.PhaseDetail phase = job.resultPhaseMetrics.optimizer;
     phase.before =
         RoutingResultManifest.PhaseSnapshot.fromBoardStatistics(
@@ -363,6 +356,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
 
     double scoreImprovement = -1;
     int currentPass = 0;
+    int passesWithoutGainInARow = 0;
     while ((this.settings.optimizer.maxPasses == null
             || currentPass < this.settings.optimizer.maxPasses)
         && (this.settings.optimizer.maxItems == null
@@ -376,7 +370,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
       ++currentPass;
 
-      float scoreBeforePass = board.getStatistics().getOptimizerScore(job.routerSettings);
+      float scoreBeforePass = board.getStatistics().getOptimizerRank(job.routerSettings);
 
       String currentBoardHash = this.board.getHash();
       this.fireTaskStateChangedEvent(
@@ -411,7 +405,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
 
       BoardStatistics passStats = board.getStatistics();
-      float scoreAfterPass = passStats.getOptimizerScore(job.routerSettings);
+      float scoreAfterPass = passStats.getOptimizerRank(job.routerSettings);
       String rejectionReason =
           optimizerCandidateRejectionReason(
               this.bestIncompleteCount,
@@ -429,7 +423,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         }
         droppedCommits++;
         passStats = board.getStatistics();
-        scoreAfterPass = passStats.getOptimizerScore(job.routerSettings);
+        scoreAfterPass = passStats.getOptimizerRank(job.routerSettings);
         rejectionReason =
             optimizerCandidateRejectionReason(
                 this.bestIncompleteCount,
@@ -469,17 +463,21 @@ public final class BatchOptimizer extends NamedAlgorithm {
         scoreAfterPass = this.bestScore;
       }
 
-      double passImprovementFraction =
-          scoreBeforePass > 0 ? (double) (scoreAfterPass - scoreBeforePass) / scoreBeforePass : 0;
-      double passImprovementPercent = passImprovementFraction * 100.0;
+      float effectiveScoreAfterPass = rejectionReason == null ? scoreAfterPass : this.bestScore;
+      boolean effectiveConnectionsOpen =
+          rejectionReason == null
+              ? passStats.connections.incompleteCount > 0
+              : this.bestIncompleteCount > 0;
+      StopRuleView stopRuleView =
+          stopRuleScores(scoreBeforePass, effectiveScoreAfterPass, effectiveConnectionsOpen);
+      double passImprovementPercent = scoreImprovementPercent(scoreBeforePass, scoreAfterPass);
       String passOutcome =
           scoreAfterPass > scoreBeforePass
               ? "IMPROVED"
               : (scoreAfterPass < scoreBeforePass ? "REGRESSED" : "UNCHANGED");
       String passImprovementPercentStr =
-          scoreBeforePass > 0
-              ? String.format(Locale.US, "%.4f%%", passImprovementPercent)
-              : "n/a (baseline was 0.00)";
+          String.format(Locale.US, "%.4f%%", passImprovementPercent)
+              + (scoreBeforePass > 0 ? "" : " of the excess");
       job.logInfo(
           String.format(
               Locale.US,
@@ -494,14 +492,35 @@ public final class BatchOptimizer extends NamedAlgorithm {
               passStats.connections.incompleteCount,
               passStats.clearanceViolations.totalCount));
 
-      if (this.useIncreasedRipupCosts
-          && passImprovementPercent <= this.settings.optimizer.optimizationImprovementThreshold) {
-        this.useIncreasedRipupCosts = false;
-        // Increased ripup costs stopped paying off. Keep the optimizer going to try with normal
-        // ripup costs before the threshold may stop it.
+      // A pass that gains no more than the improvement threshold counts as no gain: the increased
+      // ripup costs stopped paying off.
+      boolean passHadGain =
+          hasPassGain(rejectionReason, scoreBeforePass, scoreAfterPass)
+              && passImprovementPercent > this.settings.optimizer.optimizationImprovementThreshold;
+
+      if (this.useIncreasedRipupCosts && !passHadGain) {
+        ++passesWithoutGainInARow;
+        this.useIncreasedRipupCosts =
+            increasedRipupCostsAfterPassWithoutGain(job.routerSettings.optimizer);
+        // Keep the optimizer going: with normal ripup costs, or with the increased ones and the
+        // other preferred directions of the next pass. With the increased costs kept, a second
+        // pass in a row without gain has tried both directions from the same incumbent: the next
+        // passes would only repeat them, so the stop rule applies.
+        if (shouldStopAfterConsecutivePassesWithoutGain(
+            job.routerSettings.optimizer, passesWithoutGainInARow)) {
+          job.logInfo(
+              String.format(
+                  Locale.US,
+                  "Stopping optimizer after %d consecutive passes without gain with increased"
+                      + " ripup costs.",
+                  passesWithoutGainInARow));
+          this.lastStopReason = StopReason.NO_IMPROVEMENT;
+          break;
+        }
         scoreImprovement = -1;
       } else {
-        scoreImprovement = passImprovementPercent;
+        passesWithoutGainInARow = 0;
+        scoreImprovement = stopRuleView.percent();
       }
 
       // At or below: a threshold of 0 stops at the first pass that gains nothing instead of
@@ -536,7 +555,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     // Restore best board achieved if final state regressed below best score or added
     // violations/opens
     BoardStatistics endStats = this.board.getStatistics();
-    float finalBoardScore = endStats.getOptimizerScore(job.routerSettings);
+    float finalBoardScore = endStats.getOptimizerRank(job.routerSettings);
     int finalIncomplete = endStats.connections.incompleteCount;
     int finalViolations = endStats.clearanceViolations.totalCount;
 
@@ -666,6 +685,33 @@ public final class BatchOptimizer extends NamedAlgorithm {
   }
 
   /**
+   * Calculates what a pass gained, in percent, for the stop rule's improvement threshold: of the
+   * score while it is above zero, and at or below zero ({@link BoardStatistics#getOptimizerRank}),
+   * where the score is no base, of the excess the score charges (1,000 less the score).
+   */
+  public static double scoreImprovementPercent(float before, float after) {
+    double fraction =
+        before > 0
+            ? (double) (after - before) / before
+            : (double) (after - before) / (1000.0 - before);
+    return fraction * 100.0;
+  }
+
+  /** The scores and the gain in percent read by the pass loop's stop rule. */
+  public record StopRuleView(float before, float after, double percent) {}
+
+  /**
+   * Calculates what the stop rule reads of a pass's scores. Passes are accepted by rank; the stop
+   * rule reads the rank too, except on a board with open connections from a score at or below zero,
+   * where it reads the score with its floor so an incomplete board does not loop fruitlessly.
+   */
+  public static StopRuleView stopRuleScores(float before, float after, boolean connectionsOpen) {
+    return connectionsOpen && before <= 0
+        ? new StopRuleView(0f, Math.max(0f, after), 0.0)
+        : new StopRuleView(before, after, scoreImprovementPercent(before, after));
+  }
+
+  /**
    * Checks whether the final board at the end of the optimizer regressed compared to the best
    * accepted incumbent board. Replaced if score is lower, or if incomplete connections or clearance
    * violations increased (FR-077).
@@ -720,9 +766,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
   }
 
   /**
-   * Tries to reduce the number of vias and the trace length of a completely routed board. Returns
-   * the amount of improvements made in percentage (expressed between 0.0 and 1.0), or -1 if the
-   * routing must go on no matter how much it improved.
+   * Tries to reduce the number of vias and the trace length of the routed connections. Returns the
+   * amount of improvements made in percentage (expressed between 0.0 and 1.0), or -1 if the routing
+   * must go on no matter how much it improved.
    */
   protected float optRoutePass(int passNo, boolean withPreferredDirections) {
     this.passCommits.clear();
@@ -770,11 +816,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       return 0.0f;
     }
 
-    int configuredThreads =
-        (this.settings.optimizer != null && this.settings.optimizer.maxThreads != null)
-            ? this.settings.optimizer.maxThreads
-            : 1;
-    int threadPoolSize = Math.max(1, configuredThreads);
+    int threadPoolSize = Math.max(1, this.settings.getOptimizerMaxThreads());
 
     String optimizationPassId =
         "BatchOptRoute.opt_route_pass #"
@@ -981,7 +1023,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
             this.board.getHash(),
             routeoptimizerPassDuration,
             FRLogger.formatScore(
-                boardStatisticsAfter.getOptimizerScore(job.routerSettings),
+                boardStatisticsAfter.getOptimizerRank(job.routerSettings),
                 boardStatisticsAfter.connections.incompleteCount,
                 boardStatisticsAfter.clearanceViolations.totalCount)));
     return routeImproved;
@@ -1293,6 +1335,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       return new ItemRouteResult(item.getId());
     }
     routerCountersBefore.incompleteCount = calculateIncompleteCount(routingBoard);
+    final Set<Integer> netsLeftUnrouted = netsLeftUnrouted(routingBoard, item);
 
     Set<Item> rippedConnections = rippedConnectionsOf(item);
     if (rippedConnections == null) {
@@ -1324,7 +1367,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
         job.routerSettings.tracePullTightAccuracy,
         withPreferredDirections,
         routingBoard,
-        job.routerSettings);
+        job.routerSettings,
+        netsLeftUnrouted);
 
     BoardStatistics.OptimizerMetrics metricsAfter =
         BoardStatistics.OptimizerMetrics.of(routingBoard);
@@ -1417,6 +1461,20 @@ public final class BatchOptimizer extends NamedAlgorithm {
       key.append(ripped.getId()).append(',');
     }
     return key.toString();
+  }
+
+  /**
+   * Returns the nets that are unrouted before item is ripped, except the nets of item. A candidate
+   * re-routes only what it ripped: the router rips the copper of a net that keeps failing, so
+   * retrying the connections the routing stage could not complete would cost every candidate the
+   * routed part of such a net.
+   */
+  private static Set<Integer> netsLeftUnrouted(RoutingBoard routingBoard, Item item) {
+    Set<Integer> result = routingBoard.routingLedger().incompleteNetNumbers();
+    for (int i = 0; i < item.netCount(); i++) {
+      result.remove(item.getNetNumber(i));
+    }
+    return result;
   }
 
   private static FloatPoint getItemPosition(Item item) {
@@ -1878,5 +1936,48 @@ public final class BatchOptimizer extends NamedAlgorithm {
       }
     }
     return false;
+  }
+
+  /**
+   * Whether the increased ripup costs of the start are still used after a pass that did not improve
+   * the board. By default they are dropped, and the optimizer goes on with the normal ripup costs;
+   * {@code optimizer.keep_increased_ripup_costs} keeps them.
+   */
+  static boolean increasedRipupCostsAfterPassWithoutGain(OptimizerSettings optimizerSettings) {
+    return optimizerSettings != null
+        && Boolean.TRUE.equals(optimizerSettings.keepIncreasedRipupCosts);
+  }
+
+  /**
+   * Whether the optimizer goes on, whatever the stop rule says, after a pass with the increased
+   * ripup costs that did not improve the board. By default it always does, once, with the normal
+   * ripup costs. With {@code optimizer.keep_increased_ripup_costs}, it does after the first such
+   * pass, to try the other preferred directions, but not after a second one in a row: each pass
+   * restarts from the same incumbent, so the next ones would only repeat the last two.
+   */
+  static boolean continueAfterPassWithoutGain(
+      OptimizerSettings optimizerSettings, int passesWithoutGainInARow) {
+    return !increasedRipupCostsAfterPassWithoutGain(optimizerSettings)
+        || passesWithoutGainInARow < 2;
+  }
+
+  /**
+   * Evaluates whether an optimizer pass produced an accepted improvement. A pass has gain only if
+   * the candidate was not vetoed and its optimizer score improved over the score before the pass.
+   */
+  static boolean hasPassGain(String rejectionReason, float scoreBeforePass, float scoreAfterPass) {
+    return rejectionReason == null && scoreAfterPass > scoreBeforePass;
+  }
+
+  /**
+   * Decides whether the optimizer should stop after evaluating consecutive passes without gain.
+   *
+   * @param optimizerSettings router optimizer settings
+   * @param passesWithoutGainInARow consecutive passes without gain
+   * @return true if the optimizer should stop immediately due to consecutive passes without gain
+   */
+  static boolean shouldStopAfterConsecutivePassesWithoutGain(
+      OptimizerSettings optimizerSettings, int passesWithoutGainInARow) {
+    return !continueAfterPassWithoutGain(optimizerSettings, passesWithoutGainInARow);
   }
 }

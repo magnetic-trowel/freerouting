@@ -12,8 +12,10 @@ import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.Unit;
+import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.core.RouterCounters;
 import app.freerouting.core.scoring.BoardStatistics;
+import app.freerouting.drc.AirLine;
 import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.drc.NetRoutingLedger;
 import app.freerouting.geometry.planar.IntBox;
@@ -72,14 +74,32 @@ final class AutoroutePassRunner {
 
       if (passNo > 1) {
         reorderSingleThreadItems(autorouteItemList, passNo);
+      } else if (router.settings.autorouter != null
+          && Boolean.TRUE.equals(router.settings.autorouter.planeAsPriority)) {
+        // plane_as_priority: the plane pads drop into their planes before the signals take the
+        // room around them (later passes already route plane items first).
+        List<Item> planeItems = new ArrayList<>();
+        autorouteItemList.removeIf(
+            item -> router.isPlaneItem(item, router.board) && planeItems.add(item));
+        autorouteItemList.addAll(0, planeItems);
+      }
+      priorityItemsFirst(autorouteItemList);
+
+      // freerouting.net: the balls of ball grid parts first in the first pass, ring by ring
+      // (router.autorouter.ball_escape_order); a retry plan still goes ahead of them.
+      if (passNo == 1 && router.getBallEscapeOrder() != null) {
+        int moved = router.getBallEscapeOrder().moveToFront(autorouteItemList);
+        if (router.job != null) {
+          router.job.logDebug("Pass #1: the ball escape order puts " + moved + " ball(s) first.");
+        }
       }
 
       long initialProgressStatisticsStart =
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
-      // Statistics only feed board-updated listeners; a listener-less attempt (optimizer
-      // candidate) discards them.
+      // Statistics only feed readers of board-updated events; the optimizer routes each candidate
+      // with a router without them, and no one reads these.
       router.progressStatistics =
-          router.boardUpdatedEventListeners.isEmpty() ? null : router.board.getStatistics(false);
+          router.hasBoardStatisticsReaders() ? router.board.getStatistics(false) : null;
       router.progressItemsSinceStatistics = 0;
       final BoardStatistics stats = router.progressStatistics;
       if (BatchAutorouter.isBenchmarkProfileEnabled()) {
@@ -96,7 +116,13 @@ final class AutoroutePassRunner {
       routerCounters.failedToBeRoutedCount = 0;
       routerCounters.routedCount = 0;
 
+      long statisticsStart = BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
+      // The ledger keeps these counts up to date; a full DRC scan would count every net again.
       routerCounters.incompleteCount = router.calculateIncompleteCount(router.board);
+      if (BatchAutorouter.isBenchmarkProfileEnabled()) {
+        router.profileIntermediateStatisticsNanos += System.nanoTime() - statisticsStart;
+      }
+
       logIncompleteDetails(passNo, itemsToGoCount, routerCounters);
       router.fireBoardUpdatedEvent(stats, routerCounters, router.board);
 
@@ -104,6 +130,7 @@ final class AutoroutePassRunner {
       int notRouted = 0;
       int routed = 0;
       int skipped = 0;
+      Set<Integer> keptAwayNetsAttemptedInPass = new TreeSet<>();
       for (Item currentItem : autorouteItemList) {
         if (router.thread.isStopAutoRouterRequested()) {
           break;
@@ -155,6 +182,10 @@ final class AutoroutePassRunner {
             router.profileAutorouteItemNanos += System.nanoTime() - routeItemStart;
           }
 
+          if (router.ripupMemory.isKeptAway(currentItem.getNetNumber(i))) {
+            keptAwayNetsAttemptedInPass.add(currentItem.getNetNumber(i));
+          }
+          rememberRipups(currentItem.getNetNumber(i), rippedItemList, passNo);
           if (FRLogger.isTraceEnabled()) {
             logRippedItems(currentItem, i, rippedItemList, rippedItemCosts);
             logTraceRouteComparison(
@@ -216,7 +247,7 @@ final class AutoroutePassRunner {
       long finalBoardStatisticsStart =
           BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
       final BoardStatistics boardStatistics =
-          router.boardUpdatedEventListeners.isEmpty() ? null : router.board.getStatistics();
+          router.hasBoardStatisticsReaders() ? router.board.getStatistics() : null;
       if (BatchAutorouter.isBenchmarkProfileEnabled()) {
         router.profileBoardStatisticsNanos += System.nanoTime() - finalBoardStatisticsStart;
         router.profileIntermediateStatisticsNanos += System.nanoTime() - finalStatisticsStart;
@@ -230,6 +261,10 @@ final class AutoroutePassRunner {
       Set<Integer> currentIncompleteNets = new TreeSet<>();
       routerCounters.incompleteCount =
           router.calculateIncompleteCount(router.board, currentIncompleteNets);
+      if (!router.thread.isStopAutoRouterRequested()) {
+        resolveKeptAwayOutcomes(
+            keptAwayNetsAttemptedInPass, currentIncompleteNets, routerCounters, passNo);
+      }
       router.fireBoardUpdatedEvent(boardStatistics, routerCounters, router.board);
 
       if (this.previousIncompleteCount >= 0
@@ -323,9 +358,186 @@ final class AutoroutePassRunner {
       signalItems.sort(deterministicItemComparator);
     }
 
+    keptAwayNetsLast(signalItems);
     autorouteItemList.clear();
     autorouteItemList.addAll(planeItems);
     autorouteItemList.addAll(signalItems);
+  }
+
+  /**
+   * Moves the items of the priority net classes (router.autorouter.priority_net_classes) ahead of
+   * the other signal items, after the plane items, keeping the order within each group. Nothing
+   * moves on a board without priority classes.
+   */
+  private void priorityItemsFirst(List<Item> autorouteItemList) {
+    List<Item> planeItems = new ArrayList<>();
+    List<Item> priorityItems = new ArrayList<>();
+    List<Item> otherItems = new ArrayList<>();
+    for (Item item : autorouteItemList) {
+      if (router.isPlaneItem(item, router.board)) {
+        planeItems.add(item);
+      } else if (isRoutedFirst(item)) {
+        priorityItems.add(item);
+      } else {
+        otherItems.add(item);
+      }
+    }
+    if (priorityItems.isEmpty()) {
+      return;
+    }
+    autorouteItemList.clear();
+    autorouteItemList.addAll(planeItems);
+    autorouteItemList.addAll(priorityItems);
+    autorouteItemList.addAll(otherItems);
+  }
+
+  private boolean isRoutedFirst(Item item) {
+    for (int i = 0; i < item.netCount(); i++) {
+      Net net = router.board.rules.nets.get(item.getNetNumber(i));
+      if (net != null && net.isRoutedFirst()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Moves the items of nets that the rip-up memory keeps away from other nets to the end of the
+   * pass, keeping the order otherwise: the nets they were moved for route first.
+   */
+  private void keptAwayNetsLast(List<Item> signalItems) {
+    if (router.ripupMemory.activeCount() == 0) {
+      return;
+    }
+    List<Item> keptAway = new ArrayList<>();
+    signalItems.removeIf(
+        item -> {
+          for (int i = 0; i < item.netCount(); i++) {
+            if (router.ripupMemory.isKeptAway(item.getNetNumber(i))) {
+              keptAway.add(item);
+              return true;
+            }
+          }
+          return false;
+        });
+    signalItems.addAll(keptAway);
+  }
+
+  /** Feeds the rip-up memory: which nets this attempt moved aside. */
+  private void rememberRipups(int netNo, SortedSet<Item> rippedItemList, int passNo) {
+    if (!rippedItemList.isEmpty()) {
+      Set<Integer> started = router.ripupMemory.recordRipup(netNo, rippedItemList, passNo);
+      if (!started.isEmpty()) {
+        logDebug(
+            passNo,
+            "net '"
+                + netName(netNo)
+                + "' moved "
+                + netNames(started)
+                + " aside a second time; they will not rip it back.");
+      }
+    }
+  }
+
+  /**
+   * Evaluates the outcome for nets that were kept away from other nets during this pass. Only after
+   * all connections for the net have succeeded in the pass is the relation resolved. When a
+   * kept-away net keeps failing, the relation flips and the other net's copper in the way of the
+   * failed connections is removed, so that the failed net routes first and the other one looks for
+   * another way.
+   */
+  void resolveKeptAwayOutcomes(
+      Set<Integer> keptAwayNetsAttempted,
+      Set<Integer> incompleteNets,
+      RouterCounters routerCounters,
+      int passNo) {
+    if (keptAwayNetsAttempted.isEmpty()) {
+      return;
+    }
+    int itemsRemovedByFlip = 0;
+    for (int netNo : keptAwayNetsAttempted) {
+      Set<Integer> keptAwayFrom = router.ripupMemory.netsNotToRip(netNo);
+      if (keptAwayFrom.isEmpty()) {
+        continue;
+      }
+      boolean routed = !incompleteNets.contains(netNo);
+      for (int keptFromNet : new ArrayList<>(keptAwayFrom)) {
+        RipupMemory.Outcome outcome =
+            router.ripupMemory.recordOutcome(netNo, keptFromNet, routed, passNo);
+        String message =
+            switch (outcome) {
+              case RESOLVED -> "routed without ripping '" + netName(keptFromNet) + "'.";
+              case FLIPPED -> {
+                int ripped = ripInCorridors(keptFromNet, netNo);
+                itemsRemovedByFlip += ripped;
+                yield "failed again without ripping '"
+                    + netName(keptFromNet)
+                    + "'; "
+                    + ripped
+                    + " item(s) of it removed from its way, '"
+                    + netName(keptFromNet)
+                    + "' is now kept away from it.";
+              }
+              case RETIRED ->
+                  "failed again while '"
+                      + netName(keptFromNet)
+                      + "' was kept away; the pair is released.";
+              case NONE -> "failed without ripping '" + netName(keptFromNet) + "'.";
+            };
+        logDebug(passNo, "net '" + netName(netNo) + "' " + message);
+      }
+    }
+    if (itemsRemovedByFlip > 0) {
+      routerCounters.incompleteCount = router.calculateIncompleteCount(router.board);
+    }
+  }
+
+  /**
+   * Removes the unfixed traces and vias of {@code netNo} that lie across the open connections of
+   * {@code failedNetNo}. Returns the number of items removed.
+   */
+  private int ripInCorridors(int netNo, int failedNetNo) {
+    AirLine[] airlines = new DesignRulesChecker(router.board, null).getAllAirlines();
+    Set<Item> inTheWay = new TreeSet<>();
+    for (AirLine airline : airlines) {
+      if (airline == null || airline.net == null || airline.net.netNumber != failedNetNo) {
+        continue;
+      }
+      IntBox corridor = LastMileBlockerRipup.corridor(airline.fromCorner, airline.toCorner);
+      for (SearchTreeObject object : router.board.overlappingObjects(corridor, -1)) {
+        if (object instanceof Item item
+            && item.containsNet(netNo)
+            && LastMileBlockerRipup.isRemovableBlocker(item, failedNetNo)) {
+          inTheWay.add(item);
+        }
+      }
+    }
+    if (!inTheWay.isEmpty()) {
+      router.board.removeItems(new ArrayList<>(inTheWay));
+    }
+    return inTheWay.size();
+  }
+
+  private void logDebug(int passNo, String message) {
+    if (router.job != null) {
+      router.job.logDebug("Pass #" + passNo + ": " + message);
+    }
+  }
+
+  private String netName(int netNo) {
+    Net net = router.board.rules.nets.get(netNo);
+    return net != null ? net.name : "net#" + netNo;
+  }
+
+  private String netNames(Set<Integer> netNumbers) {
+    StringBuilder names = new StringBuilder();
+    for (int netNo : netNumbers) {
+      if (names.length() > 0) {
+        names.append(", ");
+      }
+      names.append('\'').append(netName(netNo)).append('\'');
+    }
+    return names.toString();
   }
 
   void resetAntiOscillationState() {
@@ -453,7 +665,7 @@ final class AutoroutePassRunner {
         long progressStatisticsStart =
             BatchAutorouter.isBenchmarkProfileEnabled() ? System.nanoTime() : 0;
         router.progressStatistics =
-            router.boardUpdatedEventListeners.isEmpty() ? null : router.board.getStatistics(false);
+            router.hasBoardStatisticsReaders() ? router.board.getStatistics(false) : null;
         router.progressItemsSinceStatistics = 0;
         if (BatchAutorouter.isBenchmarkProfileEnabled()) {
           router.profileBoardStatisticsNanos += System.nanoTime() - progressStatisticsStart;

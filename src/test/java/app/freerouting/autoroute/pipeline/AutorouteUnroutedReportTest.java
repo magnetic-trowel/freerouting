@@ -1,10 +1,10 @@
 package app.freerouting.autoroute.pipeline;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Layer;
 import app.freerouting.board.model.structure.LayerStructure;
@@ -76,7 +76,7 @@ class AutorouteUnroutedReportTest {
   }
 
   @Test
-  void foreignTrackAcrossThePourIsReported() {
+  void foreignTrackAcrossThePourIsNoCutOff() {
     board.insertTrace(
         new Point[] {new IntPoint(2000000, 0), new IntPoint(2000000, 4000000)},
         0,
@@ -85,10 +85,15 @@ class AutorouteUnroutedReportTest {
         0,
         FixedState.UNFIXED);
 
-    String report = AutorouteUnroutedReport.planeFillCutOffs(board);
-
-    assertNotNull(report);
-    assertTrue(report.startsWith("1 pin(s) or via(s)"), report);
-    assertTrue(report.contains("Net 'GND'"), report);
+    // The board follows the split fill: the vias are an open connection the router sees and
+    // reports among its unrouted connections, so the cut-off report leaves them out.
+    Via via =
+        board.getItems().stream()
+            .filter(Via.class::isInstance)
+            .map(Via.class::cast)
+            .findFirst()
+            .orElseThrow();
+    assertFalse(via.getUnconnectedSet(gndNet.netNumber).isEmpty());
+    assertNull(AutorouteUnroutedReport.planeFillCutOffs(board));
   }
 }

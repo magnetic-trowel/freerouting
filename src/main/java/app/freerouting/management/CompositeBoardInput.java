@@ -6,6 +6,7 @@ import app.freerouting.core.BoardFileDetails;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.io.FileFormat;
 import app.freerouting.io.kicad.KiCadJsonReader;
+import app.freerouting.io.specctra.DsnReadOptions;
 import app.freerouting.io.specctra.RulesReader;
 import app.freerouting.io.specctra.SesReader;
 import app.freerouting.logger.FRLogger;
@@ -159,9 +160,10 @@ public class CompositeBoardInput {
   }
 
   /**
-   * Assembles the composite inputs into the provided routing job: 1. Loads design data into
-   * job.board and applies the design rules onto it. 2. Merges settings layers (Default -> DSN ->
-   * Rules -> API overrides). 3. Imports initial session (SES or KiCad JSON) if present.
+   * Assembles the composite inputs into the provided routing job: 1. Merges settings layers
+   * (Default -> DSN -> Rules -> API overrides) and resolves the DSN item allocation from them. 2.
+   * Loads design data into job.board and applies the design rules onto it. 3. Imports initial
+   * session (SES or KiCad JSON) if present.
    *
    * @param job Target routing job
    * @throws Exception If design loading or parsing fails
@@ -192,23 +194,11 @@ public class CompositeBoardInput {
     // override the DSN's layer rules and the CLI at API priority.
     final RouterSettings callerSettings =
         job.routerSettings != null ? job.routerSettings.clone() : null;
-    HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
-    boardManager.holdPostLoadProcessing();
-    if (isDsn) {
-      boardManager.loadFromSpecctraDsn(
-          new ByteArrayInputStream(designData), null, new ItemIdGenerator());
-    } else if (isJson) {
-      boardManager.loadFromKiCadJson(
-          new ByteArrayInputStream(designData), null, new ItemIdGenerator());
-    } else {
+    if (!isDsn && !isJson) {
       throw new IllegalArgumentException(
           "Unsupported primary design format: "
               + job.input.format
               + ". Expected DSN or KICAD_DESIGN_JSON.");
-    }
-    job.board = boardManager.getRoutingBoard();
-    if (job.board == null) {
-      throw new IllegalStateException("Failed to create routing board from design data.");
     }
 
     // Settings merging pipeline
@@ -225,6 +215,7 @@ public class CompositeBoardInput {
     // Check for rules data or auto-locate adjacent rules if not directly provided
     byte[] effectiveRulesData = rulesData;
     String effectiveRulesFilename = rulesFilename;
+    final String rulesDesignName = job.name != null ? job.name : "board";
 
     if (effectiveRulesData == null && job.rules != null && job.rules.getData() != null) {
       effectiveRulesData = job.rules.getData().readAllBytes();
@@ -245,17 +236,43 @@ public class CompositeBoardInput {
       if (effectiveRulesFilename != null) {
         job.rules.setFilename(effectiveRulesFilename);
       }
+      // Before the load there is no board yet: the rules file's autoroute settings are read
+      // without it, only to resolve the DSN import.
       settingsMerger.addOrReplaceSources(
-          readRulesOntoBoard(
-              effectiveRulesData,
-              effectiveRulesFilename,
-              job.name != null ? job.name : "board",
-              job.board));
+          readRulesOntoBoard(effectiveRulesData, effectiveRulesFilename, rulesDesignName, null));
     }
 
     // API settings (from caller / job settings overrides)
     if (callerSettings != null) {
       settingsMerger.addOrReplaceSources(new ApiSettings(callerSettings));
+    }
+
+    var importSettings = settingsMerger.merge();
+    var importOptions = DsnReadOptions.forSettings(importSettings);
+    // The board overrides applied during the load read job.routerSettings, so it gets the merged
+    // settings first. The final merge below still takes only what the caller set at API priority.
+    job.routerSettings = importSettings;
+    HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
+    boardManager.holdPostLoadProcessing();
+    if (isDsn) {
+      boardManager.loadFromSpecctraDsn(
+          new ByteArrayInputStream(designData), null, new ItemIdGenerator(), importOptions);
+    } else if (isJson) {
+      boardManager.loadFromKiCadJson(
+          new ByteArrayInputStream(designData), null, new ItemIdGenerator());
+    }
+    job.board = boardManager.getRoutingBoard();
+    if (job.board == null) {
+      throw new IllegalStateException("Failed to create routing board from design data.");
+    }
+
+    // The rules apply onto the board here, and their autoroute settings, now read with the
+    // board's layer structure, merge at RULES-file priority, below the environment, the command
+    // line, the GUI and the API caller.
+    if (effectiveRulesData != null) {
+      settingsMerger.addOrReplaceSources(
+          readRulesOntoBoard(
+              effectiveRulesData, effectiveRulesFilename, rulesDesignName, job.board));
     }
 
     job.routerSettings = settingsMerger.merge();

@@ -55,7 +55,10 @@ public class CliSettings implements SettingsSource {
       } else if (arg.startsWith("-")) {
         // Handle -flag value format
         String flag = arg.substring(1);
-        String value = i + 1 < args.length && !args[i + 1].startsWith("-") ? args[++i] : "";
+        String next = i + 1 < args.length ? args[i + 1] : null;
+        // -mt takes a signed number ("-mt -1"), so a leading '-' is not the next flag there.
+        boolean signedNumber = "mt".equals(flag) && next != null && next.matches("-?\\d+");
+        String value = next != null && (!next.startsWith("-") || signedNumber) ? args[++i] : "";
 
         if ("de".equals(flag)) {
           hasDesignInputArgument = true;
@@ -63,7 +66,22 @@ public class CliSettings implements SettingsSource {
           hasDesignOutputArgument = true;
         }
 
-        if ("oit".equals(flag)) {
+        if ("mp".equals(flag)) {
+          FRLogger.warn(
+              "The '-mp' command-line flag is deprecated; use"
+                  + " '--router.autorouter.max_passes' instead.");
+        } else if ("mt".equals(flag)) {
+          if (isZeroOrNegativeInteger(value)) {
+            FRLogger.warn(
+                "Passing 0 or a negative value to '-mt' to disable the optimizer is deprecated;"
+                    + " use '--router.optimizer.enabled=false' instead.");
+            applyRouterSetting(settings, "router.optimizer.enabled", "false");
+            continue;
+          }
+          FRLogger.warn(
+              "The '-mt' command-line flag is deprecated; use '--router.max_threads'"
+                  + " (or '--router.optimizer.max_threads') instead.");
+        } else if ("oit".equals(flag)) {
           FRLogger.warn(
               "The '-oit' command-line flag is deprecated; use"
                   + " '--router.optimizer.improvement_threshold' instead.");
@@ -72,6 +90,9 @@ public class CliSettings implements SettingsSource {
               "The '-inc' command-line flag is deprecated; use"
                   + " '--router.autorouter.ignore_net_classes' instead.");
         } else if ("is".equals(flag)) {
+          FRLogger.warn(
+              "The '-is' command-line flag is deprecated; use"
+                  + " '--router.optimizer.item_selection_strategy' instead.");
           applyItemSelectionStrategy(settings, value);
           continue;
         } else if ("us".equals(flag) || "hr".equals(flag)) {
@@ -85,13 +106,6 @@ public class CliSettings implements SettingsSource {
           FRLogger.warn(
               "The '-im' command-line flag no longer has any effect: intermediate stages are not"
                   + " saved and routing cannot be resumed from them.");
-          continue;
-        }
-
-        // "-mt 0" disables the optimizer, as it did in v1.9 and as the CLI docs say. Other values
-        // set the thread count through router.max_threads.
-        if ("mt".equals(flag) && isZeroOrNegativeInteger(value)) {
-          applyRouterSetting(settings, "router.optimizer.enabled", "false");
           continue;
         }
 
@@ -164,6 +178,7 @@ public class CliSettings implements SettingsSource {
     return switch (flag) {
       case "mp" -> "router.max_passes";
       case "mt" -> "router.max_threads";
+      case "spl" -> "router.autorouter.stagnation_pass_limit";
       case "inc" -> "router.autorouter.ignore_net_classes";
       case "oit" -> "router.optimizer.improvement_threshold";
       case "router-scoring-version", "optimizer-scoring-version", "scoring-version" -> flag;

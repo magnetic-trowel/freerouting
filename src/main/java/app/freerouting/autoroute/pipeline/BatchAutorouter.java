@@ -81,6 +81,36 @@ public final class BatchAutorouter extends NamedAlgorithm {
   private final AutorouteConnectionRouter connectionRouter;
   private final AutoroutePassRunner passRunner;
   private final AutorouteBatchLoop batchLoop;
+
+  /** Which net ripped which during this stage, so a moved net does not take its space back. */
+  final RipupMemory ripupMemory = new RipupMemory();
+
+  /** Nets of the priority net classes, in net order; null until first asked. */
+  private SortedSet<Integer> routedFirstNets;
+
+  /**
+   * Nets whose traces and vias {@code netNo} may not rip: those the rip-up memory keeps it away
+   * from, and, for a net outside the priority net classes, every net of those classes.
+   */
+  Set<Integer> netsNotToRipFor(int netNo) {
+    if (routedFirstNets == null) {
+      routedFirstNets = new TreeSet<>();
+      for (int i = 1; i <= board.rules.nets.maxNetNumber(); i++) {
+        Net net = board.rules.nets.get(i);
+        if (net != null && net.isRoutedFirst()) {
+          routedFirstNets.add(i);
+        }
+      }
+    }
+    Set<Integer> remembered = ripupMemory.netsNotToRip(netNo);
+    if (routedFirstNets.isEmpty()) {
+      return remembered;
+    }
+    SortedSet<Integer> result = new TreeSet<>(remembered);
+    result.addAll(routedFirstNets);
+    return result;
+  }
+
   protected RoutingJob job;
   int totalItemsRouted;
   boolean fanoutTimedOut;
@@ -99,6 +129,10 @@ public final class BatchAutorouter extends NamedAlgorithm {
 
   long lastBoardUpdateTimestamp;
   boolean isOptimizerAutorouter;
+
+  /** Nets whose open connections this router does not try to route. */
+  Set<Integer> netsLeftUnrouted = Set.of();
+
   long profileItemSelectionNanos;
   long profileIntermediateStatisticsNanos;
   long profileBoardStatisticsNanos;
@@ -125,6 +159,20 @@ public final class BatchAutorouter extends NamedAlgorithm {
 
   public int startNeckedRouted;
   public int startNeckedFailed;
+
+  private BallEscapeOrder ballEscapeOrder;
+  private boolean ballEscapeOrderFound;
+
+  public BallEscapeOrder getBallEscapeOrder() {
+    if (!this.ballEscapeOrderFound) {
+      this.ballEscapeOrder =
+          BallEscapeOrder.of(
+              this.board,
+              this.settings.autorouter != null ? this.settings.autorouter.ballEscapeOrder : null);
+      this.ballEscapeOrderFound = true;
+    }
+    return this.ballEscapeOrder;
+  }
 
   /** Why the last pass loop stopped. Null until the loop records a reason. */
   public StopReason lastStopReason;
@@ -247,6 +295,8 @@ public final class BatchAutorouter extends NamedAlgorithm {
     this.connectionRouter = new AutorouteConnectionRouter(this);
     this.passRunner = new AutoroutePassRunner(this);
     this.batchLoop = new AutorouteBatchLoop(this);
+    BallEscapeOrder.checkMode(
+        this.settings.autorouter != null ? this.settings.autorouter.ballEscapeOrder : null);
   }
 
   static boolean isBenchmarkProfileEnabled() {
@@ -331,8 +381,9 @@ public final class BatchAutorouter extends NamedAlgorithm {
 
   /**
    * Auto-routes ripup passes until the board is completed or the auto-router is stopped by the
-   * user, or if maxPassCount is exceeded. Is currently used in the optimize via batch pass. Returns
-   * the number of passes to complete the board or maxPassCount + 1, if the board is not completed.
+   * user, or if maxPassCount is exceeded. Is currently used in the optimize via batch pass. The
+   * open connections of netsLeftUnrouted are not routed. Returns the number of passes to complete
+   * the board or maxPassCount + 1, if the board is not completed.
    */
   public static int autoroutePassesForOptimizingItem(
       RoutingJob job,
@@ -341,7 +392,8 @@ public final class BatchAutorouter extends NamedAlgorithm {
       int tracePullTightAccuracy,
       boolean withPreferredDirections,
       RoutingBoard updatedRoutingBoard,
-      RouterSettings routerSettings) {
+      RouterSettings routerSettings,
+      Set<Integer> netsLeftUnrouted) {
     BatchAutorouter routerInstance =
         new BatchAutorouter(
             job.thread,
@@ -354,6 +406,7 @@ public final class BatchAutorouter extends NamedAlgorithm {
     routerInstance.job = job;
     routerInstance.isOptimizerAutorouter = true;
     routerInstance.startNecked = false;
+    routerInstance.netsLeftUnrouted = netsLeftUnrouted;
 
     boolean stillUnroutedItems = true;
     int currentPassNo = 1;
@@ -484,6 +537,9 @@ public final class BatchAutorouter extends NamedAlgorithm {
             // Let's go through all nets of this item
             for (int i = 0; i < currentItem.netCount(); i++) {
               int currentNetNumber = currentItem.getNetNumber(i);
+              if (netsLeftUnrouted.contains(currentNetNumber)) {
+                continue;
+              }
               Set<Item> connectedSet = currentItem.getConnectedSet(currentNetNumber);
               for (Item currentConnectedItem : connectedSet) {
                 if (currentConnectedItem.netCount() <= 1) {
@@ -499,7 +555,8 @@ public final class BatchAutorouter extends NamedAlgorithm {
                 boolean isPlane = net != null && net.containsPlane();
                 if (isPlane) {
                   boolean alreadyConnectedToPlane =
-                      connectedSet.stream().anyMatch(ConductionArea.class::isInstance);
+                      connectedSet.stream()
+                          .anyMatch(item -> item instanceof ConductionArea ca && !ca.isFractured());
                   if (alreadyConnectedToPlane) {
                     continue;
                   }
@@ -647,12 +704,7 @@ public final class BatchAutorouter extends NamedAlgorithm {
     board.removeTraceTails(-1, stopConnectionOption);
     long pullTightStart = BENCHMARK_PROFILE_ENABLED ? System.nanoTime() : 0;
     board.optChangedArea(
-        new int[0],
-        null,
-        this.tracePullTightAccuracy,
-        this.traceCosts,
-        this.thread,
-        TIME_LIMIT_TO_PREVENT_ENDLESS_LOOP);
+        new int[0], null, this.tracePullTightAccuracy, this.traceCosts, this.thread);
     if (BENCHMARK_PROFILE_ENABLED) {
       this.profileTailRemovalNanos += System.nanoTime() - tailRemovalStart;
       this.profileOptChangedAreaNanos += System.nanoTime() - pullTightStart;
@@ -672,11 +724,12 @@ public final class BatchAutorouter extends NamedAlgorithm {
 
   /**
    * Routes the copper that foreign tracks cut off from the fill of its pour to the rest of its net
-   * ({@link PlaneFillConnectivity}). The pour polygon connects that copper for the board's
-   * connectivity, so the passes route nothing to it. Each connection runs from a cut-off group to
-   * the net's main group without ripping other connections, and is kept only if its new copper
-   * violates no clearance and the board has fewer cut-off groups afterwards; a connection that cut
-   * off copper of another net elsewhere is undone. Returns the number of connections kept.
+   * ({@link PlaneFillConnectivity}) where the board's connectivity still joins it through the pour
+   * (its plane fracture analysis missed the cut), so the passes route nothing to it. Each
+   * connection runs from a cut-off group to the net's main group without ripping other connections,
+   * and is kept only if its new copper violates no clearance and the board has fewer cut-off groups
+   * afterwards; a connection that cut off copper of another net elsewhere is undone. Returns the
+   * number of connections kept.
    */
   int connectPourCutOffs() {
     int kept = 0;
@@ -744,7 +797,8 @@ public final class BatchAutorouter extends NamedAlgorithm {
    * the start plus 10.
    */
   int pourRepairBudget(int cutOffGroups) {
-    Integer setting = this.settings.autorouter != null ? this.settings.autorouter.pourRepairAttempts : null;
+    Integer setting =
+        this.settings.autorouter != null ? this.settings.autorouter.pourRepairAttempts : null;
     if (setting != null && setting >= 0) {
       return setting;
     }

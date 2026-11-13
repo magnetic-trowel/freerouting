@@ -12,6 +12,7 @@ import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.items.ViaObstacleArea;
+import app.freerouting.board.model.items.WireObstacleArea;
 import app.freerouting.board.model.structure.BoardOutline;
 import app.freerouting.board.model.structure.Components;
 import app.freerouting.board.model.structure.FixedState;
@@ -48,6 +49,7 @@ import java.util.Collection;
 import java.util.ConcurrentModificationException;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Map;
@@ -107,6 +109,11 @@ public class BasicBoard implements Serializable {
 
   private transient NetRoutingLedger routingLedger;
 
+  /** Normal contacts by item, valid while the content version of the item list is unchanged. */
+  private transient Map<Item, Set<Item>> normalContactCache;
+
+  private transient long normalContactCacheVersion;
+
   private transient Set<Integer> normalizeSuppressedNetNos = new HashSet<>();
   private transient int revision;
 
@@ -120,6 +127,7 @@ public class BasicBoard implements Serializable {
   public int preExistingClearanceViolationsCount = 0;
   public transient int unfixableClearanceViolationsCount = 0;
   public transient Set<Integer> ruleBlockedPins;
+  public transient Set<Integer> tolerancePins;
   public transient app.freerouting.drc.ClearanceBaseline clearanceBaseline;
   public transient CompletableFuture<Void> postLoadFuture;
 
@@ -180,6 +188,27 @@ public class BasicBoard implements Serializable {
    * Incomplete-connection counts maintained across inserts and removals. The counts match {@link
    * app.freerouting.drc.DesignRulesChecker#calculateAllIncompletes()}.
    */
+  /**
+   * Returns the normal contacts of {@code item}, computed once until an item of the board changes
+   * (the content version of the item list moves). The walks over connected items ask for the
+   * contacts of the same items again and again; the set returned must not be modified.
+   */
+  public Set<Item> cachedNormalContacts(Item item) {
+    long version = itemList.getContentVersion();
+    if (normalContactCache == null || normalContactCacheVersion != version) {
+      normalContactCache = new IdentityHashMap<>();
+      normalContactCacheVersion = version;
+    }
+    Set<Item> contacts = normalContactCache.get(item);
+    if (contacts == null) {
+      contacts = item.getNormalContacts();
+      if (contacts != null) {
+        normalContactCache.put(item, contacts);
+      }
+    }
+    return contacts;
+  }
+
   public NetRoutingLedger routingLedger() {
     if (routingLedger == null) {
       routingLedger = new NetRoutingLedger(this);
@@ -536,6 +565,58 @@ public class BasicBoard implements Serializable {
   }
 
   /**
+   * Inserts a wire obstacle area into the board, whose geometry is described by a polygonal shape,
+   * which may have holes. Vias are allowed in wire obstacle areas, but traces are prohibited.
+   */
+  public WireObstacleArea insertWireObstacle(
+      Area area, int layer, int clearanceClassIndex, FixedState fixedState) {
+    if (area == null) {
+      FRLogger.warn("BasicBoard.insert_wire_obstacle: area is null");
+      return null;
+    }
+    WireObstacleArea obs =
+        new WireObstacleArea(
+            area, layer, Vector.ZERO, 0, false, clearanceClassIndex, 0, 0, null, fixedState, this);
+    insertItem(obs);
+    return obs;
+  }
+
+  /**
+   * Inserts a wire obstacle belonging to a component into the board. Name is to identify the
+   * corresponding ObstacleArea in the component package.
+   */
+  public WireObstacleArea insertWireObstacle(
+      Area area,
+      int layer,
+      Vector translation,
+      double rotationInDegree,
+      boolean sideChanged,
+      int clearanceClassIndex,
+      int componentId,
+      String name,
+      FixedState fixedState) {
+    if (area == null) {
+      FRLogger.warn("BasicBoard.insert_wire_obstacle: area is null");
+      return null;
+    }
+    WireObstacleArea obs =
+        new WireObstacleArea(
+            area,
+            layer,
+            translation,
+            rotationInDegree,
+            sideChanged,
+            clearanceClassIndex,
+            0,
+            componentId,
+            name,
+            fixedState,
+            this);
+    insertItem(obs);
+    return obs;
+  }
+
+  /**
    * Inserts a component obstacle area into the board , whose geometry is described by a polygonal
    * shape, which may have holes.
    */
@@ -801,6 +882,23 @@ public class BasicBoard implements Serializable {
   /** Returns the list of all conduction areas on the board. */
   public Collection<ConductionArea> getConductionAreas() {
     return getItemRepository().getConductionAreas();
+  }
+
+  /**
+   * Returns the conduction areas among items that are planes on a power layer, the planes a pad of
+   * a plane net drops into through a via. A teardrop or a pour on a signal layer is not one of
+   * them: it is reached like any other item of its net.
+   */
+  public Set<Item> powerLayerPlanes(Collection<Item> items) {
+    Set<Item> result = new TreeSet<>();
+    for (Item item : items) {
+      if (item instanceof ConductionArea area
+          && area.getComponentId() <= 0
+          && !layerStructure.layers[area.getLayer()].isSignal) {
+        result.add(area);
+      }
+    }
+    return result;
   }
 
   /** Returns the list of all pins on the board. */
@@ -1550,7 +1648,7 @@ public class BasicBoard implements Serializable {
     Collection<SearchTreeObject> foundItems = overlappingObjects(pointShape, layer);
     for (SearchTreeObject currentObject : foundItems) {
       if (currentObject instanceof Trace currentTrace) {
-        if (!currentTrace.netsEqual(netNumbers)) {
+        if (!currentTrace.netsEqual(netNumbers) || currentTrace.hasInteriorContacts()) {
           continue;
         }
         if (currentTrace.firstCorner().equals(location)) {
@@ -1575,12 +1673,17 @@ public class BasicBoard implements Serializable {
    * case.
    */
   public boolean removeIfCycle(Trace trace) {
-    if (!trace.isOnTheBoard()) {
+    if (!trace.isOnTheBoard() || trace.isDeletionForbidden()) {
       return false;
     }
     if (!trace.isCycle()) {
       return false;
     }
+    Set<Item> connectionItems = trace.getConnectionItems();
+    if (!connectionItems.contains(trace)) {
+      return false;
+    }
+    keepJunctionVias(connectionItems);
     // Remove tails at the endpoints after removing the cycle,
     // if there was no tail before.
     int currentLayer = trace.getLayer();
@@ -1593,17 +1696,37 @@ public class BasicBoard implements Serializable {
       Trace tail = getTraceTail(endCorners[i], currentLayer, currentNetNumbers);
       tailAtEndpointBefore[i] = tail != null;
     }
-    Set<Item> connectionItems = trace.getConnectionItems();
     this.removeItems(connectionItems);
     for (int i = 0; i < 2; i++) {
       if (!tailAtEndpointBefore[i]) {
         Trace tail = getTraceTail(endCorners[i], currentLayer, currentNetNumbers);
         if (tail != null) {
-          removeItems(tail.getConnectionItems());
+          Set<Item> tailItems = tail.getConnectionItems();
+          keepJunctionVias(tailItems);
+          removeItems(tailItems);
         }
       }
     }
     return true;
+  }
+
+  /**
+   * getConnectionItems also returns the via at a fork that ends the connection. Such a via still
+   * joins the other items it touches (other traces, or a plane its drill passes through): it is
+   * taken out of connectionItems, or removing the connection cuts them off from each other.
+   */
+  private static void keepJunctionVias(Set<Item> connectionItems) {
+    Set<Item> walked = Set.copyOf(connectionItems);
+    connectionItems.removeIf(item -> item instanceof Via via && touchesItemOutside(via, walked));
+  }
+
+  private static boolean touchesItemOutside(Via via, Set<Item> items) {
+    for (Item contact : via.getNormalContacts()) {
+      if (!items.contains(contact)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private BoardItemRepository getItemRepository() {
@@ -1629,6 +1752,17 @@ public class BasicBoard implements Serializable {
 
   private void readObject(ObjectInputStream stream) throws IOException, ClassNotFoundException {
     stream.defaultReadObject();
+    if (this.rules != null && this.rules.getMinHoleToHole() <= 0 && this.communication != null) {
+      this.rules.setMinHoleToHole(
+          (int)
+              Math.round(
+                  250.0
+                      * Math.max(1, this.communication.resolution)
+                      / app.freerouting.board.model.structure.Unit.scale(
+                          1.0,
+                          this.communication.unit,
+                          app.freerouting.board.model.structure.Unit.UM)));
+    }
     // insert the items on the board into the search trees
     searchTreeManager = new SearchTreeManager(this);
     normalizeSuppressedNetNos = new HashSet<>();

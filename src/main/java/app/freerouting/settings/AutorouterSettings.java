@@ -27,6 +27,18 @@ public class AutorouterSettings implements Serializable, Cloneable {
   @Schema(description = "Maximum autorouter passes (0 means unlimited)")
   public Integer maxPasses;
 
+  /**
+   * Number of consecutive passes without score improvement before the autorouter stops. {@code 0}
+   * or negative disables stagnation detection and allows routing to proceed up to {@code
+   * max_passes}.
+   */
+  @SerializedName("stagnation_pass_limit")
+  @Schema(
+      description =
+          "Consecutive passes without score improvement before stopping"
+              + " (0 disables stagnation stop)")
+  public Integer stagnationPassLimit;
+
   /** Maximum items attempted in the autorouter stage. */
   @SerializedName("max_items")
   @Schema(description = "Maximum items attempted in the autorouter stage")
@@ -46,6 +58,22 @@ public class AutorouterSettings implements Serializable, Cloneable {
       description = "Array of exact net class names to skip/ignore during autorouting",
       example = "[\"kicad_default\"]")
   public String[] ignoreNetClasses;
+
+  /**
+   * Net classes routed first: in every pass their connections are routed right after the plane pads
+   * and before the other signal nets, which may not rip them up. Names resolve as for {@code
+   * ignore_net_classes}.
+   */
+  @SerializedName("priority_net_classes")
+  @Schema(
+      description = "Net classes routed first in every pass; other signal nets may not rip them up",
+      example = "[\"ETH_DIFF\", \"ANALOG\"]")
+  public String[] priorityNetClasses;
+
+  /** Via costs of the nets of priority_net_classes; unset: the via costs of every other net. */
+  @SerializedName("priority_via_costs")
+  @Schema(description = "Via costs of the nets of priority_net_classes (unset: via_costs)")
+  public Integer priorityViaCosts;
 
   /**
    * Erik Gavriluk (freerouting.net): whether nets that required necking on earlier connections
@@ -83,7 +111,8 @@ public class AutorouterSettings implements Serializable, Cloneable {
    * start plus 10. {@code 0} disables the repair.
    */
   @SerializedName("pour_repair_attempts")
-  @Schema(description = "Connection attempts at most in the pour cut-off repair (negative: automatic)")
+  @Schema(
+      description = "Connection attempts at most in the pour cut-off repair (negative: automatic)")
   public Integer pourRepairAttempts;
 
   /**
@@ -111,12 +140,78 @@ public class AutorouterSettings implements Serializable, Cloneable {
   @Schema(description = "Extra seed for the autorouter item order")
   public Integer itemOrderSeed;
 
+  /**
+   * Every SMD pad of a net with a plane on a power layer is left out of the fanout and dropped into
+   * its plane by the autorouter, which routes it to the plane first: each pad gets a via of its own
+   * next to it instead of being joined to the nearest pad or via of the net.
+   */
+  @SerializedName("plane_as_priority")
+  @Schema(description = "Plane pads skip the fanout; each drops into its plane through its own via")
+  public Boolean planeAsPriority;
+
+  /**
+   * With plane_as_priority, a plane pad may share the via of a pad of its net already in the plane
+   * when the two pads are at most this far apart edge to edge (no via fits between them). Unset:
+   * 500 µm.
+   */
+  @SerializedName("plane_share_gap_um")
+  @Schema(description = "Plane pads closer than this (edge to edge, µm) may share one via")
+  public Double planeShareGapUm;
+
+  /** Erik Gavriluk (freerouting.net): allows vias directly in SMD component pads of their net. */
+  @SerializedName("via_in_pad")
+  @Schema(description = "Allows vias directly in SMD component pads of their own net")
+  public Boolean viaInPad;
+
+  /**
+   * Erik Gavriluk (freerouting.net): allows vias touching SMD pads of their net with the drill hole
+   * outside.
+   */
+  @SerializedName("via_touching_pad")
+  @Schema(description = "Allows vias touching SMD pads of their own net with drill hole outside")
+  public Boolean viaTouchingPad;
+
+  /**
+   * Erik Gavriluk (freerouting.net): enables centre-of-gravity candidate for pieces with SMD pads.
+   */
+  @SerializedName("via_centre_of_gravity")
+  @Schema(
+      description = "Enables centre-of-gravity via candidate for free pieces containing SMD pads")
+  public Boolean viaCentreOfGravity;
+
+  /** Erik Gavriluk (freerouting.net): extra cost for fanout vias inside own-net pad clearance. */
+  @SerializedName("fanout_via_pad_gap")
+  @Schema(description = "Extra cost for fanout vias placed inside same-net pad clearance")
+  public Double fanoutViaPadGap;
+
+  /**
+   * Erik Gavriluk (freerouting.net): the order the first pass routes the balls of a ball grid part
+   * in: "auto", "off", "outer_first", or "inner_first".
+   */
+  @SerializedName("ball_escape_order")
+  @Schema(
+      description =
+          "Order for routing balls of BGA parts in pass 1"
+              + " ('auto', 'off', 'inner_first', 'outer_first')")
+  public String ballEscapeOrder;
+
+  /**
+   * Erik Gavriluk (freerouting.net): straight exit stubs for fine-pitch IC pins whose clearance
+   * exactly meets design rules.
+   */
+  @SerializedName("exit_stubs")
+  @Schema(description = "Pre-place straight exit stubs for fine-pitch pins with exact clearance")
+  public Boolean exitStubs;
+
   @Override
   public AutorouterSettings clone() {
     try {
       AutorouterSettings copy = (AutorouterSettings) super.clone();
       if (this.ignoreNetClasses != null) {
         copy.ignoreNetClasses = this.ignoreNetClasses.clone();
+      }
+      if (this.priorityNetClasses != null) {
+        copy.priorityNetClasses = this.priorityNetClasses.clone();
       }
       return copy;
     } catch (CloneNotSupportedException e) {

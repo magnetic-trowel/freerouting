@@ -8,7 +8,6 @@ import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
-import app.freerouting.board.model.items.WholeNetConnectivity;
 import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.trace.PolylineTrace;
@@ -30,7 +29,6 @@ import app.freerouting.settings.sources.DefaultSettings;
 import app.freerouting.util.TextManager;
 import app.freerouting.util.gson.GsonProvider;
 import com.google.gson.annotations.SerializedName;
-import java.awt.geom.Rectangle2D;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -38,9 +36,15 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 /** Statistics of a board. */
 public class BoardStatistics implements Serializable {
@@ -152,13 +156,13 @@ public class BoardStatistics implements Serializable {
 
     // Board
     this.board.boundingBox =
-        new Rectangle2D.Float(
+        new BoardStatisticsRectangle(
             (float) bb.ll.x,
             (float) bb.ll.y,
             (float) (bb.ur.x - bb.ll.x),
             (float) (bb.ur.y - bb.ll.y));
     this.board.size =
-        new Rectangle2D.Float(
+        new BoardStatisticsRectangle(
             0,
             0,
             Math.abs((float) board.getBoundingBox().ll.x - (float) board.getBoundingBox().ur.x),
@@ -361,8 +365,7 @@ public class BoardStatistics implements Serializable {
         double maxViolation = 0.0;
         double sumViolation = 0.0;
         for (app.freerouting.drc.ClearanceViolation cv : violationsList) {
-          double shortfall = Math.max(0.0, cv.expectedClearance - cv.actualClearance);
-          double shortfallUm = shortfall * boardUnitToUmFactor;
+          double shortfallUm = shortfallUm(cv, boardUnitToUmFactor);
           minViolation = Math.min(minViolation, shortfallUm);
           maxViolation = Math.max(maxViolation, shortfallUm);
           sumViolation += shortfallUm;
@@ -379,12 +382,16 @@ public class BoardStatistics implements Serializable {
       }
       this.clearanceViolations.preExistingCount = board.preExistingClearanceViolationsCount;
       int unfixable = 0;
+      double fixableViolationUm = 0.0;
       for (app.freerouting.drc.ClearanceViolation cv : violationsList) {
         if (cv.isUnfixable()) {
           unfixable++;
+        } else {
+          fixableViolationUm += shortfallUm(cv, boardUnitToUmFactor);
         }
       }
       this.clearanceViolations.unfixableCount = unfixable;
+      this.clearanceViolations.fixableViolationUm = fixableViolationUm;
       this.clearanceViolations.newOrChangedCount =
           board.clearanceBaseline != null
               ? board.clearanceBaseline.countNewOrChanged(violationsList)
@@ -399,6 +406,7 @@ public class BoardStatistics implements Serializable {
       this.clearanceViolations.newOrChangedCount = 0;
       this.clearanceViolations.routerIntroducedCount = 0;
       this.clearanceViolations.totalViolationUm = 0.0;
+      this.clearanceViolations.fixableViolationUm = 0.0;
       this.clearanceViolations.minViolationUm = 0.0;
       this.clearanceViolations.maxViolationUm = 0.0;
       this.clearanceViolations.avgViolationUm = 0.0;
@@ -410,12 +418,15 @@ public class BoardStatistics implements Serializable {
     }
     this.unit = unit.toString();
     float toUnit = (float) board.communication.boardUnitSize(unit);
-    this.board.boundingBox.setRect(
-        this.board.boundingBox.x * toUnit,
-        this.board.boundingBox.y * toUnit,
-        this.board.boundingBox.width * toUnit,
-        this.board.boundingBox.height * toUnit);
-    this.board.size.setRect(0, 0, this.board.size.width * toUnit, this.board.size.height * toUnit);
+    this.board.boundingBox =
+        new BoardStatisticsRectangle(
+            this.board.boundingBox.x * toUnit,
+            this.board.boundingBox.y * toUnit,
+            this.board.boundingBox.width * toUnit,
+            this.board.boundingBox.height * toUnit);
+    this.board.size =
+        new BoardStatisticsRectangle(
+            0, 0, this.board.size.width * toUnit, this.board.size.height * toUnit);
     this.traces.totalLength *= toUnit;
     // length times (half width + clearance): an area
     this.traces.totalWeightedLength *= toUnit * toUnit;
@@ -429,11 +440,19 @@ public class BoardStatistics implements Serializable {
     int total = 0;
     int escaped = 0;
     int alreadyConnected = 0;
-    WholeNetConnectivity connectivity = new WholeNetConnectivity();
+    // The pins of a net walk the same items: query the contacts of each item, and the connectable
+    // items of each net, once for all pins.
+    Map<Item, Collection<Item>> contacts = new HashMap<>();
+    Map<Integer, Collection<Item>> connectableItems = new HashMap<>();
     for (Pin pin : smdPins) {
       if (pin.netCount() > 0) {
         total++;
-        if (connectivity.isConnectedToWholeNet(pin, pin.getNetNumber(0))) {
+        int netNumber = pin.getNetNumber(0);
+        boolean connected =
+            netNumber > 0
+                ? isConnectedToWholeNet(board, pin, netNumber, contacts, connectableItems)
+                : pin.getUnconnectedSet(netNumber).isEmpty();
+        if (connected) {
           alreadyConnected++;
         }
         if (isPinEscaped(pin)) {
@@ -599,6 +618,40 @@ public class BoardStatistics implements Serializable {
     return statistics;
   }
 
+  /**
+   * Same as {@code pin.getUnconnectedSet(netNumber).isEmpty()} for netNumber {@literal >} 0: the
+   * items reached from pin through normal contacts of the net include every connectable item of the
+   * net. contacts and connectableItems keep what earlier calls queried, the board unchanged.
+   */
+  private static boolean isConnectedToWholeNet(
+      BasicBoard board,
+      Pin pin,
+      int netNumber,
+      Map<Item, Collection<Item>> contacts,
+      Map<Integer, Collection<Item>> connectableItems) {
+    if (!pin.containsNet(netNumber)) {
+      return true;
+    }
+    Set<Item> connected = new TreeSet<>();
+    connected.add(pin);
+    ArrayDeque<Item> toExpand = new ArrayDeque<>();
+    toExpand.push(pin);
+    while (!toExpand.isEmpty()) {
+      Collection<Item> itemContacts =
+          contacts.computeIfAbsent(toExpand.pop(), Item::getNormalContacts);
+      if (itemContacts == null) {
+        continue;
+      }
+      for (Item contact : itemContacts) {
+        if (contact.containsNet(netNumber) && connected.add(contact)) {
+          toExpand.push(contact);
+        }
+      }
+    }
+    return connected.containsAll(
+        connectableItems.computeIfAbsent(netNumber, board::getConnectableItems));
+  }
+
   /** Returns whether a pin has a valid trace or via escape. */
   public static boolean isPinEscaped(Pin pin) {
     java.util.Set<Item> contacts = pin.getNormalContacts();
@@ -616,11 +669,19 @@ public class BoardStatistics implements Serializable {
             }
           }
         }
-      } else if (contact instanceof ConductionArea) {
-        return true;
+      } else if (contact instanceof ConductionArea ca) {
+        if (!ca.isFractured()) {
+          return true;
+        }
       }
     }
     return false;
+  }
+
+  private static double shortfallUm(
+      app.freerouting.drc.ClearanceViolation violation, double boardUnitToUmFactor) {
+    return Math.max(0.0, violation.expectedClearance - violation.actualClearance)
+        * boardUnitToUmFactor;
   }
 
   private static int countOccurrences(String text, String target) {
@@ -662,7 +723,7 @@ public class BoardStatistics implements Serializable {
     float maximumScore = getMaximumScore(scoringSettings);
     float penalties =
         this.connections.incompleteCount * scoringSettings.unroutedNetPenalty
-            + this.clearanceViolations.totalCount * scoringSettings.clearanceViolationPenalty
+            + this.clearanceViolations.fixableCount() * scoringSettings.clearanceViolationPenalty
             + this.bends.totalCount * scoringSettings.bendPenalty;
     // Use the mm-normalised trace length so that the trace-cost term is comparable
     // to the unroutedNetPenalty regardless of the DSN internal coordinate resolution.
@@ -724,14 +785,8 @@ public class BoardStatistics implements Serializable {
         this.connections.incompleteCount != null
             ? Math.max(0, this.connections.incompleteCount)
             : 0;
-    double violationCount =
-        this.clearanceViolations.totalCount != null
-            ? Math.max(0, this.clearanceViolations.totalCount)
-            : 0;
-    double violationDepth =
-        this.clearanceViolations.totalViolationUm != null
-            ? Math.max(0.0, this.clearanceViolations.totalViolationUm)
-            : 0.0;
+    double violationCount = this.clearanceViolations.fixableCount();
+    double violationDepth = this.clearanceViolations.fixableShortfallUm();
     double split =
         Math.min(1.0, Math.max(0.0, valueOrDefault(settings.unroutedFreeFraction, 0.5f)));
     double firstHalfWeight = valueOrDefault(settings.unroutedFirstHalfWeight, 1000.0f / 3.0f);
@@ -889,7 +944,35 @@ public class BoardStatistics implements Serializable {
     return (float) (1000.0 * 1000.0 / (1000.0 + penalty));
   }
 
+  /**
+   * Returns the configured optimizer score without its floor at zero, used to rank optimizer
+   * passes. On dense boards where initial penalty exceeds 1,000, score is negative rather than
+   * clamped at 0.
+   */
+  public float getOptimizerRank(RouterSettings routerSettings) {
+    if (routerSettings != null
+        && routerSettings.optimizerScoring != null
+        && routerSettings.optimizerScoring.version
+            == app.freerouting.settings.OptimizerScoringVersion.V2_LOWER_BOUND) {
+      return (float)
+          v2OptimizerScoreUnbounded(
+              routerSettings.optimizerScoring,
+              this.traces.totalLengthMm != null ? this.traces.totalLengthMm : 0.0,
+              this.vias.totalCount != null ? this.vias.totalCount : 0,
+              this.bends.totalCount != null ? this.bends.totalCount : 0);
+    }
+    return getOptimizerScore(routerSettings);
+  }
+
+  /** Calculates the V2 optimizer score from board-only lower bounds and the given route metrics. */
   private float getV2OptimizerScore(
+      OptimizerScoreSettings settings, double traceLengthMm, int viaCount, int bendCount) {
+    return (float)
+        Math.max(0.0, v2OptimizerScoreUnbounded(settings, traceLengthMm, viaCount, bendCount));
+  }
+
+  /** 1,000 less the V2 optimizer score's penalties; below zero when they outweigh it. */
+  private double v2OptimizerScoreUnbounded(
       OptimizerScoreSettings settings, double traceLengthMm, int viaCount, int bendCount) {
     double difficulty =
         this.difficulty.difficultyD != null ? Math.max(1.0, this.difficulty.difficultyD) : 1.0;
@@ -915,7 +998,7 @@ public class BoardStatistics implements Serializable {
         valueOrDefault(settings.excessBendWeight, 500.0f)
             * Math.max(0.0, actualBendCount - minBendCount)
             / Math.max(difficulty, difficultyFloor);
-    return (float) Math.max(0.0, 1000.0 - lengthPenalty - viaPenalty - bendPenalty);
+    return 1000.0 - lengthPenalty - viaPenalty - bendPenalty;
   }
 
   /**

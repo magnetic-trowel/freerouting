@@ -27,9 +27,12 @@ Below is a comprehensive list of command-line options available in Freerouting, 
     - Specctra board (`.dsn`)
     - Specctra session file (`.ses` - optional)
     - Freerouting design rules file (`.rules` - optional)
+    - KiCad custom design rules file (`.kicad_dru` - optional)
 
-  The DSN file is mandatory, while the SES and RULES files are optional.
+  The DSN file is mandatory, while the SES, RULES and KiCad design rules files are optional.
   They can be provided in any order, separately or combined with the `+` delimiter (e.g. `-de myboard.dsn+myboard.ses+myboard.rules` or `-de myboard.dsn+myboard.rules`). When a `.rules` file is loaded, its design rules, net classes, clearances, via definitions, and `(autoroute_settings ...)` / `(layer_rule ...)` parameters are applied to the board and autorouter configuration. If no rules file is explicitly specified, Freerouting will automatically look for an adjacent `<boardname>.rules` file in the same directory as the DSN file.
+
+  KiCad writes only the clearances of its net classes into a DSN file: the custom rules of the board (`.kicad_dru`) are lost. When a `.kicad_dru` file is explicitly given (e.g. `-de myboard.dsn+myboard.kicad_dru` or `-de myboard.dsn myboard.kicad_dru`), Freerouting translates its minimum clearance rules into clearance classes of the board, as KiCad evaluates them: the last matching rule wins over the net class clearance, conditions on `NetClass`, `NetName`, `Type`, `Pad_Type`, `Reference`, `Parent`, `Pad_Number`, `memberOfFootprint()`, `hasNetclass()` and `isPlated()` are evaluated, and `(layer ...)` clauses are honoured. A part of a condition Freerouting cannot evaluate (for example a geometric function such as `intersectsArea()`) makes the rule apply wherever it may match, so the board is never less strict than KiCad. Every rule, constraint or condition that is not translated (creepage, track widths, ...) is reported as a warning in the log. A `.kicad_dru` file given with `-de` that cannot be read stops a command-line run. Unlike `.rules` files, an adjacent `<boardname>.kicad_dru` file is not loaded automatically unless explicitly passed as an input.
 
 - **`-do [design output file]`**
   Saves the routing results when the routing is finished. The output can be:
@@ -50,15 +53,33 @@ Below is a comprehensive list of command-line options available in Freerouting, 
 
 ### Routing Parameters
 
-- **`-mp [number of passes]`**
+- **`--router.autorouter.max_passes=[number of passes]`**
   Sets the upper limit for the number of autorouter passes to perform. More passes may result in better optimization but will take longer.
 
-- **`-mt [number of threads]`**
-  Sets the thread pool size for route optimization. Same as `--router.max_threads`:
-  - Default: One less than the number of logical processors on the system.
-  - Set to `0` to disable route optimization (same as `--router.optimizer.enabled=false`).
+- **`-mp [number of passes]`** (Deprecated)
+  Legacy shorthand for `--router.autorouter.max_passes`. A warning is logged when it is used.
+
+- **`--router.max_threads=[number of threads]`**
+  Sets the global maximum thread ceiling across all routing stages (fanout, autorouter, and optimizer):
+  - Default: One less than the number of logical processors on the system (`cores - 1`).
+  - Set to `0` to use all available logical processors.
+  - Acts as an upper bound: no individual stage will exceed this limit.
+
+- **`--router.autorouter.max_threads=[number of threads]`**
+  Sets the thread limit specifically for the autorouter stage (bounded by `--router.max_threads`).
+  *Note:* The autorouter currently runs single-threaded; this setting is reserved for future multi-threaded passes.
+
+- **`--router.optimizer.max_threads=[number of threads]`**
+  Sets the thread limit specifically for the optimizer stage (bounded by `--router.max_threads`).
+
+- **`-mt [number of threads]`** (Deprecated)
+  Legacy shorthand for `--router.max_threads`. A warning is logged when it is used:
+  - Setting `0` or less as a legacy shorthand to disable route optimization is deprecated; use `--router.optimizer.enabled=false` instead.
   - Increasing the number may improve performance on multi-core systems.
-  - To set only the optimizer pool, use `--router.optimizer.max_threads`.
+
+- **`--router.autorouter.stagnation_pass_limit=[number of passes]`**
+  Stops the autorouter after this many consecutive passes without score improvement. Default is
+  `10`; `0` (or negative) disables the stagnation stop. `-spl [number of passes]` is a shorthand.
 
 - **`--router.optimizer.enabled=[true|false]`**
   Runs the route optimizer after autorouting. Default is `true`.
@@ -86,11 +107,13 @@ Below is a comprehensive list of command-line options available in Freerouting, 
 
 ### Optimization Strategies
 
-- **`-is [sequential | prioritized]`**
-  Sets the item selection strategy for route optimization. Same as
-  `--router.optimizer.item_selection_strategy=[SEQUENTIAL|PRIORITIZED]`:
+- **`--router.optimizer.item_selection_strategy=[sequential|prioritized]`**
+  Sets the item selection strategy for route optimization:
   - `sequential` (default): Processes items in order.
   - `prioritized`: Selects items based on calculated scores from previous rounds.
+
+- **`-is [sequential | prioritized]`** (Deprecated)
+  Legacy shorthand for `--router.optimizer.item_selection_strategy`. A warning is logged when it is used.
 
 - **`-us [greedy | global | hybrid]`** and **`-hr [m:n]`** (Removed)
   No longer have any effect. The optimizer only uses the global optimal board update strategy.

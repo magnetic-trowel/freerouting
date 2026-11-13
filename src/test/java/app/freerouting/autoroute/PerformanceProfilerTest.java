@@ -15,6 +15,7 @@ import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.DefaultSettings;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -69,7 +70,7 @@ class PerformanceProfilerTest {
 
     int passes =
         BatchAutorouter.autoroutePassesForOptimizingItem(
-            job, 2, settings.getStartRipupCosts(), 500, true, board, settings);
+            job, 2, settings.getStartRipupCosts(), 500, true, board, settings, Set.of());
 
     assertTrue(passes >= 1, "the candidate router ran at least one pass");
     assertEquals(0, PerformanceProfiler.passHistorySize());

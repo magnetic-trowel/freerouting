@@ -324,6 +324,20 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
         counters.fanoutExtraViasCount);
   }
 
+  /**
+   * Hands the final board of the job to the workspace.
+   *
+   * <p>The routing fallback, the end-of-loop restore of the best board and the optimizer may each
+   * replace {@code routingJob.board} with another board instance. Only the optimizer reports its
+   * replacements to the workspace, so without this the workspace would keep, display and save the
+   * board the default configuration routed in place, while the job reports the one it chose.
+   */
+  void showFinalBoard() {
+    if (routingJob.board != null && routingJob.board != sessionPort.routingBoard()) {
+      sessionPort.replaceBoard(new BoardReplacement(generation, routingJob.board));
+    }
+  }
+
   private void handleRoutingStageFinished(BatchAutorouter autorouter) {
     var boardStatistics = routingJob.board.getStatistics();
     this.scoreBeforeOptimization = boardStatistics.getRouterScore(routingJob.routerSettings);
@@ -384,8 +398,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
       Thread.currentThread().interrupt();
     }
 
-    int numThreads =
-        routingJob.routerSettings.maxThreads == null ? 1 : routingJob.routerSettings.maxThreads;
+    int numThreads = routingJob.routerSettings.getOptimizerMaxThreads();
     routingJob.logInfo(
         "Starting optimization on "
             + (numThreads == 1 ? "1 thread" : numThreads + " threads")
@@ -564,7 +577,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
               && (routingJob.routerSettings.autorouter.maxPasses == null
                   || routingJob.routerSettings.autorouter.maxPasses >= 0);
       if (this.routerEnabledForRun) {
-        int threadCount = routingJob.routerSettings.maxThreads;
+        int threadCount = routingJob.routerSettings.getAutorouterMaxThreads();
         routingJob.logInfo(
             "Starting routing of '"
                 + routingJob.name
@@ -625,6 +638,7 @@ public class GuiRoutingJobWorker extends InteractiveActionThread {
             }
           });
       this.pipeline.run();
+      showFinalBoard();
 
       // Save the result to the output field as a Specctra SES file
       if (routingJob.output.format == FileFormat.SES) {

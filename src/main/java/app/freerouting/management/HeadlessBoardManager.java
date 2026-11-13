@@ -30,7 +30,10 @@ import app.freerouting.gui.workspace.WorkspaceSettings;
 import app.freerouting.gui.workspace.session.InteractiveActionThread;
 import app.freerouting.io.BoardReadResult;
 import app.freerouting.io.FileFormat;
+import app.freerouting.io.kicad.KiCadDesignRules;
+import app.freerouting.io.kicad.KiCadDesignRulesTranslator;
 import app.freerouting.io.kicad.KiCadJsonReader;
+import app.freerouting.io.specctra.DsnReadOptions;
 import app.freerouting.io.specctra.DsnReader;
 import app.freerouting.io.specctra.DsnWriter;
 import app.freerouting.io.specctra.SesWriter;
@@ -379,10 +382,113 @@ public class HeadlessBoardManager implements BoardManager {
     applyCopperToEdgeClearanceOverride();
     applyHoleClearanceOverride();
     applyMinTraceWidthOverride();
+    applyHoleToHole();
+    applyExactCopperOverride();
+    applyViaInPadAutoDetection();
     applyPlaneNetsOverride();
     applyPlaneAsObstacleOverride();
     applyClearanceToleranceOverride();
     applyMeanderSettingsOverride();
+  }
+
+  private void applyHoleToHole() {
+    if (this.board == null
+        || this.board.rules == null
+        || this.routingJob == null
+        || this.routingJob.routerSettings == null
+        || this.routingJob.routerSettings.holeToHoleUm == null) {
+      return;
+    }
+    double um = this.routingJob.routerSettings.holeToHoleUm;
+    if (um < 0 || !Double.isFinite(um)) {
+      FRLogger.warn("Ignoring router.hole_to_hole_um because it is negative: " + um);
+      return;
+    }
+    this.board.rules.setMinHoleToHole(
+        (int) Math.floor(this.board.communication.physicalToBoard(um, Unit.UM) + 0.5));
+  }
+
+  private void applyExactCopperOverride() {
+    if (this.board == null
+        || this.board.rules == null
+        || this.routingJob == null
+        || this.routingJob.routerSettings == null
+        || this.routingJob.routerSettings.exactCopper == null) {
+      return;
+    }
+    this.board.rules.setExactCopper(this.routingJob.routerSettings.exactCopper);
+  }
+
+  private void applyViaInPadAutoDetection() {
+    if (this.board == null || this.routingJob == null || this.routingJob.routerSettings == null) {
+      return;
+    }
+    if (this.routingJob.routerSettings.autorouter == null) {
+      this.routingJob.routerSettings.autorouter = new app.freerouting.settings.AutorouterSettings();
+    }
+    Boolean viaInPad = this.routingJob.routerSettings.autorouter.viaInPad;
+    Boolean viaTouchingPad = this.routingJob.routerSettings.autorouter.viaTouchingPad;
+    if (viaInPad == null || viaTouchingPad == null) {
+      boolean inPadDetected = false;
+      boolean touchingDetected = false;
+      for (app.freerouting.board.model.items.Via via : this.board.getVias()) {
+        if (!inPadDetected
+            && app.freerouting.board.actions.ForcedViaInserter.holeInSmdPad(
+                this.board, via.getPadstack(), via.getCenter(), via.netNumbers)) {
+          inPadDetected = true;
+          touchingDetected = true;
+          break;
+        }
+        if (!touchingDetected
+            && app.freerouting.board.actions.ForcedViaInserter.crowdsOwnPad(
+                this.board,
+                via.getPadstack(),
+                via.clearanceClassIndex(),
+                via.getCenter(),
+                via.netNumbers != null && via.netNumbers.length > 0 ? via.netNumbers[0] : 0)) {
+          touchingDetected = true;
+        }
+      }
+      if (viaInPad == null) {
+        if (inPadDetected && !Boolean.FALSE.equals(viaTouchingPad)) {
+          this.routingJob.routerSettings.autorouter.viaInPad = true;
+          if (viaTouchingPad == null) {
+            this.routingJob.routerSettings.autorouter.viaTouchingPad = true;
+          }
+          FRLogger.info("The board's own vias decide: router.autorouter.via_in_pad = true.");
+        } else if (touchingDetected && viaTouchingPad == null) {
+          this.routingJob.routerSettings.autorouter.viaInPad = false;
+          this.routingJob.routerSettings.autorouter.viaTouchingPad = true;
+          FRLogger.info("The board's own vias decide: router.autorouter.via_touching_pad = true.");
+        } else {
+          this.routingJob.routerSettings.autorouter.viaInPad = false;
+        }
+      }
+      if (this.routingJob.routerSettings.autorouter.viaTouchingPad == null) {
+        this.routingJob.routerSettings.autorouter.viaTouchingPad = touchingDetected;
+      }
+    }
+    this.board.rules.setViaInPad(
+        Boolean.TRUE.equals(this.routingJob.routerSettings.autorouter.viaInPad),
+        Boolean.TRUE.equals(this.routingJob.routerSettings.autorouter.viaTouchingPad));
+  }
+
+  /**
+   * Translates the KiCad custom design rules of the job into clearance classes. Runs before the
+   * other clearance overrides, so that they also reach the classes it adds, and after the net class
+   * exclusions, which the split net classes inherit.
+   */
+  private void applyKiCadDesignRules() {
+    KiCadDesignRules designRules = this.routingJob.kicadDesignRules;
+    if (designRules == null || this.board == null) {
+      return;
+    }
+    KiCadDesignRulesTranslator.Result result =
+        KiCadDesignRulesTranslator.apply(this.board, designRules);
+    for (String warning : result.warnings()) {
+      this.routingJob.logWarning("KiCad design rules: " + warning);
+    }
+    this.routingJob.logInfo(KiCadDesignRulesTranslator.summary(result, designRules.sourceName()));
   }
 
   private void applyHoleClearanceOverride() {
@@ -924,6 +1030,15 @@ public class HeadlessBoardManager implements BoardManager {
    */
   public BoardReadResult loadFromSpecctraDsn(
       InputStream inputStream, BoardObservers boardObservers, IdGenerator idGenerator) {
+    return loadFromSpecctraDsn(inputStream, boardObservers, idGenerator, DsnReadOptions.DEFAULT);
+  }
+
+  /** Loads a DSN with allocation options resolved before parsing by job orchestration. */
+  public BoardReadResult loadFromSpecctraDsn(
+      InputStream inputStream,
+      BoardObservers boardObservers,
+      IdGenerator idGenerator,
+      DsnReadOptions options) {
     if (inputStream == null) {
       return new BoardReadResult.IoError(new java.io.IOException("inputStream is null"));
     }
@@ -945,7 +1060,7 @@ public class HeadlessBoardManager implements BoardManager {
                 + "...");
       }
       BoardReadResult dsnResult =
-          DsnReader.readBoard(inputStream, boardObservers, idGenerator, inputFilename);
+          DsnReader.readBoard(inputStream, boardObservers, idGenerator, inputFilename, options);
 
       applyParsedBoardResult(dsnResult, inputFilename, "DSN");
       return dsnResult;
@@ -997,9 +1112,13 @@ public class HeadlessBoardManager implements BoardManager {
       applyFallbackVia();
       this.routingJob.routerSettings.applyBoardSpecificOptimizations(this.board);
       this.routingJob.routerSettings.applyNetClassExclusions(this.board);
+      applyKiCadDesignRules();
       applyCopperToEdgeClearanceOverride();
       applyHoleClearanceOverride();
       applyMinTraceWidthOverride();
+      applyHoleToHole();
+      applyExactCopperOverride();
+      applyViaInPadAutoDetection();
       applyPlaneNetsOverride();
       applyPlaneAsObstacleOverride();
       applyClearanceToleranceOverride();
@@ -1130,6 +1249,10 @@ public class HeadlessBoardManager implements BoardManager {
               + " netless pad(s) overlapping a netted pad take that pad's net"
               + (tiePads[0] > 0 ? " (" + tiePads[0] + " tie pad(s) carry several nets)" : "")
               + ".");
+    }
+    int netTieClusters = this.board.clusterNetTies();
+    if (netTieClusters > 0) {
+      FRLogger.info(netTieClusters + " multi-pin net-tie cluster(s) identified and indexed.");
     }
     validatePowerPlanes();
     validateBoardDesignErrors();

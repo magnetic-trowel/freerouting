@@ -97,6 +97,15 @@ public final class WholeNetConnectivity {
         }
       }
     }
+    for (Item member : reached) {
+      if (member instanceof ConductionArea area && area.isFractured()) {
+        // A plane cut apart by foreign copper joins only the items of the same fragment
+        // (ConductionArea.getConnectedSetRecu), which its normal contacts do not tell.
+        Set<Item> own = Collections.unmodifiableSet(start.getConnectedSet(netNumber));
+        connectedSets.put(start, own);
+        return own;
+      }
+    }
     Set<Item> result = Collections.unmodifiableSet(reached);
     if (isSymmetric(contactsOf)) {
       for (Item member : reached) {

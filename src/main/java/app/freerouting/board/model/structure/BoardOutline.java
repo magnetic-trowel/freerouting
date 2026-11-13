@@ -16,6 +16,7 @@ import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntPoint;
 import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Point;
+import app.freerouting.geometry.planar.Polyline;
 import app.freerouting.geometry.planar.PolylineArea;
 import app.freerouting.geometry.planar.PolylineShape;
 import app.freerouting.geometry.planar.Shape;
@@ -26,32 +27,22 @@ import app.freerouting.util.TextManager;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
 /** Class describing a board outline. */
 public class BoardOutline extends Item implements Serializable {
 
-  // Pinned to the value before edgePieces was added; board hashes serialize the item list.
-  @java.io.Serial private static final long serialVersionUID = -1133130106310414855L;
+  private static final int HALF_WIDTH = 100;
 
   /**
-   * The largest distance, in mm, by which the bounding octagon of an outline edge piece may extend
-   * beyond the piece.
+   * Upper bound of the slices of one outline line. It keeps a long outline line from filling the
+   * search trees: past it, the bounding octagons of the slices exceed the line by more than the
+   * tolerance, each by about 1/256 of the excess of the whole line.
    */
-  private static final double MAX_OCTAGON_OVERSHOOT_MM = 0.05;
-
-  /** The most pieces one outline edge is cut into. */
-  private static final int MAX_PIECES_PER_EDGE = 4096;
-
-  /** Cached result of {@link #edgePieces()}. */
-  private transient Line[][] edgePieces;
-
-  private static final int HALF_WIDTH = 100;
+  private static final int MAX_LINE_SLICES = 256;
 
   /** The board shapes inside the outline curves. */
   private PolylineShape[] shapes;
@@ -69,6 +60,22 @@ public class BoardOutline extends Item implements Serializable {
 
   private boolean keepoutOutsideOutline;
 
+  /**
+   * Convex pieces of the keepout area, cut finer where an oblique outline edge would make their
+   * bounding octagon reach into the board. Derived from keepoutArea, rebuilt on demand.
+   */
+  private transient TileShape[] keepoutTiles;
+
+  /** Number of slices per outline line, in the order of {@link #lineShape}. Rebuilt on demand. */
+  private transient int[] lineSlices;
+
+  /**
+   * The tolerance keepoutTiles and lineSlices were cut with, 0 before they are cut. Kept with them
+   * so that both caches use the same value and a later change of the trace widths can be detected
+   * (see {@link #updateSlicesToTraceWidths}).
+   */
+  private transient int sliceTolerance;
+
   /** Creates a new instance of BoardOutline. */
   public BoardOutline(PolylineShape[] shapes, int clearanceClassIndex, int id, BasicBoard board) {
     super(new int[0], clearanceClassIndex, id, 0, FixedState.SYSTEM_FIXED, board);
@@ -79,7 +86,7 @@ public class BoardOutline extends Item implements Serializable {
   public int tileShapeCount() {
     int result;
     if (this.keepoutOutsideOutline) {
-      TileShape[] tileShapes = this.getKeepoutArea().splitToConvex();
+      TileShape[] tileShapes = this.getKeepoutTiles();
       if (tileShapes == null) {
         // an error occurred while dividing the area
         result = 0;
@@ -87,85 +94,9 @@ public class BoardOutline extends Item implements Serializable {
         result = tileShapes.length * this.board.layerStructure.layers.length;
       }
     } else {
-      result = this.edgePieces().length * this.board.layerStructure.layers.length;
+      result = this.lineSliceCount() * this.board.layerStructure.layers.length;
     }
     return result;
-  }
-
-  /**
-   * The outline edges as the line triples whose offset shapes are the keepout strips of the
-   * outline: [start cut, edge, end cut]. An edge at a multiple of 45 degrees is one piece bounded
-   * by its neighbouring border lines. Any other edge is cut by lines perpendicular to it into
-   * pieces short enough that the bounding octagon of each piece's strip, which is what the
-   * 45-degree autoroute tree stores, extends at most {@link #MAX_OCTAGON_OVERSHOOT_MM} beyond the
-   * strip. The octagon of a whole edge at such an angle covers a wedge of the board, and pins in
-   * that wedge cannot be reached by the maze search.
-   */
-  public Line[][] edgePieces() {
-    if (this.edgePieces == null) {
-      this.edgePieces = calculateEdgePieces();
-    }
-    return this.edgePieces;
-  }
-
-  private Line[][] calculateEdgePieces() {
-    double maxOvershoot =
-        this.board != null && this.board.communication != null
-            ? this.board.communication.physicalToBoard(MAX_OCTAGON_OVERSHOOT_MM, Unit.MM)
-            : 0;
-    // The 90-degree autoroute tree stores bounding boxes instead of octagons.
-    boolean boxes =
-        this.board != null
-            && this.board.rules != null
-            && this.board.rules.getTraceAngleRestriction() == AngleRestriction.NINETY_DEGREE;
-    List<Line[]> result = new ArrayList<>();
-    for (PolylineShape shape : this.shapes) {
-      int lineCount = shape.borderLineCount();
-      for (int i = 0; i < lineCount; i++) {
-        Line previous = shape.borderLine((i + lineCount - 1) % lineCount);
-        Line edge = shape.borderLine(i);
-        Line next = shape.borderLine((i + 1) % lineCount);
-        FloatPoint from = previous.intersectionApprox(edge);
-        FloatPoint to = edge.intersectionApprox(next);
-        int pieceCount = pieceCount(from, to, maxOvershoot, boxes);
-        Line start = previous;
-        for (int piece = 1; piece < pieceCount; piece++) {
-          double t = piece / (double) pieceCount;
-          IntPoint cutPoint =
-              new FloatPoint(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t).round();
-          Line cut = new Line(cutPoint, edge.direction().turn45Degree(2));
-          result.add(new Line[] {start, edge, cut});
-          start = cut;
-        }
-        result.add(new Line[] {start, edge, next});
-      }
-    }
-    return result.toArray(new Line[0][]);
-  }
-
-  /**
-   * The number of pieces for an edge from {@code from} to {@code to}. The bounding octagon of a
-   * segment of length l at angle a to the nearest axis extends l * sin(a) * (cos(a) - sin(a))
-   * beyond it, which is 0 at multiples of 45 degrees; its bounding box extends l * sin(a) * cos(a).
-   */
-  private static int pieceCount(
-      FloatPoint from, FloatPoint to, double maxOvershoot, boolean boxes) {
-    if (from == null || to == null || !(maxOvershoot > 0)) {
-      return 1;
-    }
-    double dx = Math.abs(to.x - from.x);
-    double dy = Math.abs(to.y - from.y);
-    double length = Math.hypot(dx, dy);
-    if (!(length > 0) || !Double.isFinite(length)) {
-      return 1;
-    }
-    double cos = Math.max(dx, dy) / length;
-    double sin = Math.min(dx, dy) / length;
-    double overshoot = length * sin * (boxes ? cos : cos - sin);
-    if (overshoot <= maxOvershoot) {
-      return 1;
-    }
-    return (int) Math.min(MAX_PIECES_PER_EDGE, Math.ceil(overshoot / maxOvershoot));
   }
 
   @Override
@@ -396,7 +327,9 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = keepoutArea.translateBy(vector);
     }
     keepoutLines = null;
-    edgePieces = null;
+    keepoutTiles = null;
+    lineSlices = null;
+    sliceTolerance = 0;
     invalidateEdgePinNets();
   }
 
@@ -411,7 +344,9 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = keepoutArea.turn90Degree(factor, pole);
     }
     keepoutLines = null;
-    edgePieces = null;
+    keepoutTiles = null;
+    lineSlices = null;
+    sliceTolerance = 0;
     invalidateEdgePinNets();
   }
 
@@ -427,7 +362,9 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = keepoutArea.rotateApprox(angle, pole);
     }
     keepoutLines = null;
-    edgePieces = null;
+    keepoutTiles = null;
+    lineSlices = null;
+    sliceTolerance = 0;
     invalidateEdgePinNets();
   }
 
@@ -442,7 +379,9 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = keepoutArea.mirrorVertical(pole);
     }
     keepoutLines = null;
-    edgePieces = null;
+    keepoutTiles = null;
+    lineSlices = null;
+    sliceTolerance = 0;
     invalidateEdgePinNets();
   }
 
@@ -478,6 +417,26 @@ public class BoardOutline extends Item implements Serializable {
       keepoutArea = new PolylineArea(this.board.boundingBox, holeArr);
     }
     return this.keepoutArea;
+  }
+
+  /**
+   * Returns the convex pieces of the keepout area that go into the search trees. The 45-degree and
+   * 90-degree trees store each piece as its bounding octagon or box. Next to an outline edge that
+   * is neither orthogonal nor diagonal, the bounding octagon of a large piece reaches far into the
+   * board, and pads near that edge end up inside the keepout. Pieces whose bounding octagon exceeds
+   * them by more than the smallest trace half width are therefore cut into smaller pieces, up to
+   * the depth limit of {@link TileShape#splitToTightOctagons}. The union of the pieces is still the
+   * keepout area, so nothing outside the board becomes routable.
+   */
+  public TileShape[] getKeepoutTiles() {
+    if (this.keepoutTiles == null) {
+      TileShape[] convexShapes = this.getKeepoutArea().splitToConvex();
+      if (convexShapes == null) {
+        return null;
+      }
+      this.keepoutTiles = TileShape.splitToTightOctagons(convexShapes, this.sliceTolerance());
+    }
+    return this.keepoutTiles;
   }
 
   TileShape[] getKeepoutLines() {
@@ -539,6 +498,95 @@ public class BoardOutline extends Item implements Serializable {
     int result = 0;
     for (PolylineShape currentShape : this.shapes) {
       result += currentShape.borderLineCount();
+    }
+    return result;
+  }
+
+  /**
+   * Returns the shape of the outline line with the given index, counted over all outline polygons,
+   * widened by halfWidth on both sides and cut by its neighbouring lines.
+   */
+  public TileShape lineShape(int lineIndex, int halfWidth) {
+    int index = lineIndex;
+    for (PolylineShape currentShape : this.shapes) {
+      int borderLineCount = currentShape.borderLineCount();
+      if (index < borderLineCount) {
+        Line[] lines = {
+          currentShape.borderLine((index + borderLineCount - 1) % borderLineCount),
+          currentShape.borderLine(index),
+          currentShape.borderLine((index + 1) % borderLineCount)
+        };
+        return new Polyline(lines).offsetShape(halfWidth, 0);
+      }
+      index -= borderLineCount;
+    }
+    throw new IndexOutOfBoundsException("outline line " + lineIndex);
+  }
+
+  /**
+   * Returns in how many slices the outline line with the given index goes into the search trees. An
+   * oblique line is cut so that the bounding octagon of each slice exceeds it by at most the
+   * smallest trace half width (see {@link #getKeepoutTiles}), within {@link #MAX_LINE_SLICES}. The
+   * count does not depend on the layer, so that {@link #shapeLayer} stays valid.
+   */
+  public int lineSlices(int lineIndex) {
+    if (this.lineSlices == null) {
+      int[] slices = new int[this.lineCount()];
+      double tolerance = this.sliceTolerance();
+      for (int i = 0; i < slices.length; i++) {
+        double excess = this.lineShape(i, HALF_WIDTH).boundingOctagonExcess();
+        slices[i] = (int) Math.min(MAX_LINE_SLICES, Math.max(1, Math.ceil(excess / tolerance)));
+      }
+      this.lineSlices = slices;
+    }
+    return this.lineSlices[lineIndex];
+  }
+
+  /** The tolerance of the current slices, chosen from the trace widths when they are first cut. */
+  private int sliceTolerance() {
+    if (this.sliceTolerance == 0) {
+      this.sliceTolerance = currentSliceTolerance();
+    }
+    return this.sliceTolerance;
+  }
+
+  private int currentSliceTolerance() {
+    return Math.max(HALF_WIDTH, this.board.rules.getMinNetClassTraceHalfWidth());
+  }
+
+  /**
+   * Cuts the tree shapes of this outline again if the smallest trace half width of the board, net
+   * classes included, changed since they were cut, and reinserts the outline into the search trees.
+   * The outline is inserted before the net classes are read, and a rules file read after the board
+   * or a trace width set in the GUI can lower that width too; the slices cut for the former width
+   * would then let their bounding octagons reach further into the board than a trace of the new
+   * width can pass. The slice count may not change while the outline is in the trees, since {@link
+   * #shapeLayer} derives the layer of a tree shape from it.
+   */
+  public void updateSlicesToTraceWidths() {
+    if (this.sliceTolerance == 0 || this.sliceTolerance == currentSliceTolerance()) {
+      return;
+    }
+    boolean inTrees = this.isOnTheBoard() && this.board.searchTreeManager != null;
+    if (inTrees) {
+      this.board.additionalUpdateAfterChange(this);
+      this.board.searchTreeManager.remove(this);
+    }
+    this.keepoutTiles = null;
+    this.lineSlices = null;
+    this.sliceTolerance = 0;
+    this.clearDerivedData();
+    if (inTrees) {
+      this.board.searchTreeManager.insert(this);
+      this.board.additionalUpdateAfterChange(this);
+    }
+  }
+
+  /** Returns the number of line slices of all outline polygons on one layer. */
+  public int lineSliceCount() {
+    int result = 0;
+    for (int i = 0; i < this.lineCount(); i++) {
+      result += this.lineSlices(i);
     }
     return result;
   }

@@ -14,9 +14,10 @@ public class BoardStatisticsConnections implements Serializable {
   public Integer incompleteCount;
 
   /**
-   * Groups of copper that a pour polygon connects to their net although foreign copper cuts them
-   * off from the pour's fill ({@code drc.PlaneFillConnectivity}); each is one open connection. Set
-   * only in result statistics ({@link BoardStatistics#ofResult}), null otherwise.
+   * Groups of copper that the board connects to their net through a pour although foreign copper
+   * cuts them off from the pour's fill ({@code drc.PlaneFillConnectivity}); each is one open
+   * connection, which the board itself does not count. Set only in result statistics ({@link
+   * BoardStatistics#ofResult}), null otherwise.
    */
   @SerializedName("pour_cut_off_count")
   public Integer pourCutOffCount;

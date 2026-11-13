@@ -1,5 +1,6 @@
 package app.freerouting.board.model.items;
 
+import app.freerouting.autoroute.plane.FastPlaneConnectivityGrid;
 import app.freerouting.board.actions.ItemInfoPrinter;
 import app.freerouting.board.actions.ItemSelectionFilter;
 import app.freerouting.board.facade.BasicBoard;
@@ -7,12 +8,12 @@ import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.board.searchtree.ShapeSearchTree;
-import app.freerouting.drc.DesignRulesChecker;
+import app.freerouting.datastructures.ShapeTree.TreeEntry;
 import app.freerouting.geometry.planar.Area;
-import app.freerouting.geometry.planar.AwtAreas;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntPoint;
+import app.freerouting.geometry.planar.PlanarArea;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.geometry.planar.Shape;
 import app.freerouting.geometry.planar.TileShape;
@@ -21,8 +22,11 @@ import app.freerouting.logger.FRLogger;
 import app.freerouting.util.TextManager;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -45,14 +49,21 @@ public class ConductionArea extends ObstacleArea implements Connectable {
   }
 
   private transient int cachedBoardRevision = -1;
-  private transient java.awt.geom.Area cachedBoardFillArea;
+  private transient PlanarArea cachedBoardFillArea;
+  private transient int cachedFractureRevision = -1;
+  private transient long cachedNetAssignmentStamp = -1;
+  private transient FastPlaneConnectivityGrid.PlaneFractureResult cachedFractureResult;
 
   private transient int cachedIslandsRevision = -1;
-  private transient List<java.awt.geom.Area> cachedFillIslands;
-  private transient List<java.awt.geom.Rectangle2D> cachedFillIslandBounds;
+  private transient List<PlanarArea> cachedFillIslands;
+  // the bounds of each island as {minX, minY, width, height} ({@link PlanarArea#getBoundingBox})
+  private transient List<double[]> cachedFillIslandBounds;
   private transient app.freerouting.drc.IslandIndex cachedFillIslandIndex;
   // the island found at each point asked about since the islands were computed (-1: none)
-  private transient java.util.Map<java.awt.geom.Point2D.Double, Integer> cachedIslandAtPoint;
+  private transient Map<PointKey, Integer> cachedIslandAtPoint;
+
+  /** A point looked up in the fill islands. */
+  private record PointKey(double x, double y) {}
 
   /** Creates a new instance of ConductionArea. */
   public ConductionArea(
@@ -95,6 +106,9 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     this.cachedFillIslandBounds = null;
     this.cachedFillIslandIndex = null;
     this.cachedIslandAtPoint = null;
+    this.cachedFractureRevision = -1;
+    this.cachedNetAssignmentStamp = -1;
+    this.cachedFractureResult = null;
   }
 
   /** Pre-computes detailed plane-fill geometry off the EDT so zoom-in paints stay responsive. */
@@ -126,7 +140,7 @@ public class ConductionArea extends ObstacleArea implements Connectable {
    * smaller one (a teardrop, or a local zone on a plane) has no copper left. Computed on every
    * call.
    */
-  public java.awt.geom.Area getConnectingFill() {
+  public PlanarArea getConnectingFill() {
     return computeFill(maxClearanceLookup(), this.getLayer(), false);
   }
 
@@ -185,10 +199,10 @@ public class ConductionArea extends ObstacleArea implements Connectable {
             ? this.board.revisionIgnoringTracesOf(this.getNetNumber(0))
             : this.board.getRevision();
     if (cachedFillIslands == null || cachedIslandsRevision != fillRevision) {
-      cachedFillIslands = DesignRulesChecker.decomposeAreaIntoIslands(getConnectingFill());
+      cachedFillIslands = getConnectingFill().decomposeIntoIslands();
       cachedFillIslandBounds = new ArrayList<>(cachedFillIslands.size());
-      for (java.awt.geom.Area island : cachedFillIslands) {
-        cachedFillIslandBounds.add(island.getBounds2D());
+      for (PlanarArea island : cachedFillIslands) {
+        cachedFillIslandBounds.add(island.getBoundingBox());
       }
       cachedFillIslandIndex = new app.freerouting.drc.IslandIndex(cachedFillIslandBounds);
       cachedIslandAtPoint = new java.util.HashMap<>();
@@ -198,7 +212,7 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     // A point test on a fill island runs over all of its edges, thousands on a pour with many
     // holes, and the fill-cycle search asks about the same pads, vias and trace ends again and
     // again while the fill is unchanged: remember the answer per point.
-    java.awt.geom.Point2D.Double key = new java.awt.geom.Point2D.Double(floatPoint.x, floatPoint.y);
+    PointKey key = new PointKey(floatPoint.x, floatPoint.y);
     Integer known = cachedIslandAtPoint.get(key);
     if (known != null) {
       if (known >= 0) {
@@ -210,7 +224,8 @@ public class ConductionArea extends ObstacleArea implements Connectable {
     // the islands whose bounds contain the point, in ascending order: the first one that contains
     // it is the one a scan of all islands finds, since the islands do not overlap
     for (int i : cachedFillIslandIndex.candidates(floatPoint.x, floatPoint.y)) {
-      if (cachedFillIslandBounds.get(i).contains(floatPoint.x, floatPoint.y)
+      if (app.freerouting.drc.IslandIndex.boundsContain(
+              cachedFillIslandBounds.get(i), floatPoint.x, floatPoint.y)
           && cachedFillIslands.get(i).contains(floatPoint.x, floatPoint.y)) {
         found = i;
         break; // the islands do not overlap
@@ -226,7 +241,7 @@ public class ConductionArea extends ObstacleArea implements Connectable {
    * Returns the detailed fill geometry for this conduction area, computing clearances against all
    * overlapping items if needed.
    */
-  public java.awt.geom.Area getDetailedFillArea() {
+  public PlanarArea getDetailedFillArea() {
     warmDetailedFillCache();
     return cachedBoardFillArea;
   }
@@ -237,7 +252,7 @@ public class ConductionArea extends ObstacleArea implements Connectable {
    * <p>The cache remains owned by the conduction-area model because it depends on board revision
    * and clearance geometry. The renderer owns the AWT paint operation that consumes this geometry.
    */
-  public java.awt.geom.Area getDetailedFillArea(double maxClearanceLookupBoard, int layerIndex) {
+  public PlanarArea getDetailedFillArea(double maxClearanceLookupBoard, int layerIndex) {
     ensureDetailedFillCache(maxClearanceLookupBoard, layerIndex);
     return cachedBoardFillArea;
   }
@@ -255,25 +270,26 @@ public class ConductionArea extends ObstacleArea implements Connectable {
    * Computes the fill on {@code layerIndex}: as drawn ({@link #getDetailedFillArea()}), or as it
    * connects ({@link #getConnectingFill()}), without clearances to other pours.
    */
-  private java.awt.geom.Area computeFill(
-      double maxClearanceLookupBoard, int layerIndex, boolean asDrawn) {
-    java.awt.geom.Area fillArea = getAwtAreaInBoardUnits(this.getArea());
+  private PlanarArea computeFill(double maxClearanceLookupBoard, int layerIndex, boolean asDrawn) {
+    PlanarArea fillArea = PlanarArea.fromArea(this.getArea());
     if (fillArea == null) {
-      fillArea = new java.awt.geom.Area();
+      fillArea = PlanarArea.empty();
     }
     // Pours are filled only on the board. Zone outlines may extend past the board edge (KiCad
     // exports them that way); unclipped, the part outside the edge becomes an off-board frame.
     var outline = this.board.getOutline();
     if (!fillArea.isEmpty() && outline != null && outline.shapeCount() > 0) {
-      java.awt.geom.Area boardArea = new java.awt.geom.Area();
+      PlanarArea boardArea = PlanarArea.empty();
       for (int i = 0; i < outline.shapeCount(); i++) {
-        java.awt.geom.Area outlinePiece = getAwtAreaFromShapeInBoardUnits(outline.getShape(i));
-        if (outlinePiece != null) {
-          boardArea.exclusiveOr(outlinePiece);
+        PlanarArea outlinePiece = PlanarArea.fromShape(outline.getShape(i));
+        if (outlinePiece != null && !outlinePiece.isEmpty()) {
+          // exclusive or: an outline piece inside another one is a cutout of the board
+          boardArea =
+              boardArea.union(outlinePiece).difference(boardArea.intersection(outlinePiece));
         }
       }
       if (!boardArea.isEmpty()) {
-        fillArea.intersect(boardArea);
+        fillArea = fillArea.intersection(boardArea);
       }
     }
     if (!fillArea.isEmpty()) {
@@ -285,9 +301,8 @@ public class ConductionArea extends ObstacleArea implements Connectable {
               new IntPoint(bbox.ll.x - maxCl, bbox.ll.y - maxCl),
               new IntPoint(bbox.ur.x + maxCl, bbox.ur.y + maxCl));
 
-      java.util.List<java.awt.geom.Area> foreignClearances = new java.util.ArrayList<>();
-      java.util.List<java.awt.geom.Area> sameNetClearances = new java.util.ArrayList<>();
-      java.util.List<java.awt.geom.Area> sameNetSpokesList = new java.util.ArrayList<>();
+      List<PlanarArea> foreignClearances = new ArrayList<>();
+      List<PlanarArea> sameNetClearances = new ArrayList<>();
 
       Set<SearchTreeObject> overlaps = this.board.overlappingObjects(inflatedBbox, layerIndex);
       for (SearchTreeObject ob : overlaps) {
@@ -322,8 +337,8 @@ public class ConductionArea extends ObstacleArea implements Connectable {
             }
 
             Shape enlargedShape = shape.enlarge(clearanceDist);
-            java.awt.geom.Area clearanceAwt = getAwtAreaFromShapeInBoardUnits(enlargedShape);
-            if (clearanceAwt == null) {
+            PlanarArea clearanceArea = PlanarArea.fromShape(enlargedShape);
+            if (clearanceArea == null || clearanceArea.isEmpty()) {
               continue;
             }
 
@@ -334,38 +349,30 @@ public class ConductionArea extends ObstacleArea implements Connectable {
                 Math.max(Math.abs(itemBbox.ll.x - center.x), Math.abs(itemBbox.ur.x - center.x));
             double reachY =
                 Math.max(Math.abs(itemBbox.ll.y - center.y), Math.abs(itemBbox.ur.y - center.y));
-            double expansionRadiusBoard = Math.hypot(reachX, reachY) + clearanceDist + 1;
+            double expansionRadiusBoard = Math.hypot(reachX, reachY) + clearanceDist + spokeWidth;
+            double spokeLength = 2 * expansionRadiusBoard;
 
-            double halfSpoke = spokeWidth / 2.0;
-            java.awt.geom.Rectangle2D.Double baseSpoke =
-                new java.awt.geom.Rectangle2D.Double(
-                    center.x - halfSpoke,
-                    center.y - expansionRadiusBoard,
-                    spokeWidth,
-                    2 * expansionRadiusBoard);
+            PlanarArea spoke1 =
+                PlanarArea.createRotatedSpoke(
+                    center.x, center.y, spokeWidth, spokeLength, Math.PI / 4.0);
+            PlanarArea spoke2 =
+                PlanarArea.createRotatedSpoke(
+                    center.x, center.y, spokeWidth, spokeLength, -Math.PI / 4.0);
+            PlanarArea spokes = spoke1.union(spoke2);
 
-            java.awt.geom.AffineTransform rotP45 =
-                java.awt.geom.AffineTransform.getRotateInstance(Math.PI / 4.0, center.x, center.y);
-            java.awt.geom.AffineTransform rotM45 =
-                java.awt.geom.AffineTransform.getRotateInstance(-Math.PI / 4.0, center.x, center.y);
-
-            java.awt.geom.Area spokes =
-                new java.awt.geom.Area(rotP45.createTransformedShape(baseSpoke));
-            spokes.add(new java.awt.geom.Area(rotM45.createTransformedShape(baseSpoke)));
-
-            spokes.intersect(clearanceAwt);
-
-            sameNetClearances.add(clearanceAwt);
-            sameNetSpokesList.add(spokes);
+            PlanarArea thermalCutout = clearanceArea.difference(spokes);
+            if (!thermalCutout.isEmpty()) {
+              sameNetClearances.add(thermalCutout);
+            }
           }
         } else {
           if (currentItem instanceof DrillItem drillItem) {
             Shape shape = drillItem.getShapeOnLayer(layerIndex);
             if (shape != null) {
               Shape enlargedShape = shape.enlarge(clearanceDist);
-              java.awt.geom.Area clearanceAwt = getAwtAreaFromShapeInBoardUnits(enlargedShape);
-              if (clearanceAwt != null) {
-                foreignClearances.add(clearanceAwt);
+              PlanarArea clearanceArea = PlanarArea.fromShape(enlargedShape);
+              if (clearanceArea != null && !clearanceArea.isEmpty()) {
+                foreignClearances.add(clearanceArea);
               }
             }
           } else {
@@ -375,9 +382,9 @@ public class ConductionArea extends ObstacleArea implements Connectable {
                 TileShape tileShape = currentItem.getTileShape(i);
                 if (tileShape != null) {
                   Shape enlargedShape = tileShape.enlarge(clearanceDist);
-                  java.awt.geom.Area clearanceAwt = getAwtAreaFromShapeInBoardUnits(enlargedShape);
-                  if (clearanceAwt != null) {
-                    foreignClearances.add(clearanceAwt);
+                  PlanarArea clearanceArea = PlanarArea.fromShape(enlargedShape);
+                  if (clearanceArea != null && !clearanceArea.isEmpty()) {
+                    foreignClearances.add(clearanceArea);
                   }
                 }
               }
@@ -386,93 +393,14 @@ public class ConductionArea extends ObstacleArea implements Connectable {
         }
       }
 
-      // Spokes go in before the foreign clearances come out, and stay inside the pour, so that a
-      // spoke never bridges copper into the clearance of another net or past the pour outline.
-      // Each list is merged first and applied once: one operation per item re-sweeps the whole
-      // growing fill every time, which took minutes on pours with thousands of clearances.
-      java.awt.geom.Area pourOutline =
-          sameNetSpokesList.isEmpty() ? null : new java.awt.geom.Area(fillArea);
-      AwtAreas.subtractAll(fillArea, sameNetClearances);
-      if (pourOutline != null) {
-        fillArea.add(AwtAreas.unionAll(sameNetSpokesList));
-        fillArea.intersect(pourOutline);
-      }
-      AwtAreas.subtractAll(fillArea, foreignClearances);
+      // The spokes are left out of the clearance rings of the same-net items rather than added
+      // back, so a spoke never bridges copper into the clearance of another net or past the pour
+      // outline. Each list is merged first and applied once: one operation per item re-sweeps the
+      // whole growing fill every time.
+      fillArea = fillArea.subtractAll(foreignClearances);
+      fillArea = fillArea.subtractAll(sameNetClearances);
     }
     return fillArea;
-  }
-
-  private static java.awt.geom.Area getAwtAreaInBoardUnits(Area area) {
-    if (area == null || area.isEmpty()) {
-      return null;
-    }
-    if (area instanceof app.freerouting.geometry.planar.Circle circle) {
-      double radius = circle.radius;
-      double diameter = 2 * radius;
-      return new java.awt.geom.Area(
-          new java.awt.geom.Ellipse2D.Double(
-              circle.center.x - radius, circle.center.y - radius, diameter, diameter));
-    }
-
-    Shape borderShape = area.getBorder();
-    if (!(borderShape instanceof app.freerouting.geometry.planar.PolylineShape border)
-        || !border.isBounded()) {
-      return null;
-    }
-
-    java.awt.geom.Path2D.Double borderPath = new java.awt.geom.Path2D.Double();
-    int count = border.borderLineCount();
-    if (count > 0) {
-      FloatPoint p0 = border.cornerApprox(0);
-      borderPath.moveTo(p0.x, p0.y);
-      for (int i = 1; i < count; i++) {
-        FloatPoint pi = border.cornerApprox(i);
-        borderPath.lineTo(pi.x, pi.y);
-      }
-      borderPath.closePath();
-    }
-    java.awt.geom.Area awtArea = new java.awt.geom.Area(borderPath);
-
-    Shape[] holes = area.getHoles();
-    for (Shape hole : holes) {
-      java.awt.geom.Area holeArea = getAwtAreaFromShapeInBoardUnits(hole);
-      if (holeArea != null) {
-        awtArea.subtract(holeArea);
-      }
-    }
-    return awtArea;
-  }
-
-  private static java.awt.geom.Area getAwtAreaFromShapeInBoardUnits(Shape shape) {
-    if (shape == null) {
-      return null;
-    }
-    if (shape instanceof app.freerouting.geometry.planar.Circle circle) {
-      double radius = circle.radius;
-      double diameter = 2 * radius;
-      return new java.awt.geom.Area(
-          new java.awt.geom.Ellipse2D.Double(
-              circle.center.x - radius, circle.center.y - radius, diameter, diameter));
-    }
-    if (shape instanceof IntBox box) {
-      return new java.awt.geom.Area(
-          new java.awt.geom.Rectangle2D.Double(box.ll.x, box.ll.y, box.width(), box.height()));
-    }
-    if (shape instanceof app.freerouting.geometry.planar.PolylineShape poly) {
-      java.awt.geom.Path2D.Double path = new java.awt.geom.Path2D.Double();
-      int count = poly.borderLineCount();
-      if (count > 0) {
-        FloatPoint p0 = poly.cornerApprox(0);
-        path.moveTo(p0.x, p0.y);
-        for (int i = 1; i < count; i++) {
-          FloatPoint pi = poly.cornerApprox(i);
-          path.lineTo(pi.x, pi.y);
-        }
-        path.closePath();
-      }
-      return new java.awt.geom.Area(path);
-    }
-    return null;
   }
 
   @Override
@@ -493,31 +421,267 @@ public class ConductionArea extends ObstacleArea implements Connectable {
         board);
   }
 
+  /**
+   * Whether this area is dead copper: a piece of a fill smaller than 1 mm\u00b2 (the threshold of
+   * {@code DesignRulesChecker.getZoneIslandViolations}), on a layer without traces, that touches
+   * nothing of its net. A zone with no connection yet keeps all its islands when it is filled, so
+   * an unrouted board can carry such pieces between the vias of another net: no via fits there, and
+   * they are no incomplete connection.
+   */
+  public boolean isDeadCopper() {
+    if (board == null || board.layerStructure.layers[getLayer()].isSignal) {
+      return false;
+    }
+    double mm = board.communication.getResolution(Unit.MM);
+    IntBox box = getArea().boundingBox();
+    if ((double) box.width() * box.height() >= mm * mm) {
+      return false;
+    }
+    return getNormalContacts().isEmpty();
+  }
+
   @Override
   public Set<Item> getNormalContacts() {
+    ShapeSearchTree defaultTree = board.searchTreeManager.getDefaultTree();
+    // A plane spans most of its layer, often in thousands of tiles: rather than one tree query per
+    // tile, look up the tiles that contain the ends of the traces and the centres of the vias, and
+    // that overlap the pins of the net.
+    Set<SearchTreeObject> overlaps =
+        defaultTree.overlappingObjectsWithPointIn(
+            this, getLayer(), this::contactPoints, this::isPinCandidate);
     Set<Item> result = new TreeSet<>();
-    for (int i = 0; i < tileShapeCount(); i++) {
-      TileShape currentShape = getTileShape(i);
-      Set<SearchTreeObject> overlaps = board.overlappingObjects(currentShape, getLayer());
-      for (SearchTreeObject currentObject : overlaps) {
-        if (!(currentObject instanceof Item currentItem)) {
-          continue;
+    if (overlaps == null) {
+      // Not in the tree: query tile by tile.
+      for (int i = 0; i < tileShapeCount(); i++) {
+        TileShape tile = getTileShape(i);
+        for (SearchTreeObject currentObject : board.overlappingObjects(tile, getLayer())) {
+          if (isContactInTile(currentObject, tile)) {
+            result.add((Item) currentObject);
+          }
         }
-        if (currentItem != this && currentItem.sharesNet(this) && currentItem.sharesLayer(this)) {
-          if (currentItem instanceof Trace currentTrace) {
-            if (currentShape.contains(currentTrace.firstCorner())
-                || currentShape.contains(currentTrace.lastCorner())) {
-              result.add(currentItem);
-            }
-          } else if (currentItem instanceof DrillItem currentDrillItem) {
-            if (currentShape.contains(currentDrillItem.getCenter())) {
-              result.add(currentItem);
+      }
+      return result;
+    }
+    for (SearchTreeObject currentObject : overlaps) {
+      result.add((Item) currentObject);
+    }
+    return result;
+  }
+
+  /**
+   * The points of object of which one must lie in a tile of this area for a contact, or null if
+   * object cannot be a contact or is a pin, looked up by its shape.
+   */
+  private Point[] contactPoints(SearchTreeObject object) {
+    if (!(object instanceof Item item)
+        || item == this
+        || !item.sharesNet(this)
+        || !item.sharesLayer(this)) {
+      return null;
+    }
+    if (item instanceof Trace trace) {
+      return new Point[] {trace.firstCorner(), trace.lastCorner()};
+    }
+    return item instanceof Via via ? new Point[] {via.getCenter()} : null;
+  }
+
+  /**
+   * Whether object is a pin of the net of this area, which is a contact when its copper overlaps a
+   * tile. Its centre need not be in the area: a thermal relief of a filled zone leaves the centre
+   * of the pad in a hole, the spokes covering only its edge. A via, placed by the router with its
+   * centre in the area, keeps that rule.
+   */
+  private boolean isPinCandidate(SearchTreeObject object) {
+    return object instanceof Pin pin && pin.sharesNet(this) && pin.sharesLayer(this);
+  }
+
+  private boolean isContactInTile(SearchTreeObject object, TileShape tile) {
+    if (isPinCandidate(object)) {
+      return overlapsTile((Pin) object, tile);
+    }
+    Point[] points = contactPoints(object);
+    if (points != null) {
+      for (Point point : points) {
+        if (tile.contains(point)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the copper of drillItem on the layer of this area overlaps tile with a positive area.
+   */
+  private boolean overlapsTile(DrillItem drillItem, TileShape tile) {
+    TileShape drillShape =
+        drillItem.getTreeShapeOnLayer(board.searchTreeManager.getDefaultTree(), getLayer());
+    return drillShape != null && tile.intersection(drillShape).dimension() == 2;
+  }
+
+  /**
+   * Whether drillItem, a pin of the net of this area, overlaps a tile of this area with a positive
+   * area: the counterpart of {@link #getNormalContacts()} for {@link
+   * DrillItem#getNormalContacts()}.
+   */
+  boolean overlapsCopperOf(DrillItem drillItem) {
+    if (!isPinCandidate(drillItem)) {
+      return false;
+    }
+    ShapeSearchTree defaultTree = board.searchTreeManager.getDefaultTree();
+    TileShape drillShape = drillItem.getTreeShapeOnLayer(defaultTree, getLayer());
+    if (drillShape == null) {
+      return false;
+    }
+    if (getSearchTreeEntries(defaultTree) == null) {
+      for (int i = 0; i < tileShapeCount(); i++) {
+        if (getTileShape(i).intersection(drillShape).dimension() == 2) {
+          return true;
+        }
+      }
+      return false;
+    }
+    Collection<TreeEntry> entries = new ArrayList<>();
+    defaultTree.overlappingTreeEntries(drillShape, getLayer(), entries);
+    for (TreeEntry entry : entries) {
+      if (entry.object == this
+          && getTreeShape(defaultTree, entry.shapeIndexInObject)
+                  .intersection(drillShape)
+                  .dimension()
+              == 2) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Returns true if this conduction area is split into multiple isolated copper islands by
+   * obstacles.
+   */
+  public boolean isFractured() {
+    FastPlaneConnectivityGrid.PlaneFractureResult res = getFractureResult();
+    return res != null && res.isFractured;
+  }
+
+  /** Returns the cached or freshly computed fracture analysis result for this conduction area. */
+  public FastPlaneConnectivityGrid.PlaneFractureResult getFractureResult() {
+    if (this.board == null) {
+      return null;
+    }
+    int currentRevision = this.board.getRevision();
+    long currentNetAssignmentStamp = this.board.getNetAssignmentChangeCount();
+    if (this.cachedFractureResult != null
+        && this.cachedFractureRevision == currentRevision
+        && this.cachedNetAssignmentStamp == currentNetAssignmentStamp) {
+      return this.cachedFractureResult;
+    }
+    FastPlaneConnectivityGrid connectivityGrid = new FastPlaneConnectivityGrid();
+    Collection<Item> contacts = getNormalContacts();
+    this.cachedFractureResult = connectivityGrid.evaluateFracture(this, this.board, contacts);
+    this.cachedFractureRevision = currentRevision;
+    this.cachedNetAssignmentStamp = currentNetAssignmentStamp;
+    return this.cachedFractureResult;
+  }
+
+  @Override
+  void getConnectedSetRecu(Set<Item> result, int netNumber, boolean stopAtPlane) {
+    if (this.board == null) {
+      super.getConnectedSetRecu(result, netNumber, stopAtPlane);
+      return;
+    }
+
+    FastPlaneConnectivityGrid.PlaneFractureResult fractureResult = getFractureResult();
+    if (fractureResult == null || !fractureResult.isFractured) {
+      super.getConnectedSetRecu(result, netNumber, stopAtPlane);
+      return;
+    }
+
+    // Determine which islands have already been contacted by items in result
+    Set<Integer> reachedIslands = new HashSet<>();
+    for (Item resItem : result) {
+      if (resItem != this && resItem.sharesNet(this) && resItem.sharesLayer(this)) {
+        for (Map.Entry<Integer, List<Item>> entry : fractureResult.islandItems.entrySet()) {
+          if (entry.getValue().contains(resItem)) {
+            reachedIslands.add(entry.getKey());
+            break;
+          }
+        }
+      }
+    }
+
+    if (reachedIslands.isEmpty()) {
+      // If this conduction area itself is the start item, only visit island 0 so severed islands
+      // are not falsely bridged
+      reachedIslands.add(0);
+    }
+
+    for (int islandId : reachedIslands) {
+      List<Item> reachableItems = fractureResult.islandItems.get(islandId);
+      if (reachableItems != null) {
+        for (Item item : reachableItems) {
+          if (item != this && (netNumber <= 0 || item.containsNet(netNumber))) {
+            if (result.add(item)) {
+              item.getConnectedSetRecu(result, netNumber, stopAtPlane);
             }
           }
         }
       }
     }
-    return result;
+  }
+
+  @Override
+  boolean isCycleRecu(
+      Set<Item> visitedItems, Item searchItem, Item comeFromItem, boolean ignoreAreas) {
+    if (ignoreAreas) {
+      return false;
+    }
+    if (this.board == null) {
+      return super.isCycleRecu(visitedItems, searchItem, comeFromItem, ignoreAreas);
+    }
+    FastPlaneConnectivityGrid.PlaneFractureResult fractureResult = getFractureResult();
+    if (fractureResult == null || !fractureResult.isFractured) {
+      return super.isCycleRecu(visitedItems, searchItem, comeFromItem, ignoreAreas);
+    }
+
+    Integer fromIsland = null;
+    if (comeFromItem != null) {
+      for (Map.Entry<Integer, List<Item>> entry : fractureResult.islandItems.entrySet()) {
+        if (entry.getValue().contains(comeFromItem)) {
+          fromIsland = entry.getKey();
+          break;
+        }
+      }
+    }
+
+    Collection<Item> contactList = getNormalContacts();
+    if (contactList == null) {
+      return false;
+    }
+    for (Item currentContact : contactList) {
+      if (currentContact == comeFromItem) {
+        continue;
+      }
+      if (fromIsland != null) {
+        boolean onSameIsland = false;
+        List<Item> islandMembers = fractureResult.islandItems.get(fromIsland);
+        if (islandMembers != null && islandMembers.contains(currentContact)) {
+          onSameIsland = true;
+        }
+        if (!onSameIsland) {
+          continue;
+        }
+      }
+      if (currentContact == searchItem) {
+        return true;
+      }
+      if (visitedItems.add(currentContact)) {
+        if (currentContact.isCycleRecu(visitedItems, searchItem, this, ignoreAreas)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   @Override
@@ -556,7 +720,10 @@ public class ConductionArea extends ObstacleArea implements Connectable {
 
   /** Sets, if this conduction area is regarded as obstacle to traces and vias of foreign nets. */
   public void setIsObstacle(boolean value) {
-    this.isObstacle = value;
+    if (this.isObstacle != value) {
+      this.isObstacle = value;
+      this.clearDerivedData();
+    }
   }
 
   @Override

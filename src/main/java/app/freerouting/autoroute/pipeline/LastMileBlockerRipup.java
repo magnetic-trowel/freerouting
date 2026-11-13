@@ -9,6 +9,7 @@ import app.freerouting.drc.AirLine;
 import app.freerouting.drc.DesignRulesChecker;
 import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntBox;
+import app.freerouting.rules.Net;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,6 +28,14 @@ final class LastMileBlockerRipup {
 
   /** Rips blockers for the current incomplete airlines. Returns the number of items removed. */
   static int ripBlockers(RoutingBoard board) {
+    return ripBlockers(board, null);
+  }
+
+  /**
+   * Rips blockers for the current incomplete airlines, respecting nets kept away by the rip-up
+   * memory. Returns the number of items removed.
+   */
+  static int ripBlockers(RoutingBoard board, RipupMemory memory) {
     DesignRulesChecker drc = new DesignRulesChecker(board, null);
     AirLine[] airlines = drc.getAllAirlines();
     if (airlines.length == 0) {
@@ -46,7 +55,7 @@ final class LastMileBlockerRipup {
         if (blockers.size() >= MAX_ITEMS) {
           break;
         }
-        if (isRemovableBlocker(item, airline.net.netNumber)) {
+        if (isRemovableBlocker(item, airline.net.netNumber, memory)) {
           blockers.add(item);
         }
       }
@@ -63,6 +72,10 @@ final class LastMileBlockerRipup {
   }
 
   static boolean isRemovableBlocker(Item item, int airlineNetNumber) {
+    return isRemovableBlocker(item, airlineNetNumber, null);
+  }
+
+  static boolean isRemovableBlocker(Item item, int airlineNetNumber, RipupMemory memory) {
     if (!(item instanceof Trace) && !(item instanceof Via)) {
       return false;
     }
@@ -72,6 +85,26 @@ final class LastMileBlockerRipup {
     for (int i = 0; i < item.netCount(); i++) {
       if (item.getNetNumber(i) == airlineNetNumber) {
         return false;
+      }
+    }
+    // a net outside the priority net classes may not remove copper of those classes
+    Net airlineNet = item.board != null ? item.board.rules.nets.get(airlineNetNumber) : null;
+    if (item.board != null && (airlineNet == null || !airlineNet.isRoutedFirst())) {
+      for (int i = 0; i < item.netCount(); i++) {
+        Net net = item.board.rules.nets.get(item.getNetNumber(i));
+        if (net != null && net.isRoutedFirst()) {
+          return false;
+        }
+      }
+    }
+    if (memory != null) {
+      Set<Integer> keptAwayFrom = memory.netsNotToRip(airlineNetNumber);
+      if (!keptAwayFrom.isEmpty()) {
+        for (int i = 0; i < item.netCount(); i++) {
+          if (keptAwayFrom.contains(item.getNetNumber(i))) {
+            return false;
+          }
+        }
       }
     }
     return item.netCount() > 0;

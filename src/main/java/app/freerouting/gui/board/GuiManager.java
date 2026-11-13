@@ -15,7 +15,6 @@ import app.freerouting.io.specctra.SesReader;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.management.jobs.ThreadActionListener;
 import app.freerouting.management.sessions.SessionManager;
-import app.freerouting.rules.NetClasses;
 import app.freerouting.settings.GlobalSettings;
 import app.freerouting.settings.SettingsMerger;
 import app.freerouting.settings.sources.DsnFileSettings;
@@ -149,6 +148,8 @@ public class GuiManager {
         FRLogger.warn(tm.getText("file_not_found", globalSettings.initialInputFile));
         return false;
       }
+      // the error, if a .kicad_dru given with -de cannot be read, is in the log
+      routingJob.loadKiCadDesignRules(globalSettings.initialKiCadDesignRulesFile);
       var settingsMerger = globalSettings.settingsMergerProtype.clone();
       settingsMerger.addOrReplaceSources(
           new DsnFileSettings(routingJob.input.getData(), routingJob.input.getFilename()),
@@ -171,7 +172,8 @@ public class GuiManager {
           bs.getRouterScore(routingJob.routerSettings),
           bs.connections.incompleteCount,
           bs.clearanceViolations.totalCount);
-      newFrame.boardPanel.boardHandling.setNumThreads(routingJob.routerSettings.maxThreads);
+      newFrame.boardPanel.boardHandling.setNumThreads(
+          routingJob.routerSettings.getAutorouterMaxThreads());
       newFrame.boardPanel.boardHandling.setBoardUpdateStrategy(
           routingJob.routerSettings.optimizer.boardUpdateStrategy);
       newFrame.boardPanel.boardHandling.setItemSelectionStrategy(
@@ -190,10 +192,11 @@ public class GuiManager {
         routingJob.tryToSetOutputFile(new File(globalSettings.initialOutputFile));
 
         // we need to set up a listener to save the design file when the autorouter is
-        // running. The listener is called on the routing thread right after the worker queued
-        // its completion (which restores the board's read-only state) on the EDT, so the export
-        // must also run on the EDT: otherwise the read-only board makes the DSN and SCR exports
-        // fail and the application exits without writing the (already deleted) output file.
+        // running. The export is queued on the event dispatch thread, behind the
+        // replacement of the board by the final board of the job, so that the file
+        // holds the board the job chose and not the one the workspace started with. It also
+        // runs after the worker's completion has restored the board's read-only state, which
+        // would otherwise make the DSN and SCR exports fail.
         newFrame.boardPanel.boardHandling.autorouterListener =
             new ThreadActionListener() {
               @Override
@@ -201,22 +204,12 @@ public class GuiManager {
 
               @Override
               public void autorouterAborted() {
-                SwingUtilities.invokeLater(
-                    () ->
-                        exportBoardToFile(
-                            newFrame,
-                            globalSettings.initialOutputFile,
-                            globalSettings.guiSettings.exitWhenFinished));
+                exportBoardToFileOnEdt(newFrame, globalSettings);
               }
 
               @Override
               public void autorouterFinished() {
-                SwingUtilities.invokeLater(
-                    () ->
-                        exportBoardToFile(
-                            newFrame,
-                            globalSettings.initialOutputFile,
-                            globalSettings.guiSettings.exitWhenFinished));
+                exportBoardToFileOnEdt(newFrame, globalSettings);
               }
             };
 
@@ -467,19 +460,10 @@ public class GuiManager {
             confirmImportRulesMessage);
       }
 
-      // ignore net classes if they were defined by a command line argument
-      if (routingJob.routerSettings.autorouter.ignoreNetClasses != null) {
-        for (String netClassName : routingJob.routerSettings.autorouter.ignoreNetClasses) {
-          NetClasses netClasses =
-              newFrame.boardPanel.boardHandling.getRoutingBoard().rules.netClasses;
-
-          for (int i = 0; i < netClasses.count(); i++) {
-            if (netClasses.get(i).getName().equalsIgnoreCase(netClassName)) {
-              netClasses.get(i).isIgnoredByAutorouter = true;
-            }
-          }
-        }
-      }
+      // ignore net classes if they were defined by a command line argument, with the same name
+      // resolution as the headless and API paths (KiCad's default class, composite class names)
+      routingJob.routerSettings.applyNetClassExclusions(
+          newFrame.boardPanel.boardHandling.getRoutingBoard());
 
       newFrame.refreshWindows();
     }
@@ -527,6 +511,16 @@ public class GuiManager {
       FRLogger.error("Error reading rules file '" + rulesFileName + "'.", e);
     }
     return false;
+  }
+
+  /**
+   * Queues the export of the board in {@code newFrame} to the output file given on the command line
+   * on the event dispatch thread, after the workspace updates queued before it.
+   */
+  private static void exportBoardToFileOnEdt(BoardFrame newFrame, GlobalSettings globalSettings) {
+    String filename = globalSettings.initialOutputFile;
+    boolean exitWhenFinished = globalSettings.guiSettings.exitWhenFinished;
+    SwingUtilities.invokeLater(() -> exportBoardToFile(newFrame, filename, exitWhenFinished));
   }
 
   /**

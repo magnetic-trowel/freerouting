@@ -146,25 +146,45 @@ Like every other section, these values come from `freerouting.json`, `FREEROUTIN
     - **`enabled`**: Whether the autorouter stage runs after fanout.
     - **`algorithm`**: Algorithm identifier (`freerouting-router` by default; legacy identifiers such as `freerouting-router-v19` safely normalize to `freerouting-router`).
     - **`max_passes`**: Maximum autorouter passes. `0` means no limit; values above `9999` are capped at `9999`.
+    - **`stagnation_pass_limit`**: Consecutive passes without score improvement before the autorouter stops. Default is `10`. `0` (or negative) disables stagnation detection and allows routing to proceed up to `max_passes`. Equivalent CLI flag: `--router.autorouter.stagnation_pass_limit=<int>` (or `-spl <int>`).
     - **`max_items`**: Maximum items attempted in the autorouter stage.
-    - **`ignore_net_classes`**: Net class names the autorouter should skip.
-    - **`max_threads`**: Canonical CLI is `--router.autorouter.max_threads`. The autorouter pass
-      does not read it. Fanout is also single-threaded. The optimizer pool uses
-      `--router.optimizer.max_threads`. The legacy flat `--router.max_threads` remains as a
-      fallback / GUI knob and is still copied onto both pools.
+    - **`item_order_seed`**: Optional extra seed for signal-item permutations after the first
+      autorouter pass, for example `--router.autorouter.item_order_seed=42`. The first pass
+      retains its existing ordering policy.
+    - **`ignore_net_classes`**: Net class names the autorouter should skip. KiCad's default class may be given as `kicad_default` or `Default`; a composite KiCad name such as `PWR,Default` may be written as is on the command line.
+    - **`priority_net_classes`**: Net classes routed first: in every pass their connections are
+      routed right after the plane pads and before the other signal nets, which may not rip them up
+      (in the maze search or when last-mile blockers are removed); priority nets may still rip each
+      other. Use it for nets that must stay short or direct, such as differential pairs or analog
+      inputs. Names resolve as for `ignore_net_classes`. CLI:
+      `--router.autorouter.priority_net_classes=ETH_DIFF,ANALOG`.
+    - **`priority_via_costs`**: Via costs of the nets of `priority_net_classes`. Unset: `via_costs`.
+    - **`plane_as_priority`**: For nets with a plane on a power layer, leave each SMD pad out of
+      the fanout and route it to its plane first, so that it drops into the plane through a via of
+      its own instead of being joined to the nearest pad of the net. While it searches, copper of the
+      same net belonging to other packages is an obstacle; pins of its own package are not. Default
+      is `false`. CLI: `--router.autorouter.plane_as_priority=true`.
+    - **`plane_share_gap_um`**: With `plane_as_priority`, two plane pads at most this far apart
+      edge to edge (no room for a via between them) may share one via. Default is `500`.
+    - **`max_threads`**: Stage-specific autorouter worker-thread limit. Canonical CLI is
+      `--router.autorouter.max_threads`. Bounded by the global `--router.max_threads` ceiling.
+      The autorouter stage currently runs single-threaded; this setting is reserved for future multi-threaded passes.
 - **`result_json`**: Optional path for a machine-readable routing result manifest written at the
   end of a headless `-de`/`-do` run. Used by the benchmark and autopilot harnesses. Equivalent CLI
   flag: `--router.result_json=<path>`.
-- **`max_threads`**: Legacy flat / GUI worker-thread cap. `setMaxThreads()` still copies this
-  value into both `autorouter.max_threads` and `optimizer.max_threads`. Prefer the nested CLI
-  flags (`--router.autorouter.max_threads`, `--router.optimizer.max_threads`) when the two pools
-  must differ. `-mt` sets **optimizer** threads only.
+- **`max_threads`**: Global worker-thread ceiling across all stages (fanout, autorouter, and
+  optimizer). From any source (GUI, JSON, environment, `--router.max_threads`), setting this caps
+  the maximum number of threads any stage may use. Defaults to `cores - 1`. `0` means all
+  processors. Nested stage settings (`--router.autorouter.max_threads`,
+  `--router.optimizer.max_threads`) allow stage-specific fine-tuning within this ceiling.
+  Legacy `-mt` maps here; `-mt 0` disables the optimizer like `--router.optimizer.enabled=false`.
 - **`optimizer.improvement_threshold`**: Minimum relative improvement, in percent, an optimizer
   pass must reach for the optimizer to continue (`--router.optimizer.improvement_threshold`).
 - **`trace_pull_tight_accuracy`**: Accuracy for pulling traces tight.
 - **`allowed_via_types`**: Enables or disables the use of different via types.
 - **`scoring.via_costs`**: Cost factor for using vias (`--router.scoring.via_costs`).
-- **`scoring.plane_via_costs`**: Cost factor for using vias on plane nets
+- **`scoring.plane_via_costs`**: Cost factor for using vias on plane nets: a via that drops into a
+  plane is priced with this factor, separately from a signal layer change (`scoring.via_costs`)
   (`--router.scoring.plane_via_costs`).
 - **`plane_nets`**: Explicit array of net names to treat as power-plane nets, enabling plane-routing mode and discounted plane via costs for these nets.
 - **`plane_as_obstacle`**: Boolean controlling whether conduction areas (copper pours) act as obstacles blocking foreign traces from passing through. Default is `false` (foreign traces may route through fills).
@@ -210,6 +230,26 @@ The router and optimizer versions are independent. CLI aliases are
 `--scoring-version=v1|v2` to select both. The environment accepts the same names, for example
 `FREEROUTING__ROUTER__SCORING__VERSION=v1`.
 
+##### Reproducible placement import
+
+All DSN imports (headless jobs, composite/API inputs, GUI sessions, and default reader overloads)
+allocate component placements in exact reference-name order by default before routing.
+For unique references, changing the order or grouping of placement records alone (e.g. from
+KiCad re-saving and regenerating footprint UUIDs) preserves component, pad, and package-keepout
+identities. Package association, geometry, side, fixed state, and pin-net membership remain
+unchanged. Duplicate references retain their relative source order and are excluded from the
+placement-order guarantee.
+
+Any configured `router.autorouter.item_order_seed` is applied only after these identities exist,
+providing an explicit, reproducible shuffle without relying on file order as an implicit seed.
+Embedding callers can explicitly supply `DsnReadOptions.INPUT_ORDER` if legacy source order is
+specifically required.
+
+Use the same seed, settings, worker count, and deterministic work limits when comparing routing
+runs. This guarantee does not canonicalize other DSN scopes or electrically equivalent copper
+representations. In particular, KiCad can join fixed track segments differently on separate
+exports; matching the seed alone does not make those different router inputs identical.
+
 ##### **`optimizer` Sub-section**
 
 Configures the optional route-optimization stage that runs after autorouting.
@@ -233,10 +273,18 @@ Configures the optional route-optimization stage that runs after autorouting.
     - `2.0 – 2.5` (2.0% – 2.5%): Balanced default. Retains >80% via reductions while pruning low-yield late passes.
     - `3.5 – 5.0` (3.5% – 5.0%): Fast mode. Cuts optimizer time by ~45%, retaining ~65% via cuts.
     - `> 5.5` (> 5.5%): Rapid prototyping. Stops after 1–2 passes; not recommended for production boards.
+- **`keep_increased_ripup_costs`**: Whether the optimizer keeps the increased ripup costs of its
+  first passes after a pass that does not improve the board. By default (`false`) it drops them for
+  the rest of the run, and each later pass rips and reroutes far more items (several times the CPU
+  time of a pass with the increased costs). With `true`, a pass without gain still restarts from the
+  best board, and the next pass keeps the increased costs; after two passes in a row without gain,
+  the optimizer stops. CLI:
+  `--router.optimizer.keep_increased_ripup_costs=true`.
 - **`enable_preflight_guards`**: Whether pre-flight optimization guards are evaluated before starting the
-  optimizer loop. If enabled, bypasses the optimizer stage when the board has unrouted connections, has an
-  initial score at or near theoretical maximum, has no vias above the via lower bound and a trace length or
-  score already near optimal, or has no unfixed via or trace to reroute. Default is `true`.
+  optimizer loop. If enabled, bypasses the optimizer stage when the board has an initial score at or near
+  theoretical maximum, has no vias above the via lower bound and a trace length or score already near optimal,
+  or has no unfixed via or trace to reroute. Default is `true`. A board with unrouted connections is optimized
+  as well; the optimizer leaves those connections unrouted.
 - **`max_consecutive_failures`**: Maximum consecutive candidate failures allowed before concluding the
   current pass. Default is `50`.
 - **`max_consecutive_failures_pass1`**: Maximum consecutive candidate failures allowed in pass 1 before

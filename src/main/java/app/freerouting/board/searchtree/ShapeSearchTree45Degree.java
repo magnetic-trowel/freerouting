@@ -165,173 +165,172 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree {
     // Obstacles restrain the room nearest first, so the room depends on the geometry and the
     // item order only, not on the structure of the tree. Only leaves on roomLayer can restrain
     // the room, so subtrees without that layer are skipped.
-    PriorityQueue<NearNode> queue = completeShapeQueue.get();
+    PriorityQueue<NearNode> queue = acquireNearQueue();
     IntBox target = shapeToBeContained.boundingBox();
     final long roomLayerBits = debugAnchor ? -1L : layerBit(roomLayer);
-    queue.clear();
     queue.add(NearNode.of(this.root, target));
     TreeNode currentNode;
 
-    for (; ; ) {
-      NearNode next = queue.poll();
-      if (next == null) {
-        break;
-      }
-      currentNode = next.node();
-      if (currentNode.boundingShape.intersects(boundingShape)) {
-        if (currentNode instanceof Leaf currentLeaf) {
-          SearchTreeObject currentObject = (SearchTreeObject) currentLeaf.object;
-          int shapeIndex = currentLeaf.shapeIndexInObject;
-          int objectLayer = currentObject.shapeLayer(shapeIndex);
-          boolean sameLayer = objectLayer == roomLayer;
-          boolean ignoredObject = currentObject == ignoreObject;
-          boolean isObstacle =
-              (debugAnchor || (sameLayer && !ignoredObject))
-                  && currentObject.isTraceObstacle(netNumber);
-          if (debugAnchor) {
-            traceCompleteShapeFilter(
-                debugStep,
-                netNumber,
-                roomLayer,
-                shapeIndex,
-                objectLayer,
-                isObstacle,
-                sameLayer,
-                ignoredObject,
-                currentObject);
-          }
-          if (isObstacle && sameLayer && !ignoredObject) {
-
-            // The 45-degree tree stores each leaf's bounding octagon at insertion, which equals
-            // getTreeShape(this, shapeIndex).boundingOctagon().
-            IntOctagon currentObjectShape = (IntOctagon) currentLeaf.boundingShape;
+    try {
+      for (; ; ) {
+        NearNode next = queue.poll();
+        if (next == null) {
+          break;
+        }
+        currentNode = next.node();
+        if (currentNode.boundingShape.intersects(boundingShape)) {
+          if (currentNode instanceof Leaf currentLeaf) {
+            SearchTreeObject currentObject = (SearchTreeObject) currentLeaf.object;
+            int shapeIndex = currentLeaf.shapeIndexInObject;
+            int objectLayer = currentObject.shapeLayer(shapeIndex);
+            boolean sameLayer = objectLayer == roomLayer;
+            boolean ignoredObject = currentObject == ignoreObject;
+            boolean isObstacle =
+                (debugAnchor || (sameLayer && !ignoredObject))
+                    && currentObject.isTraceObstacle(netNumber);
             if (debugAnchor) {
-              traceCompleteShapeCandidate(
-                  debugStep, netNumber, roomLayer, currentObject, currentObjectShape);
+              traceCompleteShapeFilter(
+                  debugStep,
+                  netNumber,
+                  roomLayer,
+                  shapeIndex,
+                  objectLayer,
+                  isObstacle,
+                  sameLayer,
+                  ignoredObject,
+                  currentObject);
             }
-            if (!debugAnchor) {
-              boolean overlapsAny = false;
-              for (IncompleteFreeSpaceExpansionRoom roomPiece : result) {
-                if (((IntOctagon) roomPiece.getShape()).overlaps(currentObjectShape)) {
-                  overlapsAny = true;
-                  break;
-                }
+            if (isObstacle && sameLayer && !ignoredObject) {
+
+              // The 45-degree tree stores each leaf's bounding octagon at insertion, which equals
+              // getTreeShape(this, shapeIndex).boundingOctagon().
+              IntOctagon currentObjectShape = (IntOctagon) currentLeaf.boundingShape;
+              if (debugAnchor) {
+                traceCompleteShapeCandidate(
+                    debugStep, netNumber, roomLayer, currentObject, currentObjectShape);
               }
-              if (!overlapsAny) {
-                continue;
-              }
-            }
-            Collection<IncompleteFreeSpaceExpansionRoom> newResult = new ArrayList<>();
-            IntOctagon newBoundingShape = IntOctagon.EMPTY;
-            boolean hadRoomsBeforeObstacle = !result.isEmpty();
-            for (IncompleteFreeSpaceExpansionRoom currentRoom : result) {
-              IntOctagon currentShape = (IntOctagon) currentRoom.getShape();
-              boolean overlaps = currentShape.overlaps(currentObjectShape);
-              if (overlaps) {
-                if (currentObject instanceof CompleteFreeSpaceExpansionRoom
-                    && ignoreShape != null) {
-                  IntOctagon intersection = currentShape.intersection(currentObjectShape);
-                  if (ignoreShape.contains(intersection)) {
-                    if (debugAnchor) {
-                      traceCompleteShapeDecision(
-                          debugStep,
-                          netNumber,
-                          roomLayer,
-                          "SKIP_BY_IGNORE_SHAPE",
-                          overlaps,
-                          currentShape,
-                          currentObjectShape);
-                    }
-                    // ignore also all objects, whose intersection is contained in the
-                    // 2-dim overlap-door with the fromRoom.
-                    if (!ignoreShape.contains(currentShape)) {
-                      newResult.add(currentRoom);
-                      newBoundingShape = newBoundingShape.union(currentShape);
-                    }
-                    continue;
+              if (!debugAnchor) {
+                boolean overlapsAny = false;
+                for (IncompleteFreeSpaceExpansionRoom roomPiece : result) {
+                  if (((IntOctagon) roomPiece.getShape()).overlaps(currentObjectShape)) {
+                    overlapsAny = true;
+                    break;
                   }
                 }
-                if (debugAnchor) {
-                  traceCompleteShapeDecision(
-                      debugStep,
-                      netNumber,
-                      roomLayer,
-                      "RESTRAIN",
-                      overlaps,
-                      currentShape,
-                      currentObjectShape);
+                if (!overlapsAny) {
+                  continue;
                 }
-                Collection<IncompleteFreeSpaceExpansionRoom> newRestrainedShapes =
-                    restrainShape(currentRoom, currentObjectShape);
-                newResult.addAll(newRestrainedShapes);
+              }
+              Collection<IncompleteFreeSpaceExpansionRoom> newResult = new ArrayList<>();
+              IntOctagon newBoundingShape = IntOctagon.EMPTY;
+              boolean hadRoomsBeforeObstacle = !result.isEmpty();
+              for (IncompleteFreeSpaceExpansionRoom currentRoom : result) {
+                IntOctagon currentShape = (IntOctagon) currentRoom.getShape();
+                boolean overlaps = currentShape.overlaps(currentObjectShape);
+                if (overlaps) {
+                  if (currentObject instanceof CompleteFreeSpaceExpansionRoom
+                      && ignoreShape != null) {
+                    IntOctagon intersection = currentShape.intersection(currentObjectShape);
+                    if (ignoreShape.contains(intersection)) {
+                      if (debugAnchor) {
+                        traceCompleteShapeDecision(
+                            debugStep,
+                            netNumber,
+                            roomLayer,
+                            "SKIP_BY_IGNORE_SHAPE",
+                            overlaps,
+                            currentShape,
+                            currentObjectShape);
+                      }
+                      // ignore also all objects, whose intersection is contained in the
+                      // 2-dim overlap-door with the fromRoom.
+                      if (!ignoreShape.contains(currentShape)) {
+                        newResult.add(currentRoom);
+                        newBoundingShape = newBoundingShape.union(currentShape);
+                      }
+                      continue;
+                    }
+                  }
+                  if (debugAnchor) {
+                    traceCompleteShapeDecision(
+                        debugStep,
+                        netNumber,
+                        roomLayer,
+                        "RESTRAIN",
+                        overlaps,
+                        currentShape,
+                        currentObjectShape);
+                  }
+                  Collection<IncompleteFreeSpaceExpansionRoom> newRestrainedShapes =
+                      restrainShape(currentRoom, currentObjectShape);
+                  newResult.addAll(newRestrainedShapes);
 
-                for (IncompleteFreeSpaceExpansionRoom tmpShape : newRestrainedShapes) {
-                  newBoundingShape = newBoundingShape.union((IntOctagon) tmpShape.getShape());
+                  for (IncompleteFreeSpaceExpansionRoom tmpShape : newRestrainedShapes) {
+                    newBoundingShape = newBoundingShape.union((IntOctagon) tmpShape.getShape());
+                  }
+                } else {
+                  if (debugAnchor) {
+                    traceCompleteShapeDecision(
+                        debugStep,
+                        netNumber,
+                        roomLayer,
+                        "KEEP_NON_OVERLAP",
+                        overlaps,
+                        currentShape,
+                        currentObjectShape);
+                  }
+                  newResult.add(currentRoom);
+                  newBoundingShape = newBoundingShape.union(currentShape);
                 }
-              } else {
-                if (debugAnchor) {
-                  traceCompleteShapeDecision(
-                      debugStep,
-                      netNumber,
-                      roomLayer,
-                      "KEEP_NON_OVERLAP",
-                      overlaps,
-                      currentShape,
-                      currentObjectShape);
+              }
+              if (hadRoomsBeforeObstacle && newResult.isEmpty()) {
+                if (FRLogger.isTraceEnabled()) {
+                  FRLogger.trace(
+                      "COMPLETE_SHAPE_BLOCKED net="
+                          + netNumber
+                          + ", layer="
+                          + roomLayer
+                          + ", contained="
+                          + describeBounds(shapeToBeContained.boundingBox())
+                          + ", obstacle_type="
+                          + currentObject.getClass().getSimpleName()
+                          + ", obstacle_id="
+                          + obstacleId(currentObject)
+                          + ", obstacle_bounds="
+                          + describeBounds(currentObjectShape.boundingBox()));
                 }
-                newResult.add(currentRoom);
-                newBoundingShape = newBoundingShape.union(currentShape);
               }
-            }
-            if (hadRoomsBeforeObstacle && newResult.isEmpty()) {
-              if (FRLogger.isTraceEnabled()) {
-                FRLogger.trace(
-                    "COMPLETE_SHAPE_BLOCKED net="
-                        + netNumber
-                        + ", layer="
-                        + roomLayer
-                        + ", contained="
-                        + describeBounds(shapeToBeContained.boundingBox())
-                        + ", obstacle_type="
-                        + currentObject.getClass().getSimpleName()
-                        + ", obstacle_id="
-                        + obstacleId(currentObject)
-                        + ", obstacle_bounds="
-                        + describeBounds(currentObjectShape.boundingBox()));
+              result = newResult;
+              if (result.isEmpty()) {
+                // Erik Gavriluk (freerouting.net): with no piece left, the empty union reaches no
+                // node.
+                // Stop the walk early rather than continuing to pop and reject remaining nodes.
+                break;
               }
+              boundingShape = newBoundingShape;
             }
-            result = newResult;
-            if (result.isEmpty()) {
-              // Erik Gavriluk (freerouting.net): with no piece left, the empty union reaches no
-              // node.
-              // Stop the walk early rather than continuing to pop and reject remaining nodes.
-              break;
+            if (debugAnchor) {
+              debugStep++;
             }
-            boundingShape = newBoundingShape;
-          }
-          if (debugAnchor) {
-            debugStep++;
-          }
-        } else {
-          TreeNode first = ((InnerNode) currentNode).firstChild;
-          TreeNode second = ((InnerNode) currentNode).secondChild;
-          if (first != null
-              && (first.layerMask & roomLayerBits) != 0
-              && first.boundingShape.intersects(boundingShape)) {
-            queue.add(NearNode.of(first, target));
-          }
-          if (second != null
-              && (second.layerMask & roomLayerBits) != 0
-              && second.boundingShape.intersects(boundingShape)) {
-            queue.add(NearNode.of(second, target));
+          } else {
+            TreeNode first = ((InnerNode) currentNode).firstChild;
+            TreeNode second = ((InnerNode) currentNode).secondChild;
+            if (first != null
+                && (first.layerMask & roomLayerBits) != 0
+                && first.boundingShape.intersects(boundingShape)) {
+              queue.add(NearNode.of(first, target));
+            }
+            if (second != null
+                && (second.layerMask & roomLayerBits) != 0
+                && second.boundingShape.intersects(boundingShape)) {
+              queue.add(NearNode.of(second, target));
+            }
           }
         }
       }
+    } finally {
+      releaseNearQueue(queue);
     }
-    // The walk can stop before the queue is drained. Nodes left on this thread-local queue would
-    // keep this tree, its board and the autoroute engine reachable from the thread for its whole
-    // life, because the queue is the value of a ThreadLocal that the tree itself holds.
-    queue.clear();
 
     result = divideLargeRoom(result, board.getBoundingBox());
     // remove rooms with shapes equal to the contained shape to prevent endless loop.

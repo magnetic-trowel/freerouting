@@ -2,7 +2,10 @@ package app.freerouting.settings;
 
 import app.freerouting.autoroute.maze.AutorouteControl;
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.io.KiCadNetClassNames;
 import app.freerouting.logger.FRLogger;
+import app.freerouting.rules.BoardRules;
+import app.freerouting.rules.NetClass;
 import app.freerouting.util.ReflectionUtil;
 import com.google.gson.annotations.SerializedName;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -48,12 +51,25 @@ public class RouterSettings implements Serializable, Cloneable {
   public Double fallbackViaDrillUm;
 
   /**
+   * KiCad's hole-to-hole minimum (Board Setup min_hole_to_hole), in micrometres: the edge-to-edge
+   * distance a via's drill keeps from every other drilled hole, of any net. Vias of one net keep
+   * only this from each other: KiCad keeps no copper clearance within a net. A KiCad board sets its
+   * own; a DSN, which has none, gets KiCad's default, 250. 0 turns it off.
+   */
+  @SerializedName("hole_to_hole_um")
+  public Double holeToHoleUm;
+
+  /**
    * Clearance violation shortfall tolerance in micrometers. Clearance shortfalls (expected -
    * actual) less than or equal to this threshold are treated as floating-point
    * rounding/discretization noise rather than electrical clearance violations.
    */
   @SerializedName("clearance_tolerance_um")
   public Double clearanceToleranceUm;
+
+  /** Erik Gavriluk (freerouting.net): the board checker's tolerance in micrometers. */
+  @SerializedName("drc_epsilon_um")
+  public Double drcEpsilonUm;
 
   /**
    * Explicit list of net names to treat as power-plane nets, enabling plane-routing mode and
@@ -123,6 +139,14 @@ public class RouterSettings implements Serializable, Cloneable {
    */
   @SerializedName("min_trace_width_um")
   public Double minTraceWidthUm;
+
+  /**
+   * Measure a pin's or via's copper (a circle, a pad polygon) where the search tree's octagons
+   * overlap, in the clearance query, the via checks, via shoves and moves, and the clearance
+   * checker, instead of refusing the pair on the octagons.
+   */
+  @SerializedName("exact_copper")
+  public Boolean exactCopper;
 
   /**
    * When true, a routed connection whose newly inserted traces/vias carry clearance violations is
@@ -293,14 +317,31 @@ public class RouterSettings implements Serializable, Cloneable {
   }
 
   /**
-   * Resolves {@code --router.autorouter.max_threads}. The autorouter pass does not read this value.
-   * Prefers {@code autorouter.maxThreads} and falls back to the legacy flat {@code
-   * router.maxThreads}.
+   * Resolves the effective autorouter thread limit. Prefers {@code autorouter.maxThreads} when set,
+   * bounded by {@code maxThreads} (the global thread ceiling). Falls back to {@code maxThreads} (or
+   * system default) if {@code autorouter.maxThreads} is not set.
    */
   public int getAutorouterMaxThreads() {
-    Integer configured =
-        (autorouter != null && autorouter.maxThreads != null) ? autorouter.maxThreads : maxThreads;
-    return normalizeMaxThreads(configured);
+    int globalCap = (maxThreads != null) ? normalizeMaxThreads(maxThreads) : defaultMaxThreads();
+    if (autorouter != null && autorouter.maxThreads != null) {
+      int stageThreads = normalizeMaxThreads(autorouter.maxThreads);
+      return (maxThreads != null) ? Math.min(stageThreads, globalCap) : stageThreads;
+    }
+    return globalCap;
+  }
+
+  /**
+   * Resolves the effective optimizer thread limit. Prefers {@code optimizer.maxThreads} when set,
+   * bounded by {@code maxThreads} (the global thread ceiling). Falls back to {@code maxThreads} (or
+   * system default) if {@code optimizer.maxThreads} is not set.
+   */
+  public int getOptimizerMaxThreads() {
+    int globalCap = (maxThreads != null) ? normalizeMaxThreads(maxThreads) : defaultMaxThreads();
+    if (optimizer != null && optimizer.maxThreads != null) {
+      int stageThreads = normalizeMaxThreads(optimizer.maxThreads);
+      return (maxThreads != null) ? Math.min(stageThreads, globalCap) : stageThreads;
+    }
+    return globalCap;
   }
 
   /** Sets the maximum duration allowed for a routing job. */
@@ -494,7 +535,11 @@ public class RouterSettings implements Serializable, Cloneable {
         scoring.undesiredDirectionTraceCost[i] = layers[i].undesiredDirectionTraceCost;
       } else if (initializeTraceCosts) {
         scoring.undesiredDirectionTraceCost[i] = scoring.defaultUndesiredDirectionTraceCost;
-        if (currentPreferredDirectionIsHorizontal) {
+        boolean isPrefHoriz =
+            layers[i].preferredDirectionHorizontal != null
+                ? layers[i].preferredDirectionHorizontal
+                : currentPreferredDirectionIsHorizontal;
+        if (isPrefHoriz) {
           scoring.undesiredDirectionTraceCost[i] += horizontalAddCostsAgainstPreferredDir;
         } else {
           scoring.undesiredDirectionTraceCost[i] += verticalAddCostsAgainstPreferredDir;
@@ -577,23 +622,86 @@ public class RouterSettings implements Serializable, Cloneable {
    * @param board routing board whose net classes to update
    */
   public void applyNetClassExclusions(RoutingBoard board) {
-    if (board == null
-        || board.rules == null
-        || board.rules.netClasses == null
-        || this.autorouter == null
-        || this.autorouter.ignoreNetClasses == null) {
+    if (board == null || board.rules == null || board.rules.netClasses == null) {
       return;
     }
-    for (String netClassName : this.autorouter.ignoreNetClasses) {
-      if (netClassName == null || netClassName.isBlank()) {
-        continue;
-      }
-      for (int i = 0; i < board.rules.netClasses.count(); i++) {
-        if (board.rules.netClasses.get(i).getName().equalsIgnoreCase(netClassName)) {
-          board.rules.netClasses.get(i).isIgnoredByAutorouter = true;
-        }
+    for (int i = 0; i < board.rules.netClasses.count(); i++) {
+      board.rules.netClasses.get(i).isRoutedFirst = false;
+    }
+    if (this.autorouter == null) {
+      return;
+    }
+    for (NetClass netClass :
+        resolveNetClasses(board.rules, this.autorouter.ignoreNetClasses, null)) {
+      netClass.isIgnoredByAutorouter = true;
+    }
+    for (NetClass netClass :
+        resolveNetClasses(board.rules, this.autorouter.priorityNetClasses, null)) {
+      netClass.isRoutedFirst = true;
+    }
+  }
+
+  /** The via costs of a net of a priority net class. */
+  public int getPriorityViaCosts() {
+    return autorouter != null && autorouter.priorityViaCosts != null
+        ? Math.max(autorouter.priorityViaCosts, 1)
+        : getViaCosts();
+  }
+
+  /**
+   * The board net classes named in a list such as {@code ignore_net_classes}. KiCad names composite
+   * classes with a comma ({@code PWR,Default}), and a comma-separated list on the command line
+   * splits them in two: a name that matches no class is joined with the names that follow it until
+   * the joined name matches one. A name that matches a class on its own is always taken as is.
+   *
+   * @param unknown receives the names that match no class; may be {@code null}
+   */
+  private static List<NetClass> resolveNetClasses(
+      BoardRules rules, String[] listed, List<String> unknown) {
+    List<String> names = new ArrayList<>();
+    if (listed == null) {
+      return new ArrayList<>();
+    }
+    for (String name : listed) {
+      if (name != null && !name.isBlank()) {
+        names.add(name.trim());
       }
     }
+    List<NetClass> result = new ArrayList<>();
+    for (int i = 0; i < names.size(); i++) {
+      NetClass netClass = findNetClass(rules, names.get(i));
+      StringBuilder joined = new StringBuilder(names.get(i));
+      for (int j = i + 1; netClass == null && j < names.size(); j++) {
+        joined.append(',').append(names.get(j));
+        netClass = findNetClass(rules, joined.toString());
+        if (netClass != null) {
+          i = j;
+        }
+      }
+      if (netClass != null) {
+        result.add(netClass);
+      } else if (unknown != null) {
+        unknown.add(names.get(i));
+      }
+    }
+    return result;
+  }
+
+  /**
+   * The board net class a user-given name refers to, ignoring case. KiCad's default class ({@code
+   * kicad_default} in a DSN, {@code Default} in KiCad) is read into the board's default class,
+   * whose own name is {@code default}; both names resolve to it.
+   */
+  private static NetClass findNetClass(BoardRules rules, String name) {
+    if (KiCadNetClassNames.isKiCadDefaultNetClassName(name)) {
+      return rules.getDefaultNetClass();
+    }
+    for (int i = 0; i < rules.netClasses.count(); i++) {
+      if (rules.netClasses.get(i).getName().equalsIgnoreCase(name)) {
+        return rules.netClasses.get(i);
+      }
+    }
+    return null;
   }
 
   /**
@@ -638,25 +746,25 @@ public class RouterSettings implements Serializable, Cloneable {
       for (int i = 0; i < layerCount; i++) {
         layers[i] = new LayerSettings();
       }
-    }
-    if (scoring == null) {
-      scoring = new RoutingCostSettings();
-    }
-    // Initialize per-layer cost arrays with a neutral default so callers can
-    // write individual entries without waiting for applyBoardSpecificOptimizations.
-    scoring.preferredDirectionTraceCost = new double[layerCount];
-    scoring.undesiredDirectionTraceCost = new double[layerCount];
+      if (scoring == null) {
+        scoring = new RoutingCostSettings();
+      }
+      // Initialize per-layer cost arrays with a neutral default so callers can
+      // write individual entries without waiting for applyBoardSpecificOptimizations.
+      scoring.preferredDirectionTraceCost = new double[layerCount];
+      scoring.undesiredDirectionTraceCost = new double[layerCount];
 
-    for (int i = 0; i < layerCount; i++) {
-      // Null means routable (getLayerActive, applyBoardSpecificOptimizations) without overriding a
-      // lower-priority source's choice when these settings are merged.
-      layers[i].routable = null;
-      layers[i].preferredDirectionHorizontal = null;
-      layers[i].bendCost = null;
-      layers[i].preferredDirectionTraceCost = null;
-      layers[i].undesiredDirectionTraceCost = null;
-      scoring.preferredDirectionTraceCost[i] = 1.0;
-      scoring.undesiredDirectionTraceCost[i] = 1.0;
+      for (int i = 0; i < layerCount; i++) {
+        // Null means routable (getLayerActive, applyBoardSpecificOptimizations) without
+        // overriding a lower-priority source's choice when these settings are merged.
+        layers[i].routable = null;
+        layers[i].preferredDirectionHorizontal = null;
+        layers[i].bendCost = null;
+        layers[i].preferredDirectionTraceCost = null;
+        layers[i].undesiredDirectionTraceCost = null;
+        scoring.preferredDirectionTraceCost[i] = 1.0;
+        scoring.undesiredDirectionTraceCost[i] = 1.0;
+      }
     }
   }
 
@@ -689,7 +797,9 @@ public class RouterSettings implements Serializable, Cloneable {
     result.holeClearanceUm = this.holeClearanceUm;
     result.fallbackViaDiameterUm = this.fallbackViaDiameterUm;
     result.fallbackViaDrillUm = this.fallbackViaDrillUm;
+    result.holeToHoleUm = this.holeToHoleUm;
     result.clearanceToleranceUm = this.clearanceToleranceUm;
+    result.drcEpsilonUm = this.drcEpsilonUm;
     result.meanderMinAmplitudeMm = this.meanderMinAmplitudeMm;
     result.meanderMaxAmplitudeMm = this.meanderMaxAmplitudeMm;
     result.meanderSpacingMm = this.meanderSpacingMm;
@@ -700,6 +810,7 @@ public class RouterSettings implements Serializable, Cloneable {
     result.planeAsObstacle = this.planeAsObstacle;
     result.neckWidthUm = this.neckWidthUm;
     result.minTraceWidthUm = this.minTraceWidthUm;
+    result.exactCopper = this.exactCopper;
     result.strictDrc = this.strictDrc;
     result.fixKicadFootprints = this.fixKicadFootprints;
     result.resultJsonPath = this.resultJsonPath;
@@ -1193,20 +1304,6 @@ public class RouterSettings implements Serializable, Cloneable {
 
     int changedCount = ReflectionUtil.copyFields(settings, this);
 
-    // The flat max_threads (also -mt) caps both pools, as setMaxThreads() does. A source that sets
-    // it without a pool's nested max_threads sets that pool too.
-    if (settings.maxThreads != null) {
-      int threads = normalizeMaxThreads(settings.maxThreads);
-      if (this.autorouter != null
-          && (settings.autorouter == null || settings.autorouter.maxThreads == null)) {
-        this.autorouter.maxThreads = threads;
-      }
-      if (this.optimizer != null
-          && (settings.optimizer == null || settings.optimizer.maxThreads == null)) {
-        this.optimizer.maxThreads = threads;
-      }
-    }
-
     // Fire property change events for key properties to update GUI
     // Note: We fire events even if values didn't change to ensure GUI is in sync
     if (pcs != null) {
@@ -1251,22 +1348,22 @@ public class RouterSettings implements Serializable, Cloneable {
       }
     }
 
-    // Validate maxThreads (0 means no limit - handled as max available during normalization)
+    // Validate maxThreads if explicitly specified (0 means no limit - handled during normalization)
     int availableProcessors = Runtime.getRuntime().availableProcessors();
-    if (this.maxThreads == null) {
-      this.maxThreads = defaultMaxThreads();
-    } else if (this.maxThreads < 0) {
-      String warning =
-          "Invalid maxThreads value: " + this.maxThreads + ", using " + defaultMaxThreads();
-      FRLogger.warn(warning);
-      this.validationWarnings.add(warning);
-      this.maxThreads = defaultMaxThreads();
-    } else if (this.maxThreads > availableProcessors) {
-      String warning =
-          "Invalid maxThreads value: " + this.maxThreads + ", capping at " + availableProcessors;
-      FRLogger.warn(warning);
-      this.validationWarnings.add(warning);
-      this.maxThreads = availableProcessors;
+    if (this.maxThreads != null) {
+      if (this.maxThreads < 0) {
+        String warning =
+            "Invalid maxThreads value: " + this.maxThreads + ", using " + defaultMaxThreads();
+        FRLogger.warn(warning);
+        this.validationWarnings.add(warning);
+        this.maxThreads = defaultMaxThreads();
+      } else if (this.maxThreads > availableProcessors) {
+        String warning =
+            "Invalid maxThreads value: " + this.maxThreads + ", capping at " + availableProcessors;
+        FRLogger.warn(warning);
+        this.validationWarnings.add(warning);
+        this.maxThreads = availableProcessors;
+      }
     }
 
     // Validate tracePullTightAccuracy
@@ -1334,24 +1431,19 @@ public class RouterSettings implements Serializable, Cloneable {
     if (board != null
         && board.rules != null
         && board.rules.netClasses != null
-        && this.autorouter != null
-        && this.autorouter.ignoreNetClasses != null) {
-      for (String netClassName : this.autorouter.ignoreNetClasses) {
-        if (netClassName == null || netClassName.isBlank()) {
-          continue;
-        }
-        boolean found = false;
-        for (int i = 0; i < board.rules.netClasses.count(); i++) {
-          if (board.rules.netClasses.get(i).getName().equalsIgnoreCase(netClassName)) {
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
+        && this.autorouter != null) {
+      String[][] lists = {this.autorouter.ignoreNetClasses, this.autorouter.priorityNetClasses};
+      String[] keys = {"ignoreNetClasses", "priorityNetClasses"};
+      for (int k = 0; k < lists.length; k++) {
+        List<String> unknown = new ArrayList<>();
+        resolveNetClasses(board.rules, lists[k], unknown);
+        for (String netClassName : unknown) {
           String warning =
               "Unknown net class '"
                   + netClassName
-                  + "' specified in ignoreNetClasses (not present on board)";
+                  + "' specified in "
+                  + keys[k]
+                  + " (not present on board)";
           FRLogger.warn(warning);
           this.validationWarnings.add(warning);
         }

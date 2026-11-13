@@ -214,14 +214,8 @@ public class BoardHistory {
     public final byte[] board;
     public final String hash;
     public final float score;
+    public final transient ClearanceBaseline clearanceBaseline;
     public int restoreCount;
-
-    /**
-     * The board's baseline of pre-existing clearance violations. It is transient on the board, so
-     * the bytes do not carry it; without it a restored board counts every pre-existing violation as
-     * new. It is immutable and shared.
-     */
-    private final transient ClearanceBaseline clearanceBaseline;
 
     public BoardHistoryEntry(RoutingBoard board, float score) {
       this.board = board.serialize(false);

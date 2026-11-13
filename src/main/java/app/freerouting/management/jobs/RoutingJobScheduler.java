@@ -6,6 +6,7 @@ import app.freerouting.core.RoutingJobState;
 import app.freerouting.core.Session;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.io.FileFormat;
+import app.freerouting.io.specctra.DsnReadOptions;
 import app.freerouting.io.specctra.SesImportSummary;
 import app.freerouting.io.specctra.SesReader;
 import app.freerouting.logger.FRLogger;
@@ -119,17 +120,6 @@ public final class RoutingJobScheduler {
                               // merge only what the caller set (see CompositeBoardInput).
                               final RouterSettings callerSettings =
                                   job.routerSettings != null ? job.routerSettings.clone() : null;
-                              HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
-                              boardManager.holdPostLoadProcessing();
-                              if (isDsn) {
-                                boardManager.loadFromSpecctraDsn(
-                                    job.input.getData(), null, new ItemIdGenerator());
-                              } else {
-                                boardManager.loadFromKiCadJson(
-                                    job.input.getData(), null, new ItemIdGenerator());
-                              }
-                              job.board = boardManager.getRoutingBoard();
-
                               GlobalSettings gs = globalSettings();
                               var settingsMerger =
                                   gs != null && gs.settingsMergerProtype != null
@@ -178,16 +168,13 @@ public final class RoutingJobScheduler {
                                 }
                               }
 
-                              // The rules apply onto the board here, and their autoroute settings
-                              // merge at RULES-file priority, below the environment, the command
-                              // line and the caller.
+                              // Before the load there is no board yet: the rules file's autoroute
+                              // settings are read without it, only to resolve the DSN import.
+                              final String rulesDesignName = job.name != null ? job.name : "board";
                               if (rulesData != null) {
                                 settingsMerger.addOrReplaceSources(
                                     CompositeBoardInput.readRulesOntoBoard(
-                                        rulesData,
-                                        rulesFilename,
-                                        job.name != null ? job.name : "board",
-                                        job.board));
+                                        rulesData, rulesFilename, rulesDesignName, null));
                               }
 
                               // Keep per-job overrides (e.g. tests toggling fanout/optimizer) by
@@ -195,6 +182,41 @@ public final class RoutingJobScheduler {
                               // settings.
                               if (callerSettings != null) {
                                 settingsMerger.addOrReplaceSources(new ApiSettings(callerSettings));
+                              }
+
+                              // Resolve DSN item allocation from the merged settings before the
+                              // board is loaded.
+                              var importSettings = settingsMerger.merge();
+                              var importOptions = DsnReadOptions.forSettings(importSettings);
+                              // The board overrides applied during the load (copper-to-edge
+                              // clearance, hole-to-hole, ...) read job.routerSettings. An API job
+                              // only carries the fields the client sent, so hand it the merged
+                              // settings first, as the CLI does, or the defaults are skipped.
+                              // The final merge below still takes only what the caller set at API
+                              // priority, not these merged settings or the board defaults the load
+                              // fills into them.
+                              job.routerSettings = importSettings;
+                              HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
+                              boardManager.holdPostLoadProcessing();
+                              if (isDsn) {
+                                boardManager.loadFromSpecctraDsn(
+                                    job.input.getData(),
+                                    null,
+                                    new ItemIdGenerator(),
+                                    importOptions);
+                              } else {
+                                boardManager.loadFromKiCadJson(
+                                    job.input.getData(), null, new ItemIdGenerator());
+                              }
+                              job.board = boardManager.getRoutingBoard();
+
+                              // The rules apply onto the board here, and their autoroute settings,
+                              // now read with the board's layer structure, merge at RULES-file
+                              // priority, below the environment, the command line and the caller.
+                              if (rulesData != null) {
+                                settingsMerger.addOrReplaceSources(
+                                    CompositeBoardInput.readRulesOntoBoard(
+                                        rulesData, rulesFilename, rulesDesignName, job.board));
                               }
 
                               // Apply the final merged settings to the job and optimize them for

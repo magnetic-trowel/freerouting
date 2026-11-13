@@ -361,6 +361,8 @@ public final class Sorted45DegreeRoomNeighbours {
                 + currentIncompleteRoom.getLayer()
                 + ", enlarged_bounds="
                 + describeBounds(enlargedOct.boundingBox()));
+      }
+      if (FRLogger.isTraceEnabled()) {
         FRLogger.trace(
             "ROOM_EDGE_REMOVE contained"
                 + ", net="

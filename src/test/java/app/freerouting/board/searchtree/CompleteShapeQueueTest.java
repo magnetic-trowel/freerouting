@@ -39,6 +39,6 @@ class CompleteShapeQueueTest {
             new IncompleteFreeSpaceExpansionRoom(null, 0, inside), otherNet, null, null);
 
     assertTrue(result.isEmpty(), "the pad must leave no room piece");
-    assertTrue(tree.completeShapeQueue.get().isEmpty(), "nodes were left in the queue");
+    assertTrue(ShapeSearchTree.nearQueueIsEmpty(), "nodes were left in the queue");
   }
 }

@@ -89,6 +89,27 @@ public abstract sealed class NamedAlgorithm implements Serializable
   }
 
   /**
+   * Returns true when someone listens to board updated events. The statistics these events carry
+   * cost a scan of the whole board, so callers skip them when nobody would read them.
+   */
+  public boolean hasBoardUpdatedEventListeners() {
+    return !boardUpdatedEventListeners.isEmpty();
+  }
+
+  /**
+   * Returns true when a listener reads the board statistics of board updated events. Building them
+   * scans the whole board: listeners that only need to know the board changed do not count.
+   */
+  public boolean hasBoardStatisticsReaders() {
+    for (BoardUpdatedEventListener listener : boardUpdatedEventListeners) {
+      if (listener.readsBoardStatistics()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Fires a board updated event. This happens when the board has been updated, e.g. after a route
    * has been added.
    */

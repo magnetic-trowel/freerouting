@@ -1,6 +1,7 @@
 package app.freerouting.autoroute.maze;
 
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.board.model.items.ConductionArea;
 import app.freerouting.board.model.items.Item;
 import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.structure.Unit;
@@ -13,7 +14,10 @@ import app.freerouting.rules.NetClass;
 import app.freerouting.rules.ViaInfo;
 import app.freerouting.rules.ViaRule;
 import app.freerouting.settings.RouterSettings;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Set;
 
 /** Structure for controlling the autoroute algorithm. */
 public class AutorouteControl {
@@ -67,12 +71,32 @@ public class AutorouteControl {
   /** True, if vias may drill to the pad of SMD pins. */
   public boolean attachSmdAllowed;
 
+  /** True, if vias may sit directly in SMD pads of their own net. */
+  public final boolean viaInPad;
+
+  /** True, if vias may touch SMD pads of their own net with drill hole outside. */
+  public final boolean viaTouchingPad;
+
+  /**
+   * True, if free pieces containing SMD pads also offer their centre of gravity as via candidate.
+   */
+  public final boolean centreOfGravityViaCandidate;
+
+  /** Extra cost for fanout vias inside own-net pad clearance. */
+  public final double fanoutViaPadGap;
+
   /** The minimum cost value of all normal vias. */
   public double minNormalViaCost;
 
   public boolean ripupAllowed;
   public int ripupCosts;
   public int ripupPassNo;
+
+  /**
+   * Nets whose traces and vias this search may not rip: the routed net was moved aside for them in
+   * an earlier pass (see the batch autorouter's rip-up memory). Empty by default.
+   */
+  public Set<Integer> netsNotToRip = Collections.emptySet();
 
   /** If true, the autoroute algorithm completes after the first drill. */
   public boolean isFanout;
@@ -158,6 +182,26 @@ public class AutorouteControl {
   private AutorouteControl(
       RoutingBoard board, RouterSettings settings, ExpansionCostFactor[] traceCosts) {
     this.settings = settings;
+    this.viaInPad =
+        settings != null
+            && settings.autorouter != null
+            && Boolean.TRUE.equals(settings.autorouter.viaInPad);
+    this.viaTouchingPad =
+        settings != null
+            && settings.autorouter != null
+            && Boolean.TRUE.equals(settings.autorouter.viaTouchingPad);
+    this.fanoutViaPadGap =
+        (settings != null
+                && settings.autorouter != null
+                && settings.autorouter.fanoutViaPadGap != null)
+            ? Math.max(0, settings.autorouter.fanoutViaPadGap)
+            : 0;
+    this.centreOfGravityViaCandidate =
+        (settings != null
+                && settings.autorouter != null
+                && settings.autorouter.viaCentreOfGravity != null)
+            ? settings.autorouter.viaCentreOfGravity
+            : !viaInPad;
     layerCount = board.getLayerCount();
     traceHalfWidth = new int[layerCount];
     compensatedTraceHalfWidth = new int[layerCount];
@@ -210,6 +254,29 @@ public class AutorouteControl {
     ripupAllowed = false;
     ripupCosts = 1000;
     ripupPassNo = 1;
+  }
+
+  /**
+   * Whether a via of {@code viaInfo} may share copper with SMD pads of its own net: the via rule's
+   * flag, or with {@code viaInPad} / {@code viaTouchingPad} the forced {@code attachSmdAllowed} as
+   * well.
+   */
+  public boolean viaAttachAllowed(ViaInfo viaInfo) {
+    return viaInfo.attachSmdAllowed() || ((viaInPad || viaTouchingPad) && this.attachSmdAllowed);
+  }
+
+  /**
+   * Whether a via of {@code viaInfo} may have its drill hole at {@code location}: always, except
+   * under {@code viaTouchingPad} alone, where the hole must stay outside the own-net SMD pads it
+   * overlaps.
+   */
+  public boolean viaHoleAllowed(
+      RoutingBoard board, ViaInfo viaInfo, Point location, int[] netNumbers) {
+    return !viaTouchingPad
+        || viaInPad
+        || viaInfo.attachSmdAllowed()
+        || !app.freerouting.board.actions.ForcedViaInserter.holeInSmdPad(
+            board, viaInfo.getPadstack(), location, netNumbers);
   }
 
   private static boolean isPureSmdNet(RoutingBoard board, int netNumber) {
@@ -359,6 +426,59 @@ public class AutorouteControl {
     }
     minNormalViaCost = viaCosts * viaCostFactor;
     minCheapViaCost = 0.8 * minNormalViaCost;
+    applySignalLayerViaSurcharge(board, viaCosts, netNumber, viaCostFactor);
+  }
+
+  /**
+   * Distinguishes the two kinds of vias of a plane net. A via that drops from a signal layer into a
+   * plane of the net costs {@code settings.getPlaneViaCosts()}, while a via between two signal
+   * layers costs {@code settings.getViaCosts()}. The base via cost is set to the cheaper of the two
+   * so that the destination distance stays an admissible lower bound, and the difference is charged
+   * through {@link #addViaCosts} on the more expensive layer pairs.
+   */
+  private void applySignalLayerViaSurcharge(
+      RoutingBoard board, int viaCosts, int netNumber, double viaCostFactor) {
+    for (int i = 0; i < layerCount; i++) {
+      Arrays.fill(addViaCosts[i].toLayer, 0);
+    }
+    if (settings == null || netNumber <= 0) {
+      return;
+    }
+    boolean[] planeLayer = new boolean[layerCount];
+    boolean anyPlane = false;
+    for (ConductionArea area : board.getConductionAreas()) {
+      int layer = area.getLayer();
+      if (layer >= 0
+          && layer < layerCount
+          && !board.layerStructure.layers[layer].isSignal
+          && area.containsNet(netNumber)) {
+        planeLayer[layer] = true;
+        anyPlane = true;
+      }
+    }
+    if (!anyPlane) {
+      return;
+    }
+    Net net =
+        board.rules != null && board.rules.nets != null ? board.rules.nets.get(netNumber) : null;
+    boolean routedFirst = net != null && net.isRoutedFirst();
+    int signalCost = routedFirst ? settings.getPriorityViaCosts() : settings.getViaCosts();
+    int planeCost = settings.getPlaneViaCosts();
+    int baseCost = Math.min(signalCost, planeCost);
+    minNormalViaCost = baseCost * viaCostFactor;
+    minCheapViaCost = 0.8 * minNormalViaCost;
+
+    int signalSurcharge = (int) Math.round((signalCost - baseCost) * viaCostFactor);
+    int planeSurcharge = (int) Math.round((planeCost - baseCost) * viaCostFactor);
+
+    for (int i = 0; i < layerCount; i++) {
+      for (int j = 0; j < layerCount; j++) {
+        if (i != j) {
+          boolean touchesPlane = planeLayer[i] || planeLayer[j];
+          addViaCosts[i].toLayer[j] = touchesPlane ? planeSurcharge : signalSurcharge;
+        }
+      }
+    }
   }
 
   /** Horizontal and vertical costs for traces on a board layer. */

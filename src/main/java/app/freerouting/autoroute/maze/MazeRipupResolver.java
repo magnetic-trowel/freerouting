@@ -74,6 +74,13 @@ final class MazeRipupResolver {
     if (!obstacleItem.isRoutable()) {
       return -1;
     }
+    if (!ctrl.netsNotToRip.isEmpty()) {
+      for (int i = 0; i < obstacleItem.netCount(); i++) {
+        if (ctrl.netsNotToRip.contains(obstacleItem.getNetNumber(i))) {
+          return -1;
+        }
+      }
+    }
     if (doorIsSmall && !enterThroughSmallDoor(listElement, obstacleItem)) {
       return -1;
     }
@@ -127,11 +134,32 @@ final class MazeRipupResolver {
 
     double ripupCost = ctrl.ripupCosts * costFactor;
     double detour = 1;
-    Connection obstacleConnection = null;
+    double traceLength = 0;
+    double minTraceLength = 0;
+    int itemCount = 0;
+    String connectionItemIds = "[]";
     if (fanoutViaCostFactor <= 1 && !ctrl.isFanout) {
-      obstacleConnection = Connection.get(obstacleItem);
+      Connection obstacleConnection = Connection.get(obstacleItem);
       if (obstacleConnection != null) {
         detour = obstacleConnection.getDetour();
+        traceLength = obstacleConnection.traceLength();
+        itemCount = obstacleConnection.itemList.size();
+        if (obstacleConnection.startPoint != null && obstacleConnection.endPoint != null) {
+          minTraceLength =
+              obstacleConnection
+                  .startPoint
+                  .toFloat()
+                  .distance(obstacleConnection.endPoint.toFloat());
+        }
+        StringBuilder sb = new StringBuilder("[");
+        for (Item connectionItem : obstacleConnection.itemList) {
+          if (sb.length() > 1) {
+            sb.append(",");
+          }
+          sb.append(connectionItem.getId());
+        }
+        sb.append("]");
+        connectionItemIds = sb.toString();
       }
     }
     boolean randomize = ctrl.ripupPassNo >= 4 && ctrl.ripupPassNo % 3 != 0;
@@ -145,67 +173,36 @@ final class MazeRipupResolver {
     int result = Math.max((int) ripupCost, 1);
     final int maxRipupCosts = Integer.MAX_VALUE / 100;
     result = Math.min(result, maxRipupCosts);
-    if (FRLogger.isTraceEnabled()) {
-      traceCheckRipup(obstacleItem, obstacleConnection, costFactor, detour, result);
-    }
-    return result;
-  }
-
-  private void traceCheckRipup(
-      Item obstacleItem,
-      Connection obstacleConnection,
-      double costFactor,
-      double detour,
-      int result) {
-    AutorouteControl ctrl = search.ctrl;
-    double traceLength = 0;
-    double minTraceLength = 0;
-    int itemCount = 0;
-    String connectionItemIds = "[]";
-    if (obstacleConnection != null) {
-      traceLength = obstacleConnection.traceLength();
-      itemCount = obstacleConnection.itemList.size();
-      if (obstacleConnection.startPoint != null && obstacleConnection.endPoint != null) {
-        minTraceLength =
-            obstacleConnection.startPoint.toFloat().distance(obstacleConnection.endPoint.toFloat());
-      }
-      StringBuilder sb = new StringBuilder("[");
-      for (Item connectionItem : obstacleConnection.itemList) {
-        if (sb.length() > 1) {
-          sb.append(",");
-        }
-        sb.append(connectionItem.getId());
-      }
-      sb.append("]");
-      connectionItemIds = sb.toString();
-    }
     int[] nets = new int[obstacleItem.netCount()];
     for (int i = 0; i < nets.length; i++) {
       nets[i] = obstacleItem.getNetNumber(i);
     }
-    FRLogger.trace(
-        "CHECK_RIPUP net="
-            + ctrl.netNumber
-            + ", obstacle_id="
-            + obstacleItem.getId()
-            + ", obstacle_nets="
-            + java.util.Arrays.toString(nets)
-            + ", connectionItems="
-            + connectionItemIds
-            + ", halfWidth="
-            + costFactor
-            + ", ripupCosts="
-            + ctrl.ripupCosts
-            + ", traceLength="
-            + traceLength
-            + ", minTraceLength="
-            + minTraceLength
-            + ", itemCount="
-            + itemCount
-            + ", detour="
-            + detour
-            + ", result="
-            + result);
+    if (FRLogger.isTraceEnabled()) {
+      FRLogger.trace(
+          "CHECK_RIPUP net="
+              + ctrl.netNumber
+              + ", obstacle_id="
+              + obstacleItem.getId()
+              + ", obstacle_nets="
+              + java.util.Arrays.toString(nets)
+              + ", connectionItems="
+              + connectionItemIds
+              + ", halfWidth="
+              + costFactor
+              + ", ripupCosts="
+              + ctrl.ripupCosts
+              + ", traceLength="
+              + traceLength
+              + ", minTraceLength="
+              + minTraceLength
+              + ", itemCount="
+              + itemCount
+              + ", detour="
+              + detour
+              + ", result="
+              + result);
+    }
+    return result;
   }
 
   /** Checks entering a thick room from a via or trace through a small door after ripup. */

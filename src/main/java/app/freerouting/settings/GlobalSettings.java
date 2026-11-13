@@ -16,6 +16,8 @@ import com.google.gson.annotations.SerializedName;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Serializable;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
@@ -49,10 +51,10 @@ public class GlobalSettings implements Serializable {
    * #ROUTER_FLAGS_WITH_VALUE} take a value.
    */
   private static final Set<String> ROUTER_FLAGS =
-      Set.of("-mp", "-mt", "-oit", "-us", "-hr", "-is", "-inc", "-im");
+      Set.of("-mp", "-mt", "-spl", "-oit", "-us", "-hr", "-is", "-inc", "-im");
 
   private static final Set<String> ROUTER_FLAGS_WITH_VALUE =
-      Set.of("-mp", "-mt", "-oit", "-us", "-hr", "-is", "-inc");
+      Set.of("-mp", "-mt", "-spl", "-oit", "-us", "-hr", "-is", "-inc");
 
   /**
    * Returns the currently active GlobalSettings instance.
@@ -68,27 +70,37 @@ public class GlobalSettings implements Serializable {
     return currentInstance;
   }
 
-  /** Cached reflective handle to {@code Freerouting.globalSettings}; looked up on first use. */
-  private static volatile java.lang.reflect.Field cachedGlobalSettingsField;
+  // Resolved once, in a holder class so that the JIT treats the getter as a constant: every
+  // clearance lookup asks whether granular tracing is on, which reads the settings, and
+  // Field.get repeats its access check on each read.
+  private static final class FreeroutingGlobalSettingsGetter {
+    static final MethodHandle GETTER = resolve();
 
-  private static GlobalSettings getFreeroutingGlobalSettingsIfAvailable() {
-    try {
-      java.lang.reflect.Field field = cachedGlobalSettingsField;
-      if (field == null) {
+    private static MethodHandle resolve() {
+      try {
         Class<?> freeroutingClass =
             Class.forName(
                 "app.freerouting.Freerouting", false, GlobalSettings.class.getClassLoader());
-        field = freeroutingClass.getField("globalSettings");
-        cachedGlobalSettingsField = field;
+        return MethodHandles.publicLookup()
+            .findStaticGetter(freeroutingClass, "globalSettings", GlobalSettings.class);
+      } catch (Throwable _) {
+        // Ignored in environments where Freerouting is not loaded or unavailable
+        return null;
       }
-      Object val = field.get(null);
-      if (val instanceof GlobalSettings gs) {
-        return gs;
-      }
+    }
+  }
+
+  private static GlobalSettings getFreeroutingGlobalSettingsIfAvailable() {
+    MethodHandle getter = FreeroutingGlobalSettingsGetter.GETTER;
+    if (getter == null) {
+      return null;
+    }
+    try {
+      return (GlobalSettings) getter.invokeExact();
     } catch (Throwable _) {
       // Ignored in environments where Freerouting is not loaded or unavailable
+      return null;
     }
-    return null;
   }
 
   /** Sets the currently active GlobalSettings instance. */
@@ -188,6 +200,12 @@ public class GlobalSettings implements Serializable {
    * initialization.
    */
   public transient String initialRulesFile;
+
+  /**
+   * The KiCad custom design rules file (.kicad_dru) provided with the design file via the -de
+   * command line argument.
+   */
+  public transient String initialKiCadDesignRulesFile;
 
   /**
    * The designSessionFilename field stores the optional Specctra session file (.ses) path provided
@@ -775,6 +793,7 @@ public class GlobalSettings implements Serializable {
             boolean hasDsn = false;
             boolean hasSes = false;
             boolean hasRules = false;
+            boolean hasKiCadRules = false;
 
             // Process each file and identify its type by extension
             for (String file : files) {
@@ -821,11 +840,19 @@ public class GlobalSettings implements Serializable {
                 }
                 initialRulesFile = file;
                 hasRules = true;
+              } else if (lowerFile.endsWith(".kicad_dru")) {
+                if (hasKiCadRules) {
+                  FRLogger.warn(
+                      "Multiple KiCad design rules files provided in -de argument. "
+                          + "Only the last one will be used.");
+                }
+                initialKiCadDesignRulesFile = file;
+                hasKiCadRules = true;
               } else {
                 FRLogger.warn(
                     "Unknown file type in -de argument: "
                         + file
-                        + ". Expected .dsn, .json, .ses, or .rules");
+                        + ". Expected .dsn, .json, .ses, .rules or .kicad_dru");
               }
             }
 
@@ -1013,7 +1040,7 @@ public class GlobalSettings implements Serializable {
   }
 
   public static final java.util.Set<String> DE_VALID_EXTENSIONS =
-      java.util.Set.of(".dsn", ".json", ".ses", ".rules");
+      java.util.Set.of(".dsn", ".json", ".ses", ".rules", ".kicad_dru");
 
   public static final java.util.Set<String> DO_VALID_EXTENSIONS =
       java.util.Set.of(".ses", ".dsn", ".scr", ".rules", ".json", ".drc", ".frb", ".kicad_pcb");

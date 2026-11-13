@@ -82,6 +82,35 @@ class BoardHistoryTest {
   }
 
   @Test
+  void restoredLoadedBoardKeepsTheClearanceBaseline() {
+    // The fallback and the statistics compare violations against this baseline; a restored copy
+    // without it reports every pre-existing violation of the input design as new.
+    board2.awaitPostLoad();
+    ClearanceBaseline baseline = board2.clearanceBaseline;
+    assertNotNull(baseline, "Loading the board builds its clearance baseline");
+    BoardHistory history = new BoardHistory(routerSettings);
+    history.add(board2);
+
+    RoutingBoard restoredBoard = history.restoreBestBoard();
+
+    assertNotNull(restoredBoard);
+    assertSame(baseline, restoredBoard.clearanceBaseline);
+  }
+
+  @Test
+  void deepCopyKeepsTheClearanceBaseline() {
+    // The fallback continuations and the optimizer work on deep copies of the routed board.
+    board2.awaitPostLoad();
+    ClearanceBaseline baseline = board2.clearanceBaseline;
+    assertNotNull(baseline, "Loading the board builds its clearance baseline");
+
+    RoutingBoard copy = board2.deepCopy();
+
+    assertNotSame(board2, copy);
+    assertSame(baseline, copy.clearanceBaseline);
+  }
+
+  @Test
   void restoreBestBoardFromMultiple() {
     BoardHistory history = new BoardHistory(routerSettings);
 

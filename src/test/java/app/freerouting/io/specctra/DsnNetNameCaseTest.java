@@ -63,8 +63,6 @@ class DsnNetNameCaseTest {
     assertEquals(List.of("SIG", "SIG", "sig"), pinNetNames(board));
     assertEquals("sig", board.rules.nets.get("sig", 1).name);
     assertEquals("SIG", board.rules.nets.get("SIG", 1).name);
-    // a reference that matches no name exactly still finds the net
-    assertEquals("SIG", board.rules.nets.get("Sig", 1).name);
   }
 
   private static List<String> pinNetNames(RoutingBoard board) {

@@ -26,7 +26,7 @@ class TraceTightener90 extends TraceTightener {
   public Polyline pullTight(Polyline polyline) {
     Polyline newResult = avoidAcidTraps(polyline);
     Polyline prevResult = null;
-    while (newResult != prevResult && !this.isStopRequested()) {
+    for (int rounds = 0; newResult != prevResult && !mustStopAfter(rounds); ++rounds) {
       prevResult = newResult;
       Polyline tmp1 = trySkipSecondCorner(prevResult);
       Polyline tmp2 = trySkipCorners(tmp1);
@@ -71,6 +71,9 @@ class TraceTightener90 extends TraceTightener {
 
   /** Tries to reduce the amount of corners of polyline. Return polyline, if nothing was changed. */
   private Polyline trySkipCorners(Polyline polyline) {
+    if (polyline.lines.length < 5) {
+      return polyline;
+    }
     Line[] newLines = new Line[polyline.lines.length];
     newLines[0] = polyline.lines[0];
     newLines[1] = polyline.lines[1];
