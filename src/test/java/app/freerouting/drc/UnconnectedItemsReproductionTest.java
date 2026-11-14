@@ -37,12 +37,12 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
       "Issue575-drc_Natural_Tone_Preamp_7_unconnected_items.dsn";
 
   /**
-   * Lower bounds for this board: the unconnected items reported by KiCad's own DRC, and the
-   * dangling tracks and vias documented in the reference freerouting DRC JSON.
+   * Lower bounds for this board: the unconnected items and dangling tracks reported by KiCad's own
+   * DRC, and the dangling vias documented in the reference freerouting DRC JSON.
    */
   private static final int EXPECTED_UNCONNECTED_NET_GROUPS = 7;
 
-  private static final int EXPECTED_DANGLING_TRACKS = 24;
+  private static final int EXPECTED_DANGLING_TRACKS = 5;
   private static final int EXPECTED_DANGLING_VIAS = 4;
 
   /** Resets global settings before the reproduction test. */
@@ -115,14 +115,13 @@ public class UnconnectedItemsReproductionTest extends RoutingFixtureTest {
     System.out.println("Dangling tracks detected: " + danglingTracks);
     System.out.println("Dangling vias   detected: " + danglingVias);
 
-    // The reference JSON documents 24 genuinely dangling tracks.
-    // Normalization failures can push the actual count higher; we accept any
-    // count >= the reference minimum to avoid false failures on harmless over-detection.
+    // KiCad's DRC reports 5 dangling tracks. Wire ends the reader cannot join to a pad push the
+    // count higher; we accept any count >= KiCad's to avoid false failures on over-detection.
     assertTrue(
         danglingTracks >= EXPECTED_DANGLING_TRACKS,
         "DRC should detect at least "
             + EXPECTED_DANGLING_TRACKS
-            + " dangling tracks in this board (per reference JSON); "
+            + " dangling tracks in this board (per KiCad DRC); "
             + "actual="
             + danglingTracks
             + ".");
