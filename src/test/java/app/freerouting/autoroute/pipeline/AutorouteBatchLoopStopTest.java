@@ -152,6 +152,19 @@ class AutorouteBatchLoopStopTest {
   }
 
   @Test
+  void theBudgetIsTheJobsAcrossPassLoops() {
+    // a fallback attempt is another pass loop of the same job: it starts with what the earlier
+    // loops spent, so a budget the first loop used up stops the second before its first pass
+    Run run = prepareOpen(1L);
+    run.job().workSpent = 5L;
+    run.router().runBatchLoop();
+
+    assertEquals(BatchAutorouter.StopReason.WORK_BUDGET, run.router().lastStopReason);
+    assertEquals(0, run.router().phaseMetrics.autorouter.passesCompleted);
+    org.junit.jupiter.api.Assertions.assertTrue(run.job().workSpent >= 5L);
+  }
+
+  @Test
   void workBudgetStopsCleanlyBeforeThePassAfterItIsSpent() {
     // pass 1 searches (Y never routes), so any budget of one step is spent before pass 2
     Run run = prepareOpen(1L);

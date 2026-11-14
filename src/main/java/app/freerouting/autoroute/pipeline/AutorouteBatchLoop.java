@@ -308,6 +308,8 @@ final class AutorouteBatchLoop {
     int currentPass = 1;
     int passesCompleted = 0;
     final long workStart = app.freerouting.datastructures.TimeLimit.threadSteps(); // autorouter.max_work
+    // max_work is a job budget: the fallback ladder's pass loops spend it together
+    final long workBase = job.workSpent;
     final double passWeight = weight(router.settings.autorouter.workPassWeight);
     final double unroutedWeight = weight(router.settings.autorouter.workUnroutedWeight);
     final int boardPins = (passWeight > 0 || unroutedWeight > 0) ? router.board.getPins().size() : 0;
@@ -342,7 +344,10 @@ final class AutorouteBatchLoop {
 
       Long maxWork = router.settings.autorouter.maxWork;
       long workDone =
-          app.freerouting.datastructures.TimeLimit.threadSteps() - workStart + (long) passWork;
+          workBase
+              + app.freerouting.datastructures.TimeLimit.threadSteps()
+              - workStart
+              + (long) passWork;
       if (maxWork != null && maxWork > 0 && workDone >= maxWork) {
         job.logInfo(
             String.format(
@@ -409,10 +414,11 @@ final class AutorouteBatchLoop {
       job.logInfo(
           String.format(
               java.util.Locale.US,
-              "Auto-routing pass #%d: %d search steps and %d work units so far in the pass loop.",
+              "Auto-routing pass #%d: %d search steps and %d work units so far in the job.",
               currentPass,
               passSteps,
-              passSteps + (long) passWork));
+              workBase + passSteps + (long) passWork));
+      job.workSpent = workBase + passSteps + (long) passWork;
 
       BoardStatistics boardStatisticsAfter = router.board.getStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
