@@ -10,7 +10,6 @@ import app.freerouting.board.model.items.Pin;
 import app.freerouting.board.model.items.Trace;
 import app.freerouting.board.model.items.Via;
 import app.freerouting.board.model.structure.FixedState;
-import app.freerouting.board.model.structure.Unit;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.logger.FRLogger;
@@ -83,7 +82,7 @@ final class DirectPinRouting {
         AutorouteAttemptResult result =
             routeOnLayer(board, settings, thread, pin, net, layer, false);
         if (result.state != AutorouteAttemptState.ROUTED
-            && settings.getNeckWidthUm() > 0
+            && AutorouteControl.retryNeckHalfWidth(board, settings) > 0
             && !stopped(thread)) {
           result = routeOnLayer(board, settings, thread, pin, net, layer, true);
         }
@@ -137,7 +136,7 @@ final class DirectPinRouting {
       return new AutorouteAttemptResult(AutorouteAttemptState.FAILED, "Pin layer is inactive.");
     }
     if (neck) {
-      int neckHalfWidth = neckHalfWidth(board, settings);
+      int neckHalfWidth = AutorouteControl.retryNeckHalfWidth(board, settings);
       if (neckHalfWidth >= control.traceHalfWidth[layer]) {
         return new AutorouteAttemptResult(
             AutorouteAttemptState.FAILED, "Neck width is not narrower than the class width.");
@@ -149,12 +148,6 @@ final class DirectPinRouting {
     var engine = board.initAutoroute(net, control.traceClearanceClassIndex, thread, null, false);
     return engine.autorouteConnection(
         pin.getConnectedSet(net), pin.getUnconnectedSet(net), control, new TreeSet<>(), null);
-  }
-
-  private static int neckHalfWidth(RoutingBoard board, RouterSettings settings) {
-    int neckWidth =
-        (int) Math.round(board.communication.physicalToBoard(settings.getNeckWidthUm(), Unit.UM));
-    return Math.max(Math.max(1, neckWidth / 2), board.rules.getMinAllowedTraceHalfWidth());
   }
 
   private static boolean touchesPlane(Set<Item> source) {

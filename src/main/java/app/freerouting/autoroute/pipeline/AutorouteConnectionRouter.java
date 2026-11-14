@@ -303,7 +303,7 @@ final class AutorouteConnectionRouter {
       // and, when it routes, displace the neighbours the neck fits beside.
       if (router.startNecked
           && !escaping
-          && router.settings.getNeckWidthUm() > 0
+          && AutorouteControl.retryNeckHalfWidth(router.board, router.settings) > 0
           && router.neckedRouteNets.contains(routeNetNo)) {
         int beforeStart = router.board.communication.idGenerator.maxGeneratedId();
         AutorouteAttemptResult started =
@@ -393,7 +393,7 @@ final class AutorouteConnectionRouter {
       if ((autorouteResult.state == AutorouteAttemptState.FAILED
               || autorouteResult.state == AutorouteAttemptState.INSERT_ERROR)
           && !escaping
-          && router.settings.getNeckWidthUm() > 0) {
+          && AutorouteControl.retryNeckHalfWidth(router.board, router.settings) > 0) {
         if (attempt.rollsBack) {
           // The necked retry starts from the board before the failed attempt.
           attempt.rollbackForRetry();
@@ -449,7 +449,10 @@ final class AutorouteConnectionRouter {
       TimeLimit timeLimit,
       boolean planned,
       boolean quiet) {
-    int neckHalfWidth = AutorouteControl.neckHalfWidth(router.board, router.settings);
+    int neckHalfWidth = AutorouteControl.retryNeckHalfWidth(router.board, router.settings);
+    if (neckHalfWidth <= 0) {
+      return null;
+    }
     boolean narrowerSomewhere = false;
     for (int i = 0; i < originalControl.layerCount; i++) {
       if (originalControl.layerActive[i] && originalControl.traceHalfWidth[i] > neckHalfWidth) {
@@ -511,7 +514,7 @@ final class AutorouteConnectionRouter {
           (planned ? "Retry plan routed net '" : "Necked retry routed net '")
               + (routeNet != null ? routeNet.name : "#" + routeNetNo)
               + "' at "
-              + router.settings.getNeckWidthUm()
+              + Math.round(2 * neckHalfWidth * router.board.communication.boardUnitSize(Unit.UM))
               + " um trace width.");
     }
     return neckResult;

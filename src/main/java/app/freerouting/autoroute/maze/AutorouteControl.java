@@ -17,7 +17,9 @@ import app.freerouting.settings.RouterSettings;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 /** Structure for controlling the autoroute algorithm. */
 public class AutorouteControl {
@@ -520,5 +522,61 @@ public class AutorouteControl {
     }
     int neckWidth = (int) Math.round(board.communication.physicalToBoard(neckWidthUm, Unit.UM));
     return Math.max(Math.max(1, neckWidth / 2), board.rules.getMinAllowedTraceHalfWidth());
+  }
+
+  /** The automatic neck half width per board, computed once: pins and net classes do not change. */
+  private static final Map<RoutingBoard, Integer> AUTOMATIC_NECK_HALF_WIDTH =
+      Collections.synchronizedMap(new WeakHashMap<>());
+
+  /**
+   * Returns the trace half width, in board units, at which a connection that failed at its class
+   * width is retried, or 0 when necked retries are off. That is the user's {@code neck_width_um}
+   * when set; otherwise, with {@code automatic_neckdown} on and {@code neck_width_um} not negative,
+   * the {@linkplain #automaticNeckHalfWidth automatic neck width} of the board.
+   */
+  public static int retryNeckHalfWidth(RoutingBoard board, RouterSettings settings) {
+    if (settings.getNeckWidthUm() > 0) {
+      return neckHalfWidth(board, settings);
+    }
+    if (!settings.isAutomaticNeckWidth() || board == null) {
+      return 0;
+    }
+    return AUTOMATIC_NECK_HALF_WIDTH.computeIfAbsent(
+        board, AutorouteControl::automaticNeckHalfWidth);
+  }
+
+  /**
+   * The neck for boards whose net classes are wider than the SMD pads they have to leave: a trace
+   * at class width cannot get out between the neighbouring pads of a fine-pitch part. Returns two
+   * thirds of the narrowest such pad (so the necked trace leaves the pad with room on both sides),
+   * at least the minimum allowed trace half width, or 0 when no SMD pad is narrower than its class
+   * width; such boards route exactly as without the automatic neck.
+   */
+  static int automaticNeckHalfWidth(RoutingBoard board) {
+    int narrowest = Integer.MAX_VALUE;
+    for (Pin pin : board.getPins()) {
+      if (pin.firstLayer() != pin.lastLayer()) {
+        continue;
+      }
+      int layer = pin.firstLayer();
+      double padWidth = pin.getMinWidth(layer);
+      if (padWidth <= 0) {
+        continue;
+      }
+      int padHalfWidth = (int) (0.5 * padWidth);
+      for (int i = 0; i < pin.netCount(); i++) {
+        int netNo = pin.getNetNumber(i);
+        if (netNo <= 0 || board.rules.nets.get(netNo) == null) {
+          continue;
+        }
+        if (board.rules.getTraceHalfWidth(netNo, layer) > padHalfWidth) {
+          narrowest = Math.min(narrowest, padHalfWidth);
+        }
+      }
+    }
+    if (narrowest == Integer.MAX_VALUE) {
+      return 0;
+    }
+    return Math.max(Math.max(1, narrowest * 2 / 3), board.rules.getMinAllowedTraceHalfWidth());
   }
 }

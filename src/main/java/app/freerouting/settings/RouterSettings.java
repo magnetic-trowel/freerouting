@@ -127,7 +127,9 @@ public class RouterSettings implements Serializable, Cloneable {
    * Opt-in width necking: when a connection fails at its net-class trace width, retry it once with
    * all trace half-widths clamped to this width (in micrometers). Intended for fine-pitch regions
    * where the class width physically cannot exit the pads; supply a legal manufacturable width
-   * (e.g. the project's densest net class). 0/absent = off.
+   * (e.g. the project's densest net class). 0/absent = automatic: when a net class is wider than an
+   * SMD pad it has to leave, failed connections are retried at two thirds of the narrowest such pad
+   * (only with {@code automatic_neckdown} on). A negative value turns necked retries off.
    */
   @SerializedName("neck_width_um")
   public Double neckWidthUm;
@@ -839,6 +841,14 @@ public class RouterSettings implements Serializable, Cloneable {
   /** Returns the configured necking width in micrometres, or zero when disabled. */
   public double getNeckWidthUm() {
     return neckWidthUm != null && neckWidthUm > 0 ? neckWidthUm : 0;
+  }
+
+  /**
+   * Whether necked retries derive their width from the board: {@code neck_width_um} is 0 or absent
+   * and {@code automatic_neckdown} is on. A negative {@code neck_width_um} turns them off.
+   */
+  public boolean isAutomaticNeckWidth() {
+    return (neckWidthUm == null || neckWidthUm == 0) && getAutomaticNeckdown();
   }
 
   /** Sets the configured necking width in micrometres. */
