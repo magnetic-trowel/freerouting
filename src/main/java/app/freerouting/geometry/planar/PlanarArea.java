@@ -10,6 +10,7 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
+import org.locationtech.jts.operation.overlayng.OverlayNGRobust;
 import org.locationtech.jts.operation.union.UnaryUnionOp;
 import org.locationtech.jts.util.GeometricShapeFactory;
 
@@ -316,7 +317,7 @@ public final class PlanarArea {
       return empty();
     }
     try {
-      return new PlanarArea(UnaryUnionOp.union(geoms));
+      return new PlanarArea(OverlayNGRobust.union(geoms));
     } catch (Exception ex) {
       try {
         List<Geometry> sanitized = new ArrayList<>(geoms.size());
