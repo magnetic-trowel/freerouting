@@ -54,7 +54,15 @@ public final class RetryNeighbourhood {
     if (!reach.anyNet) {
       return 0;
     }
-    int radius = radius(board, reach.radiusMm);
+    return ripNearOpenPins(board, reach.radiusMm);
+  }
+
+  /**
+   * Removes other nets' traces and vias within {@code radiusMm} of pins that still have an open
+   * connection, except fixed items. Returns how many items were removed.
+   */
+  public static int ripNearOpenPins(BasicBoard board, double radiusMm) {
+    int radius = radius(board, radiusMm);
     Map<Integer, Item> found = new LinkedHashMap<>();
     for (Pin pin : board.getPins()) {
       if (pin.netCount() != 1 || pin.hasIgnoredNets()) {

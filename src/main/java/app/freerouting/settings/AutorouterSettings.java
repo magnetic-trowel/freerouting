@@ -64,6 +64,16 @@ public class AutorouterSettings implements Serializable, Cloneable {
   @Schema(description = "Comma-separated routing fallback strategies")
   public String fallbackStrategies;
 
+  /**
+   * Fallback strategies for a job whose fanout does not run, used when none of {@code
+   * fallback_strategies} applies to it (the default list holds only fanout strategies). {@code
+   * none} disables them.
+   */
+  @SerializedName("no_fanout_fallback_strategies")
+  @Schema(
+      description = "Fallback strategies when fanout does not run and no fallback_strategies apply")
+  public String noFanoutFallbackStrategies;
+
   /** Erik Gavriluk (freerouting.net): fallback alternatives an exploration round runs. */
   @SerializedName("explore_fallback_strategies")
   @Schema(description = "Fallback alternatives an exploration round runs")

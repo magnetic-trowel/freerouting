@@ -58,7 +58,11 @@ final class RoutingFallbackRunner {
     }
     boolean fanoutRuns = job.routerSettings.isFanoutEnabled() && !job.board.getSmdPins().isEmpty();
     List<RoutingFallback.Strategy> applicable =
-        RoutingFallback.applicable(strategies, job.routerSettings, fanoutRuns);
+        RoutingFallback.applicable(
+            strategies,
+            job.routerSettings,
+            fanoutRuns,
+            name -> job.logWarning("Unknown no-fanout fallback strategy '" + name + "' ignored."));
     List<RoutingFallback.Strategy> continuations = new ArrayList<>();
     List<RoutingFallback.Strategy> alternatives = new ArrayList<>();
     for (RoutingFallback.Strategy strategy : applicable) {
@@ -278,6 +282,20 @@ final class RoutingFallbackRunner {
         break;
       }
       RoutingBoard copy = bestAttempt.board.deepCopy();
+      if (strategy.preparesBoard()) {
+        int removed = strategy.prepare(copy);
+        job.logInfo(
+            "Routing fallback continuation '"
+                + strategy.name
+                + "' removed "
+                + removed
+                + " item(s) of other nets within "
+                + RoutingFallback.RIP_RADIUS_MM
+                + " mm of open pins.");
+        if (removed == 0) {
+          continue;
+        }
+      }
       RouterSettings settings = job.routerSettings.clone();
       strategy.apply(settings);
       settings.setFanoutEnabled(false);

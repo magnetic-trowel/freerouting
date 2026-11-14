@@ -1,6 +1,7 @@
 package app.freerouting.autoroute.pipeline;
 
 import app.freerouting.autoroute.DesignBlocks;
+import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.core.scoring.BoardStatistics;
 import app.freerouting.drc.ClearanceBaseline;
@@ -13,6 +14,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
+import java.util.function.ToIntFunction;
 
 /**
  * When the pass loop stops with open connections, the pipeline re-routes the input board under
@@ -34,23 +36,53 @@ public final class RoutingFallback {
     public final boolean fanoutOnly;
     private final Consumer<RouterSettings> apply;
 
+    /** Changes the board copy before a continuation re-routes it; returns the items removed. */
+    private final ToIntFunction<BasicBoard> prepare;
+
     public Strategy(
         String name,
         boolean needsFanout,
         Consumer<RouterSettings> apply,
         boolean continueBest,
         boolean fanoutOnly) {
+      this(name, needsFanout, apply, continueBest, fanoutOnly, null);
+    }
+
+    public Strategy(
+        String name,
+        boolean needsFanout,
+        Consumer<RouterSettings> apply,
+        boolean continueBest,
+        boolean fanoutOnly,
+        ToIntFunction<BasicBoard> prepare) {
       this.name = name;
       this.needsFanout = needsFanout;
       this.apply = apply;
       this.continueBest = continueBest;
       this.fanoutOnly = fanoutOnly;
+      this.prepare = prepare;
     }
 
     public void apply(RouterSettings settings) {
       this.apply.accept(settings);
     }
+
+    /** Whether the strategy changes the board copy before re-routing it. */
+    public boolean preparesBoard() {
+      return this.prepare != null;
+    }
+
+    /** Applies the board change, if any; returns the items removed. */
+    public int prepare(BasicBoard board) {
+      return this.prepare != null ? this.prepare.applyAsInt(board) : 0;
+    }
   }
+
+  /** Via-cost factor of the {@code vias-cheaper} and {@code vias-dearer} strategies. */
+  public static final int VIA_COST_FACTOR = 2;
+
+  /** Radius around open pins that {@code continue-ripped} clears of other nets' copper. */
+  public static final double RIP_RADIUS_MM = RetryNeighbourhood.RADIUS_MM;
 
   /** The strategies a settings value may name, in catalog order. */
   public static final List<Strategy> KNOWN =
@@ -94,7 +126,28 @@ public final class RoutingFallback {
               "no-fanout", true, settings -> settings.setFanoutEnabled(false), false, false),
           new Strategy("continue", false, settings -> {}, false, false),
           new Strategy(
-              "continue-no-neck", false, settings -> settings.setNeckWidthUm(0), false, false));
+              "continue-no-neck", false, settings -> settings.setNeckWidthUm(0), false, false),
+          // Strategies that neither narrow a track nor need the fanout pre-pass: the default ladder
+          // when fanout does not run (no_fanout_fallback_strategies).
+          new Strategy(
+              "vias-cheaper",
+              false,
+              settings -> settings.setViaCosts(settings.getViaCosts() / VIA_COST_FACTOR),
+              false,
+              false),
+          new Strategy(
+              "vias-dearer",
+              false,
+              settings -> settings.setViaCosts(settings.getViaCosts() * VIA_COST_FACTOR),
+              false,
+              false),
+          new Strategy(
+              "continue-ripped",
+              false,
+              settings -> {},
+              true,
+              false,
+              board -> RetryNeighbourhood.ripNearOpenPins(board, RIP_RADIUS_MM)));
 
   /**
    * Strategies that can change this job. Fanout strategies need fanout and at least one SMD pin.
@@ -124,12 +177,41 @@ public final class RoutingFallback {
   }
 
   /**
+   * The strategies that run for this job. The {@code fallback_strategies} that can change it, or,
+   * when fanout does not run and none of them can, the {@code no_fanout_fallback_strategies} that
+   * can. With the default list (all fanout strategies) the second list is the ladder of every job
+   * with fanout off.
+   */
+  public static List<Strategy> applicable(
+      List<Strategy> strategies,
+      RouterSettings settings,
+      boolean fanoutRuns,
+      Consumer<String> unknown) {
+    List<Strategy> result = applicable(strategies, settings, fanoutRuns);
+    if (result.isEmpty() && !fanoutRuns) {
+      result = applicable(parseNoFanout(settings, unknown), settings, false);
+    }
+    return result;
+  }
+
+  /** The {@code no_fanout_fallback_strategies}, parsed as {@link #parse} does. */
+  public static List<Strategy> parseNoFanout(RouterSettings settings, Consumer<String> unknown) {
+    return parse(
+        settings.autorouter != null ? settings.autorouter.noFanoutFallbackStrategies : null,
+        unknown);
+  }
+
+  /**
    * The strategies the settings name, in order and without repeats. Unknown names are reported and
    * skipped. {@code none} anywhere in the list disables the fallback.
    */
   public static List<Strategy> parse(RouterSettings settings, Consumer<String> unknown) {
+    return parse(
+        settings.autorouter != null ? settings.autorouter.fallbackStrategies : null, unknown);
+  }
+
+  private static List<Strategy> parse(String spec, Consumer<String> unknown) {
     List<Strategy> result = new ArrayList<>();
-    String spec = settings.autorouter != null ? settings.autorouter.fallbackStrategies : null;
     if (spec == null || spec.isBlank()) {
       return result;
     }

@@ -131,6 +131,14 @@ public class DefaultSettings implements SettingsSource {
 
   public static final String DEFAULT_FALLBACK_STRATEGIES =
       "direct-first,fanout-retry,short-escape,open-escape,no-fanout";
+
+  /**
+   * The ladder of a job whose fanout does not run: none of these narrows a track below the job's
+   * own settings or runs a fanout pre-pass. {@code no-neck} applies only while the job necks.
+   */
+  public static final String DEFAULT_NO_FANOUT_FALLBACK_STRATEGIES =
+      "no-neck,vias-cheaper,vias-dearer,continue-ripped";
+
   public static final String DEFAULT_EXPLORE_FALLBACK_STRATEGIES = "short-escape,open-escape";
   public static final double DEFAULT_SMD_NET_VIA_COST_FACTOR = 0.1;
 
@@ -191,6 +199,7 @@ public class DefaultSettings implements SettingsSource {
     settings.autorouter.ignoreNetClasses = new String[0];
     settings.autorouter.startNecked = true;
     settings.autorouter.fallbackStrategies = DEFAULT_FALLBACK_STRATEGIES;
+    settings.autorouter.noFanoutFallbackStrategies = DEFAULT_NO_FANOUT_FALLBACK_STRATEGIES;
     settings.autorouter.exploreFallbackStrategies = DEFAULT_EXPLORE_FALLBACK_STRATEGIES;
     settings.autorouter.smdNetViaCostFactor = DEFAULT_SMD_NET_VIA_COST_FACTOR;
     settings.autorouter.residualRepairMaxOpen = 4;

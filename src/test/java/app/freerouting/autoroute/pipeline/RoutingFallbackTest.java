@@ -71,6 +71,74 @@ class RoutingFallbackTest {
   }
 
   @Test
+  void withoutFanoutTheNoFanoutLadderApplies() {
+    RouterSettings settings = new DefaultSettings().getSettings();
+    List<RoutingFallback.Strategy> parsed = RoutingFallback.parse(settings, null);
+    assertEquals(
+        List.of("vias-cheaper", "vias-dearer", "continue-ripped"),
+        names(RoutingFallback.applicable(parsed, settings, false, null)));
+    settings.setNeckWidthUm(150);
+    assertEquals(
+        List.of("no-neck", "vias-cheaper", "vias-dearer", "continue-ripped"),
+        names(RoutingFallback.applicable(parsed, settings, false, null)));
+    // With fanout the configured list stands, unchanged.
+    assertEquals(
+        List.of("direct-first", "fanout-retry", "short-escape", "open-escape", "no-fanout"),
+        names(RoutingFallback.applicable(parsed, settings, true, null)));
+  }
+
+  @Test
+  void anApplicableConfiguredListWinsAndNoneDisablesTheNoFanoutLadder() {
+    RouterSettings settings = new DefaultSettings().getSettings();
+    settings.autorouter.fallbackStrategies = "vias-dearer";
+    List<RoutingFallback.Strategy> parsed = RoutingFallback.parse(settings, null);
+    assertEquals(
+        List.of("vias-dearer"), names(RoutingFallback.applicable(parsed, settings, false, null)));
+
+    // A neck strategy without a neck width falls through to the no-fanout ladder.
+    settings.autorouter.fallbackStrategies = "no-neck,continue-fine-neck";
+    parsed = RoutingFallback.parse(settings, null);
+    assertEquals(3, RoutingFallback.applicable(parsed, settings, false, null).size());
+
+    settings.autorouter.noFanoutFallbackStrategies = "none";
+    assertTrue(RoutingFallback.applicable(parsed, settings, false, null).isEmpty());
+
+    List<String> unknown = new ArrayList<>();
+    settings.autorouter.noFanoutFallbackStrategies = "bogus,continue-ripped";
+    assertEquals(
+        List.of("continue-ripped"),
+        names(RoutingFallback.applicable(parsed, settings, false, unknown::add)));
+    assertEquals(List.of("bogus"), unknown);
+  }
+
+  @Test
+  void viaStrategiesScaleTheViaCostOfACloneOnly() {
+    RouterSettings defaults = new DefaultSettings().getSettings();
+    int via = defaults.getViaCosts();
+    RouterSettings cheaper = defaults.clone();
+    RoutingFallback.find("vias-cheaper").apply(cheaper);
+    assertEquals(Math.max(1, via / 2), cheaper.getViaCosts());
+    RouterSettings dearer = defaults.clone();
+    RoutingFallback.find("vias-dearer").apply(dearer);
+    assertEquals(via * 2, dearer.getViaCosts());
+    assertEquals(via, defaults.getViaCosts());
+
+    RoutingFallback.Strategy ripped = RoutingFallback.find("continue-ripped");
+    assertTrue(ripped.continueBest);
+    assertTrue(ripped.preparesBoard());
+    assertFalse(ripped.needsFanout);
+    assertFalse(RoutingFallback.find("vias-cheaper").preparesBoard());
+  }
+
+  private static List<String> names(List<RoutingFallback.Strategy> strategies) {
+    List<String> names = new ArrayList<>();
+    for (RoutingFallback.Strategy strategy : strategies) {
+      names.add(strategy.name);
+    }
+    return names;
+  }
+
+  @Test
   void outcomeRanksFewerOpensThenFewerNewViolationsThenHigherScore() {
     RoutingFallback.Outcome worse = new RoutingFallback.Outcome("a", 2, 0, 0, 10, 0);
     RoutingFallback.Outcome better = new RoutingFallback.Outcome("b", 1, 0, 0, 1, 0);
