@@ -501,7 +501,6 @@ public abstract class Trace extends Item implements Connectable, Serializable {
     private final Trace searchTrace;
     private final Set<Item> visitedItems = new TreeSet<>();
     private final Map<ConductionArea, BitSet> visitedIslands = new HashMap<>();
-    private final Map<ConductionArea, Set<Item>> pourContacts = new HashMap<>();
 
     FillCycleSearch(Trace searchTrace) {
       this.searchTrace = searchTrace;
@@ -517,7 +516,7 @@ public abstract class Trace extends Item implements Connectable, Serializable {
 
     /** Expands the contacts of item, which the search reached from comeFrom. */
     boolean fromItem(Item item, Item comeFrom) {
-      Collection<Item> contactList = item.getNormalContacts();
+      Collection<Item> contactList = item.normalContactsForWalk();
       if (contactList == null) {
         return false;
       }
@@ -550,7 +549,7 @@ public abstract class Trace extends Item implements Connectable, Serializable {
 
     /** Expands the contacts of the pour that meet one of the islands, entered from comeFrom. */
     boolean fromPour(ConductionArea pour, BitSet islands, Item comeFrom) {
-      Set<Item> contactList = pourContacts.computeIfAbsent(pour, ConductionArea::getNormalContacts);
+      Collection<Item> contactList = pour.normalContactsForWalk();
       for (Item currentContact : contactList) {
         if (currentContact == comeFrom
             || !pour.fillIslandsMetBy(currentContact).intersects(islands)) {

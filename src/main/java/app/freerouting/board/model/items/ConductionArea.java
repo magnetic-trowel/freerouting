@@ -654,7 +654,7 @@ public class ConductionArea extends ObstacleArea implements Connectable {
       }
     }
 
-    Collection<Item> contactList = getNormalContacts();
+    Collection<Item> contactList = normalContactsForWalk();
     if (contactList == null) {
       return false;
     }

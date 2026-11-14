@@ -799,7 +799,7 @@ public abstract class Item
    * The normal contacts, for a walk over the connected items that only reads them: they are reused
    * while no item of the board changes.
    */
-  private Collection<Item> normalContactsForWalk() {
+  Collection<Item> normalContactsForWalk() {
     return board == null ? getNormalContacts() : board.cachedNormalContacts(this);
   }
 
