@@ -553,26 +553,9 @@ public class FastPlaneConnectivityGrid {
       islands.computeIfAbsent(currentIslandId, k -> new ArrayList<>()).add(item);
       itemIslandMap.put(item, currentIslandId);
 
+      // Later items whose seed cell this fill reaches join the island in the branch above, in the
+      // same order a rescan of the items here would add them.
       runFloodFill(seed[0], seed[1], (short) currentIslandId);
-
-      // Check remaining unassigned items to see if they are reached by this flood fill
-      for (Item other : items) {
-        if (!itemIslandMap.containsKey(other) && !unseededItems.contains(other)) {
-          IntPoint otherPt = getItemLocation(other, ca);
-          if (otherPt != null) {
-            int oc = (otherPt.x - originX) / cellSize;
-            int or = (otherPt.y - originY) / cellSize;
-            int[] otherSeed = findNearestConductiveCell(oc, or);
-            if (otherSeed != null) {
-              int otherIndex = otherSeed[1] * cols + otherSeed[0];
-              if (cellIslandMap[otherIndex] == currentIslandId) {
-                islands.get(currentIslandId).add(other);
-                itemIslandMap.put(other, currentIslandId);
-              }
-            }
-          }
-        }
-      }
     }
 
     if (nextIslandId == 0) {
