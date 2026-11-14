@@ -146,18 +146,22 @@ public final class RoutingPipeline {
   }
 
   private void removeDanglingCopper() {
-    boolean routerRan =
-        this.job != null
-            && this.job.routerSettings != null
-            && this.job.routerSettings.getRunRouter()
-            && (this.job.routerSettings.autorouter.maxPasses == null
-                || this.job.routerSettings.autorouter.maxPasses > 0);
-    if (routerRan && this.job.board != null) {
+    if (this.job != null && routerRan(this.job.routerSettings) && this.job.board != null) {
       String line = DanglingCopper.remove(this.job.board, "the last stage");
       if (line != null) {
         this.job.logInfo(line);
       }
     }
+  }
+
+  /**
+   * Whether the routing stage ran the router. {@code max_passes} 0 means no pass limit, the
+   * default, so it counts as a run like any positive limit.
+   */
+  static boolean routerRan(RouterSettings settings) {
+    return settings != null
+        && settings.getRunRouter()
+        && (settings.autorouter.maxPasses == null || settings.autorouter.maxPasses >= 0);
   }
 
   private void releaseExitStubs() {
