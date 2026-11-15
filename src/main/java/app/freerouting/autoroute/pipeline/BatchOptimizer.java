@@ -1336,6 +1336,10 @@ public final class BatchOptimizer extends NamedAlgorithm {
     }
     routerCountersBefore.incompleteCount = calculateIncompleteCount(routingBoard);
     final Set<Integer> netsLeftUnrouted = netsLeftUnrouted(routingBoard, item);
+    // An open connection of the candidate's own net stays open: the candidate is done as soon as
+    // the board is back to the open connections it had before the rip.
+    final int doneAtIncompleteCount =
+        hasIncompleteNet(routingBoard, item) ? routerCountersBefore.incompleteCount : -1;
 
     Set<Item> rippedConnections = rippedConnectionsOf(item);
     if (rippedConnections == null) {
@@ -1368,7 +1372,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
         withPreferredDirections,
         routingBoard,
         job.routerSettings,
-        netsLeftUnrouted);
+        netsLeftUnrouted,
+        doneAtIncompleteCount);
 
     BoardStatistics.OptimizerMetrics metricsAfter =
         BoardStatistics.OptimizerMetrics.of(routingBoard);
@@ -1475,6 +1480,16 @@ public final class BatchOptimizer extends NamedAlgorithm {
       result.remove(item.getNetNumber(i));
     }
     return result;
+  }
+
+  private static boolean hasIncompleteNet(RoutingBoard routingBoard, Item item) {
+    Set<Integer> incompleteNets = routingBoard.routingLedger().incompleteNetNumbers();
+    for (int i = 0; i < item.netCount(); i++) {
+      if (incompleteNets.contains(item.getNetNumber(i))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static FloatPoint getItemPosition(Item item) {

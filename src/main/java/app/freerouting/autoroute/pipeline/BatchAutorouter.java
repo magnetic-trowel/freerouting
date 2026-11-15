@@ -428,6 +428,36 @@ public final class BatchAutorouter extends NamedAlgorithm {
       RoutingBoard updatedRoutingBoard,
       RouterSettings routerSettings,
       Set<Integer> netsLeftUnrouted) {
+    return autoroutePassesForOptimizingItem(
+        job,
+        maxPassCount,
+        ripupCosts,
+        tracePullTightAccuracy,
+        withPreferredDirections,
+        updatedRoutingBoard,
+        routerSettings,
+        netsLeftUnrouted,
+        -1);
+  }
+
+  /**
+   * Like {@link #autoroutePassesForOptimizingItem(RoutingJob, int, int, int, boolean, RoutingBoard,
+   * RouterSettings, Set)}, but also stops after the first pass that leaves at most {@code
+   * doneAtIncompleteCount} incomplete connections on the board (ignored if negative). The optimizer
+   * passes the count from before its rip when the candidate's own net already had an open
+   * connection: once the ripped connections are back, the passes left would only retry that open
+   * connection, which the routing stage could not route, at rising ripup costs.
+   */
+  public static int autoroutePassesForOptimizingItem(
+      RoutingJob job,
+      int maxPassCount,
+      int ripupCosts,
+      int tracePullTightAccuracy,
+      boolean withPreferredDirections,
+      RoutingBoard updatedRoutingBoard,
+      RouterSettings routerSettings,
+      Set<Integer> netsLeftUnrouted,
+      int doneAtIncompleteCount) {
     BatchAutorouter routerInstance =
         new BatchAutorouter(
             job.thread,
@@ -449,8 +479,14 @@ public final class BatchAutorouter extends NamedAlgorithm {
         && currentPassNo <= maxPassCount) {
       stillUnroutedItems = routerInstance.autoroutePass(currentPassNo);
       if (stillUnroutedItems
-          && !job.thread.isStopAutoRouterRequested()
-          && updatedRoutingBoard == null) {}
+          && doneAtIncompleteCount >= 0
+          && routerInstance.calculateIncompleteCount(updatedRoutingBoard)
+              <= doneAtIncompleteCount) {
+        // Count this pass as the last one, as if the board had nothing left to route.
+        stillUnroutedItems = false;
+        ++currentPassNo;
+        break;
+      }
       ++currentPassNo;
     }
     routerInstance.removeTails(Item.StopConnectionOption.NONE);

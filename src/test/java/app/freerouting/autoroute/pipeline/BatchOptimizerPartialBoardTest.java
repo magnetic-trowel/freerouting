@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 import app.freerouting.board.facade.RoutingBoard;
+import app.freerouting.board.model.items.Trace;
 import app.freerouting.core.RoutingJob;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.scoring.BoardStatistics;
@@ -13,6 +14,8 @@ import app.freerouting.settings.RouterSettings;
 import app.freerouting.settings.sources.DefaultSettings;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /** The optimizer must improve the routed connections of a board that is not completely routed. */
@@ -62,6 +65,43 @@ class BatchOptimizerPartialBoardTest {
         after.traces.totalLengthMm,
         0.5f,
         "the detour must become a straight trace, the trace of WALLED must stay");
+  }
+
+  /**
+   * A candidate of WALLED rips the W0-W1 trace. Once it is back, only the W2 connection the routing
+   * stage could not route is open: with the count from before the rip the candidate stops after
+   * that pass instead of retrying W2 in every pass up to the limit.
+   */
+  @Test
+  void candidateOfIncompleteNetStopsOnceRippedConnectionIsBack() {
+    for (boolean stopEarly : new boolean[] {true, false}) {
+      RoutingJob job = jobFor(loadBoard());
+      RoutingBoard board = (RoutingBoard) job.board;
+      int netNo = board.rules.nets.get("WALLED", 1).netNumber;
+      Trace walledTrace =
+          board.getTraces().stream().filter(t -> t.containsNet(netNo)).findFirst().orElseThrow();
+      int incompleteBefore = board.routingLedger().incompleteCount();
+      assertEquals(1, incompleteBefore);
+      board.removeItems(List.of(walledTrace));
+      assertEquals(2, board.routingLedger().incompleteCount());
+
+      int passes =
+          BatchAutorouter.autoroutePassesForOptimizingItem(
+              job,
+              6,
+              job.routerSettings.getStartRipupCosts(),
+              500,
+              true,
+              board,
+              job.routerSettings,
+              Set.of(),
+              stopEarly ? incompleteBefore : -1);
+
+      if (stopEarly) {
+        assertEquals(1, board.routingLedger().incompleteCount(), "W0-W1 must be routed again");
+      }
+      assertEquals(stopEarly ? 1 : 7, passes, "passes run");
+    }
   }
 
   private static RoutingBoard loadBoard() {
