@@ -19,11 +19,21 @@ import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.logger.FRLogger;
 import app.freerouting.rules.ViaInfo;
 import java.util.Collection;
+import java.util.IdentityHashMap;
+import java.util.Map;
 
 /** Expands drill pages, existing vias, and candidate via layers for a maze search. */
 final class MazeExpansionEngine {
 
   private final MazeSearchEngine search;
+
+  /**
+   * Hole-to-hole results of this search, per drill and via of the via rule: 0 not yet checked, 1
+   * clear, 2 too close. They depend only on the drill location and the via padstack, and the board
+   * does not change during a search, so each pair is checked once instead of once per layer and per
+   * expansion into the drill.
+   */
+  private final Map<ExpansionDrill, byte[]> holeSpacingResults = new IdentityHashMap<>();
 
   MazeExpansionEngine(MazeSearchEngine search) {
     this.search = search;
@@ -397,6 +407,20 @@ final class MazeExpansionEngine {
     }
   }
 
+  /** {@link app.freerouting.rules.HoleSpacing#clear}, once per drill and via of this search. */
+  private boolean holeSpacingClear(ExpansionDrill drill, int viaIndex, Padstack viaPadstack) {
+    byte[] results =
+        holeSpacingResults.computeIfAbsent(drill, d -> new byte[search.ctrl.viaRule.viaCount()]);
+    if (results[viaIndex] == 0) {
+      results[viaIndex] =
+          app.freerouting.rules.HoleSpacing.clear(
+                  search.autorouteEngine.board, viaPadstack, drill.location)
+              ? (byte) 1
+              : (byte) 2;
+    }
+    return results[viaIndex] == 1;
+  }
+
   private ForcedPadRouter.CheckDrillResult checkLayerWithAnyMatchingVia(
       ExpansionDrill drill, int layer, TileShape roomShape, int[] netNumbers) {
     AutorouteControl ctrl = search.ctrl;
@@ -407,8 +431,7 @@ final class MazeExpansionEngine {
       if (layer < viaPadstack.fromLayer() || layer > viaPadstack.toLayer()) {
         continue;
       }
-      if (!app.freerouting.rules.HoleSpacing.clear(
-          search.autorouteEngine.board, viaPadstack, drill.location)) {
+      if (!holeSpacingClear(drill, i, viaPadstack)) {
         continue;
       }
       if (!ctrl.viaHoleAllowed(search.autorouteEngine.board, viaInfo, drill.location, netNumbers)) {

@@ -32,8 +32,6 @@ import app.freerouting.geometry.planar.Polyline;
 import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.logger.FRLogger;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.NavigableSet;
@@ -424,7 +422,12 @@ public class MazeSearchEngine {
    * would close a cycle in the backtrack chain.
    */
   static boolean closesBacktrackCycle(MazeListElement listElement, MazeSearchElement section) {
-    Set<MazeSearchElement> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Brent's cycle detection: the chain is walked without a visited set. It stops at the same
+    // answer as a walk that remembers every element: a repeat is only detected after the whole
+    // cycle, and the tail before it, has been compared with section.
+    MazeSearchElement saved = null;
+    int stepsSinceSaved = 0;
+    int stepLimit = 1;
     ExpandableObject door = listElement.backtrackDoor;
     int sectionNo = listElement.sectionNoOfBacktrackDoor;
     while (door != null) {
@@ -433,8 +436,13 @@ public class MazeSearchEngine {
       if (current == section) {
         return true;
       }
-      if (!visited.add(current)) {
+      if (current == saved) {
         return false;
+      }
+      if (++stepsSinceSaved == stepLimit) {
+        saved = current;
+        stepsSinceSaved = 0;
+        stepLimit <<= 1;
       }
       door = current.backtrackDoor;
       sectionNo = current.sectionNoOfBacktrackDoor;

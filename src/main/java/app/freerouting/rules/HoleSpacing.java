@@ -3,6 +3,7 @@ package app.freerouting.rules;
 import app.freerouting.board.facade.BasicBoard;
 import app.freerouting.board.model.items.DrillItem;
 import app.freerouting.board.model.items.Item;
+import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.core.library.Padstack;
 import app.freerouting.datastructures.ShapeTree;
 import app.freerouting.geometry.planar.FloatPoint;
@@ -127,6 +128,12 @@ public final class HoleSpacing {
     return result;
   }
 
+  /**
+   * The first drilled item found whose hole is closer than {@code minimum}, or null. Only whether
+   * there is one matters to its callers, so unlike {@link #visit} it asks the search tree for the
+   * drilled items alone: the exact overlap test then runs on them only, and not on every trace and
+   * plane under the box. The answer is the one {@link #visit} gives.
+   */
   private static DrillItem firstTooClose(
       BasicBoard board,
       FloatPoint center,
@@ -136,21 +143,43 @@ public final class HoleSpacing {
       double minimum,
       Item self,
       Collection<Item> ignore) {
-    DrillItem[] found = new DrillItem[1];
-    visit(
-        board,
-        center,
-        radius,
-        fromLayer,
-        toLayer,
-        minimum,
-        self,
-        ignore,
-        (item, gap) -> {
-          found[0] = item;
-          return false;
-        });
-    return found[0];
+    IntBox box = searchBox(board, center, radius, minimum);
+    for (SearchTreeObject object :
+        board
+            .searchTreeManager
+            .getDefaultTree()
+            .overlappingObjects(
+                box,
+                -1,
+                obj ->
+                    obj instanceof DrillItem other
+                        && other != self
+                        && other.lastLayer() >= fromLayer
+                        && other.firstLayer() <= toLayer
+                        && hasHole(other.getPadstack()))) {
+      DrillItem other = (DrillItem) object;
+      if (ignore != null && ignore.contains(other)) {
+        continue;
+      }
+      double gap =
+          gap(center, radius, other.getCenter().toFloat(), other.getPadstack().getDrillRadius());
+      if (gap < minimum) {
+        return other;
+      }
+    }
+    return null;
+  }
+
+  /** The box around {@code center} that holds every hole closer than {@code minimum} to it. */
+  private static IntBox searchBox(
+      BasicBoard board, FloatPoint center, double radius, double minimum) {
+    double maxOtherDrill =
+        (board != null && board.library != null && board.library.padstacks != null)
+            ? board.library.padstacks.getMaxDrillRadius()
+            : 0.0;
+    int reach = (int) Math.ceil(radius + minimum + maxOtherDrill) + 1;
+    IntPoint c = center.round();
+    return new IntBox(c.x - reach, c.y - reach, c.x + reach, c.y + reach);
   }
 
   private static void visit(
@@ -163,13 +192,7 @@ public final class HoleSpacing {
       Item self,
       Collection<Item> ignore,
       BiPredicate<DrillItem, Double> report) {
-    double maxOtherDrill =
-        (board != null && board.library != null && board.library.padstacks != null)
-            ? board.library.padstacks.getMaxDrillRadius()
-            : 0.0;
-    int reach = (int) Math.ceil(radius + minimum + maxOtherDrill) + 1;
-    IntPoint c = center.round();
-    IntBox box = new IntBox(c.x - reach, c.y - reach, c.x + reach, c.y + reach);
+    IntBox box = searchBox(board, center, radius, minimum);
     List<ShapeTree.TreeEntry> entries = new ArrayList<>();
     board.searchTreeManager.getDefaultTree().overlappingTreeEntries(box, -1, entries);
     Set<DrillItem> reported = null;
