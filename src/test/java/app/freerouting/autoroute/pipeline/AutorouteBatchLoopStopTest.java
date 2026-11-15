@@ -3,6 +3,7 @@ package app.freerouting.autoroute.pipeline;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.autoroute.events.TaskStateChangedEvent;
 import app.freerouting.board.facade.RoutingBoard;
@@ -130,5 +131,20 @@ class AutorouteBatchLoopStopTest {
 
     assertEquals(BatchAutorouter.StopReason.CANCELLED, run.router().lastStopReason);
     assertEquals(TaskState.CANCELLED, lastState(run));
+  }
+
+  @Test
+  void searchBudgetStopsBeforeTheNextPassAndIsAnOwnStop() {
+    Run run = prepare(5);
+    run.router().setSearchStepLimit(1);
+    run.router().runBatchLoop();
+
+    assertEquals(BatchAutorouter.StopReason.SEARCH_BUDGET, run.router().lastStopReason);
+    assertTrue(run.router().searchStepsUsed() >= 1, "the first pass counts its search steps");
+    assertFalse(run.job().thread.isStopAutoRouterRequested());
+    assertEquals(TaskState.FINISHED, lastState(run));
+    assertEquals(0, run.job().board.getViaCount(), "the final cleanup removes the fanout stub");
+    assertEquals(1, run.router().phaseMetrics.autorouter.passesCompleted);
+    assertEquals("search_budget", run.router().phaseMetrics.autorouter.stopReason);
   }
 }

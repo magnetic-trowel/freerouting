@@ -307,7 +307,7 @@ final class AutorouteBatchLoop {
     boolean fanoutRecoveryApplied = false;
     int lastMileAttempts = 0;
     float lastBestScore = Float.NEGATIVE_INFINITY; // score at last board-restore or improvement
-    float globalBestScore = Float.NEGATIVE_INFINITY; // best score seen across all passes
+    float globalBestScore = router.stagnationBaselineScore; // best score seen across all passes
     int passOfBestScore = 0; // pass where globalBestScore was achieved
     int incompleteCountAtBestScore = 0; // incomplete count when globalBestScore was recorded
     final int stagnationPassLimit =
@@ -340,6 +340,18 @@ final class AutorouteBatchLoop {
           && router.settings.autorouter.maxPasses > 0
           && currentPass > router.settings.autorouter.maxPasses) {
         stopFor(BatchAutorouter.StopReason.MAX_PASSES);
+        break;
+      }
+      if (router.searchStepLimit > 0 && router.searchSteps.steps() >= router.searchStepLimit) {
+        job.logInfo(
+            "Stopping the auto-router before pass #"
+                + currentPass
+                + ": its search budget of "
+                + router.searchStepLimit
+                + " steps is used up ("
+                + router.searchSteps.steps()
+                + ").");
+        stopFor(BatchAutorouter.StopReason.SEARCH_BUDGET);
         break;
       }
 
@@ -442,6 +454,7 @@ final class AutorouteBatchLoop {
                   boardScoreAfter,
                   boardStatisticsAfter.connections.incompleteCount,
                   boardStatisticsAfter.clearanceViolations.totalCount));
+      passCompletedMessage += " after " + router.searchSteps.steps() + " search steps";
       if (job.resourceUsage.cpuTimeUsed > 0) {
         passCompletedMessage +=
             String.format(
@@ -635,7 +648,7 @@ final class AutorouteBatchLoop {
 
     boolean endedOnItsOwn =
         switch (router.lastStopReason) {
-          case COMPLETED, MAX_PASSES, STAGNATION, NO_IMPROVEMENT -> true;
+          case COMPLETED, MAX_PASSES, SEARCH_BUDGET, STAGNATION, NO_IMPROVEMENT -> true;
           default -> false;
         };
     if (isRouterEnabled && endedOnItsOwn) {

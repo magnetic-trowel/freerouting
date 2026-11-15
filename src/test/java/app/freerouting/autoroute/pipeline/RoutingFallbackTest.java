@@ -116,4 +116,23 @@ class RoutingFallbackTest {
     settings.fanout.maxItems = 3;
     assertEquals(3, DirectPinRouting.fanoutItemLimit(settings));
   }
+
+  @Test
+  void searchBudgetIsShareOfDefaultStepsWithFloor() {
+    RouterSettings settings = new DefaultSettings().getSettings();
+    assertEquals(50, settings.autorouter.fallbackSearchBudgetPercent);
+    assertEquals(50_000_000L, RoutingFallbackRunner.searchBudget(settings, 100_000_000L));
+    assertEquals(
+        RoutingFallbackRunner.MIN_SEARCH_BUDGET_STEPS,
+        RoutingFallbackRunner.searchBudget(settings, 1_000_000L));
+    settings.autorouter.fallbackSearchBudgetPercent = 0;
+    assertEquals(Long.MAX_VALUE, RoutingFallbackRunner.searchBudget(settings, 100_000_000L));
+    settings.autorouter.fallbackSearchBudgetPercent = null;
+    assertEquals(Long.MAX_VALUE, RoutingFallbackRunner.searchBudget(settings, 100_000_000L));
+  }
+
+  @Test
+  void searchBudgetStopIsNotRetried() {
+    assertFalse(RoutingFallback.isRetryable(BatchAutorouter.StopReason.SEARCH_BUDGET));
+  }
 }

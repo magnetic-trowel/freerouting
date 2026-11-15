@@ -13,8 +13,10 @@ import java.util.Map;
 
 /**
  * Re-routes an unfinished board under the configured fallback strategies and keeps the best result.
- * A residual board (a few open connections) is continued first. A fanout-only strategy whose fanout
- * leaves a board an earlier pass loop already started on stops after that fanout.
+ * The alternatives run first; then a residual board (a few open connections) is continued from the
+ * best result. A fanout-only strategy whose fanout leaves a board an earlier pass loop already
+ * started on stops after that fanout. All attempts share one search budget counted in maze search
+ * steps, so which attempts run does not depend on the machine's speed or load.
  *
  * <p>Ported from freerouting.net (Erik Gavriluk, Experimental Television Center).
  */
@@ -25,6 +27,12 @@ final class RoutingFallbackRunner {
 
   /** The attempts run and the one chosen, for the result manifest; null if none ran. */
   private RoutingResultManifest.FallbackDetail detail;
+
+  /** Maze search steps the fallback attempts may still use; Long.MAX_VALUE means no limit. */
+  private long searchStepsLeft = Long.MAX_VALUE;
+
+  /** Passes a continuation may run without beating its incumbent's score. */
+  static final int CONTINUATION_STAGNATION_PASSES = 5;
 
   RoutingFallbackRunner(BatchAutorouter listenerSource) {
     this.listenerSource = listenerSource;
@@ -78,7 +86,7 @@ final class RoutingFallbackRunner {
             + (alternatives.size() == 1 ? "strategy" : "strategies");
     String plan;
     if (residual && !alternatives.isEmpty()) {
-      plan = "continuing the board first, then trying " + alternativesText;
+      plan = "trying " + alternativesText + ", then continuing the best board";
     } else if (residual) {
       plan = "continuing the board";
     } else {
@@ -96,16 +104,27 @@ final class RoutingFallbackRunner {
       this.passLoopStarts.put(defaultRouter.passLoopStartHash, best);
     }
     record(best, defaultRouter);
+    this.searchStepsLeft = searchBudget(job.routerSettings, defaultRouter.searchStepsUsed());
+    if (this.searchStepsLeft != Long.MAX_VALUE) {
+      job.logInfo(
+          "Routing fallback search budget: "
+              + this.searchStepsLeft
+              + " steps for all attempts (the default configuration used "
+              + defaultRouter.searchStepsUsed()
+              + ").");
+    }
     ClearanceBaseline defaultClearance =
         RoutingFallback.captureClearance(job.board, best.violations);
     Attempt bestAttempt = new Attempt(best, job.board, defaultRouter, defaultClearance);
-    RoutingBoard continuedFrom = null;
-    if (residual && !alternatives.isEmpty()) {
-      bestAttempt = runContinuations(job, bestAttempt, automaticContinuations(job.routerSettings));
-      continuedFrom = bestAttempt.board;
-    }
-    for (RoutingFallback.Strategy strategy : alternatives) {
+    // Alternatives run before the residual continuations: they start from the input board, so
+    // they are what the budget can least afford to skip, while a continuation polishes whichever
+    // board is best when they are done.
+    for (int i = 0; i < alternatives.size(); i++) {
+      RoutingFallback.Strategy strategy = alternatives.get(i);
       if (stopped(job) || bestAttempt.outcome.isCompleteAndClean()) {
+        break;
+      }
+      if (budgetUsedUp(job, alternatives.subList(i, alternatives.size()))) {
         break;
       }
       Attempt attempt = runAttempt(job, input, strategy, false, inputBaseline);
@@ -149,14 +168,7 @@ final class RoutingFallbackRunner {
       }
     }
     List<RoutingFallback.Strategy> after = new ArrayList<>(continuations);
-    if (continuedFrom != null && bestAttempt.board == continuedFrom) {
-      if (!bestAttempt.outcome.isCompleteAndClean()) {
-        job.logInfo(
-            "Routing fallback: no alternative replaced the board the continuations ran on; not continuing it again.");
-      }
-    } else {
-      after.addAll(automaticContinuations(job.routerSettings));
-    }
+    after.addAll(automaticContinuations(job.routerSettings));
     if (!after.isEmpty()) {
       bestAttempt = runContinuations(job, bestAttempt, after);
     }
@@ -252,7 +264,9 @@ final class RoutingFallbackRunner {
       }
       job.logInfo("Exploration attempt '" + planned.name() + "' from " + bestAttempt.outcome + ".");
       int openBefore = bestAttempt.outcome.unrouted;
-      Attempt attempt = runPrepared(job, copy, settings, false, "explore-" + planned.kind());
+      Attempt attempt =
+          runPrepared(
+              job, copy, settings, false, "explore-" + planned.kind(), Float.NEGATIVE_INFINITY);
       boolean kept = false;
       if (attempt != null && replaces(attempt, bestAttempt)) {
         bestAttempt = attempt;
@@ -269,7 +283,8 @@ final class RoutingFallbackRunner {
 
   private Attempt runContinuations(
       RoutingJob job, Attempt bestAttempt, List<RoutingFallback.Strategy> continuations) {
-    for (RoutingFallback.Strategy strategy : continuations) {
+    for (int i = 0; i < continuations.size(); i++) {
+      RoutingFallback.Strategy strategy = continuations.get(i);
       if (bestAttempt.outcome.isCompleteAndClean() || stopped(job)) {
         break;
       }
@@ -277,11 +292,19 @@ final class RoutingFallbackRunner {
           && !RoutingSupervisor.residual(job.routerSettings, bestAttempt.outcome.unrouted)) {
         break;
       }
-      RoutingBoard copy = bestAttempt.board.deepCopy();
+      if (budgetUsedUp(job, continuations.subList(i, continuations.size()))) {
+        break;
+      }
       RouterSettings settings = job.routerSettings.clone();
       strategy.apply(settings);
       settings.setFanoutEnabled(false);
-      Attempt attempt = runPrepared(job, copy, settings, true, strategy.name);
+      // The incumbent already stagnated once: a continuation must beat its score within a short,
+      // fixed number of passes or stop, so the budget left goes to the next attempt.
+      settings.autorouter.stagnationPassLimit =
+          Math.min(stagnationPassLimit(settings), CONTINUATION_STAGNATION_PASSES);
+      RoutingBoard copy = bestAttempt.board.deepCopy();
+      Attempt attempt =
+          runPrepared(job, copy, settings, true, strategy.name, bestAttempt.outcome.score);
       if (attempt == null) {
         break;
       }
@@ -321,7 +344,8 @@ final class RoutingFallbackRunner {
     }
     RouterSettings settings = job.routerSettings.clone();
     strategy.apply(settings);
-    Attempt attempt = runPrepared(job, board, settings, keepFanoutVias, strategy.name);
+    Attempt attempt =
+        runPrepared(job, board, settings, keepFanoutVias, strategy.name, Float.NEGATIVE_INFINITY);
     if (attempt != null
         && strategy.fanoutOnly
         && attempt.router.lastStopReason == BatchAutorouter.StopReason.REPEATED) {
@@ -348,7 +372,8 @@ final class RoutingFallbackRunner {
       RoutingBoard board,
       RouterSettings settings,
       boolean keepFanoutVias,
-      String strategyName) {
+      String strategyName,
+      float stagnationBaselineScore) {
     RouterSettings savedSettings = job.routerSettings;
     RoutingBoard savedBoard = job.board;
     job.board = board;
@@ -358,11 +383,21 @@ final class RoutingFallbackRunner {
       BatchAutorouter router =
           BatchAutorouter.createAttempt(job, board, settings, removeUnconnectedVias);
       router.copyListenersFrom(this.listenerSource);
+      router.setStagnationBaselineScore(stagnationBaselineScore);
+      if (this.searchStepsLeft != Long.MAX_VALUE) {
+        router.setSearchStepLimit(this.searchStepsLeft);
+      }
       RoutingFallback.Strategy strategy = RoutingFallback.find(strategyName);
       if (strategy != null && strategy.fanoutOnly) {
         router.setRepeatsPassLoop(hash -> hash != null && this.passLoopStarts.containsKey(hash));
       }
-      router.runBatchLoop();
+      try {
+        router.runBatchLoop();
+      } finally {
+        if (this.searchStepsLeft != Long.MAX_VALUE) {
+          this.searchStepsLeft -= router.searchStepsUsed();
+        }
+      }
       RoutingFallback.Outcome outcome =
           RoutingFallback.Outcome.of(strategyName, job.board, savedSettings);
       ClearanceBaseline baseline = RoutingFallback.captureClearance(job.board, outcome.violations);
@@ -389,6 +424,49 @@ final class RoutingFallbackRunner {
     return best.isCompleteAndClean()
         || reason == BatchAutorouter.StopReason.TIMED_OUT
         || reason == BatchAutorouter.StopReason.CANCELLED;
+  }
+
+  /**
+   * Whether the search budget is used up; if so, logs the attempts that will not run. The budget
+   * counts maze search steps, so the same attempts run on every machine.
+   */
+  private boolean budgetUsedUp(RoutingJob job, List<RoutingFallback.Strategy> notRun) {
+    if (this.searchStepsLeft > 0) {
+      return false;
+    }
+    StringBuilder names = new StringBuilder();
+    for (RoutingFallback.Strategy strategy : notRun) {
+      if (!names.isEmpty()) {
+        names.append(", ");
+      }
+      names.append("'").append(strategy.name).append("'");
+    }
+    job.logInfo("Routing fallback: the search budget is used up; not running " + names + ".");
+    return true;
+  }
+
+  /** The fallback search budget never goes below this many steps. */
+  static final long MIN_SEARCH_BUDGET_STEPS = 8_000_000L;
+
+  /**
+   * The fallback search budget in steps: the configured percentage of the steps the default
+   * configuration used, but at least {@link #MIN_SEARCH_BUDGET_STEPS}. Long.MAX_VALUE when the
+   * settings set no limit.
+   */
+  static long searchBudget(RouterSettings settings, long defaultSteps) {
+    Integer percent =
+        settings.autorouter != null ? settings.autorouter.fallbackSearchBudgetPercent : null;
+    if (percent == null || percent <= 0) {
+      return Long.MAX_VALUE;
+    }
+    long share = Math.max(0, defaultSteps) / 100 * percent;
+    return Math.max(MIN_SEARCH_BUDGET_STEPS, share);
+  }
+
+  private static int stagnationPassLimit(RouterSettings settings) {
+    return settings.autorouter != null && settings.autorouter.stagnationPassLimit != null
+        ? settings.autorouter.stagnationPassLimit
+        : BatchAutorouter.STAGNATION_PASS_LIMIT;
   }
 
   private static boolean stopped(RoutingJob job) {

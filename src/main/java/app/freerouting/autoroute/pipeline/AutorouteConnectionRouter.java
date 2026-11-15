@@ -150,7 +150,7 @@ final class AutorouteConnectionRouter {
             routeNetNo,
             control.traceClearanceClassIndex,
             router.thread,
-            new TimeLimit(100000),
+            new TimeLimit(100000, router.searchSteps),
             router.isRetainAutorouteDatabase());
     AutorouteAttemptResult result =
         engine.autorouteConnection(startSet, destSet, control, new TreeSet<>(), new HashMap<>());
@@ -288,7 +288,7 @@ final class AutorouteConnectionRouter {
 
       double maxMilliseconds = 100000 * Math.pow(2, ripupPassNo - 1);
       maxMilliseconds = Math.min(maxMilliseconds, Integer.MAX_VALUE);
-      TimeLimit timeLimit = new TimeLimit((int) maxMilliseconds);
+      TimeLimit timeLimit = new TimeLimit((int) maxMilliseconds, router.searchSteps);
 
       // The obstacles of a plane escape are set around the class-width search below only. A necked
       // search builds its own engine without them and would reach the plane through the copper

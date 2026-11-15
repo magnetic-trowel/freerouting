@@ -195,6 +195,8 @@ public final class BatchAutorouter extends NamedAlgorithm {
   public enum StopReason {
     COMPLETED,
     MAX_PASSES,
+    /** The pass loop used up its search step budget ({@link #setSearchStepLimit}). */
+    SEARCH_BUDGET,
     STAGNATION,
     NO_IMPROVEMENT,
     TIMED_OUT,
@@ -222,6 +224,38 @@ public final class BatchAutorouter extends NamedAlgorithm {
             accuracy);
     router.job = job;
     return router;
+  }
+
+  /**
+   * Maze search steps of this router's connection searches: a deterministic measure of its routing
+   * work, independent of machine speed and load.
+   */
+  final app.freerouting.datastructures.TimeLimit.Meter searchSteps =
+      new app.freerouting.datastructures.TimeLimit.Meter();
+
+  /** No new pass starts once {@link #searchSteps} reaches this; 0 means no limit. */
+  long searchStepLimit;
+
+  /**
+   * The score a pass must beat by more than the stagnation threshold to count as progress. A
+   * continuation starts here from its incumbent's score, so passes that only win back what the
+   * incumbent already had do not keep it running.
+   */
+  float stagnationBaselineScore = Float.NEGATIVE_INFINITY;
+
+  /** Sets {@link #searchStepLimit}; 0 or less means no limit. */
+  public void setSearchStepLimit(long limit) {
+    this.searchStepLimit = Math.max(0, limit);
+  }
+
+  /** The maze search steps this router has used so far. */
+  public long searchStepsUsed() {
+    return this.searchSteps.steps();
+  }
+
+  /** Sets {@link #stagnationBaselineScore}. */
+  public void setStagnationBaselineScore(float score) {
+    this.stagnationBaselineScore = score;
   }
 
   /** Fanout-only attempts stop when this returns true for the post-fanout board hash. */

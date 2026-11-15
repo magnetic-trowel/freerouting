@@ -136,6 +136,13 @@ public class DefaultSettings implements SettingsSource {
 
   public static final String DEFAULT_FALLBACK_STRATEGIES =
       "direct-first,fanout-retry,short-escape,open-escape,no-fanout";
+
+  /**
+   * Maze search steps all routing fallback attempts may use together, in percent of the steps the
+   * default configuration used.
+   */
+  public static final int DEFAULT_FALLBACK_SEARCH_BUDGET_PERCENT = 50;
+
   public static final String DEFAULT_EXPLORE_FALLBACK_STRATEGIES = "short-escape,open-escape";
   public static final double DEFAULT_SMD_NET_VIA_COST_FACTOR = 0.1;
 
@@ -203,6 +210,7 @@ public class DefaultSettings implements SettingsSource {
     settings.autorouter.ignoreNetClasses = new String[0];
     settings.autorouter.startNecked = true;
     settings.autorouter.fallbackStrategies = DEFAULT_FALLBACK_STRATEGIES;
+    settings.autorouter.fallbackSearchBudgetPercent = DEFAULT_FALLBACK_SEARCH_BUDGET_PERCENT;
     settings.autorouter.exploreFallbackStrategies = DEFAULT_EXPLORE_FALLBACK_STRATEGIES;
     settings.autorouter.smdNetViaCostFactor = DEFAULT_SMD_NET_VIA_COST_FACTOR;
     settings.autorouter.residualRepairMaxOpen = 4;

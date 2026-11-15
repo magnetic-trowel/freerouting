@@ -77,7 +77,7 @@ This document tracks all improvements and bug fixes ported from `freerouting.net
 
 - [x] **Task 3.4: Routing Fallback Optimization (Skip Duplicate Passes & Resume Residuals)**
   - **Origin Commits:** `230da12`, `dbe10a3`, `1aeb50b`, `0871cd6`
-  - **Status:** Completed. After a retryable stop, a residual board (at most `residual_repair_max_open`, default 4) is continued before the alternatives. A fanout-only attempt whose fanout leaves an earlier pass-loop start board stops after fanout. Elapsed time does not choose or skip attempts. `TestingSettings` sets `fallback_strategies` to `none` so fixture tests stay single-pass.
+  - **Status:** Completed. After a retryable stop, the alternatives run first; a residual board (at most `residual_repair_max_open`, default 4) is then continued from the best result. A continuation stops when it has not beaten its incumbent's score for 5 passes. All fallback attempts share one budget of maze search steps, `fallback_search_budget_percent` (default 50) of the steps the default configuration used, at least 8 million; once it is used up no new pass or attempt starts. The budget is counted, not timed, so the attempts that run do not depend on machine speed. A fanout-only attempt whose fanout leaves an earlier pass-loop start board stops after fanout. Elapsed time does not choose or skip attempts. `TestingSettings` sets `fallback_strategies` to `none` so fixture tests stay single-pass.
 
 - [x] **Task 3.5: Exploration Rounds Tuning & Later Tries Expansion**
   - **Origin Commits:** `dc3ffcf`, `cca75af`, `0e24715`

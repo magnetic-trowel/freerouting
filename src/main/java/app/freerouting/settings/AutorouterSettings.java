@@ -92,6 +92,20 @@ public class AutorouterSettings implements Serializable, Cloneable {
   @Schema(description = "Comma-separated routing fallback strategies")
   public String fallbackStrategies;
 
+  /**
+   * Maze search steps all routing fallback attempts of a job may use together, as a percentage of
+   * the steps the default configuration used (at least 8 million). An attempt starts no new pass,
+   * and no further attempt starts, once they are used up. Steps are counted, not timed, so the
+   * attempts that run and their results do not depend on the machine's speed or load. {@code 0}
+   * means no limit.
+   */
+  @SerializedName("fallback_search_budget_percent")
+  @Schema(
+      description =
+          "Maze search steps all routing fallback attempts may use together, in percent of the"
+              + " default configuration's (0 means unlimited)")
+  public Integer fallbackSearchBudgetPercent;
+
   /** Erik Gavriluk (freerouting.net): fallback alternatives an exploration round runs. */
   @SerializedName("explore_fallback_strategies")
   @Schema(description = "Fallback alternatives an exploration round runs")

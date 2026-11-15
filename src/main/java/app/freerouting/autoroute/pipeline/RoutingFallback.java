@@ -178,6 +178,7 @@ public final class RoutingFallback {
     return switch (reason) {
       case COMPLETED -> "completed";
       case MAX_PASSES -> "pass limit";
+      case SEARCH_BUDGET -> "search budget";
       case STAGNATION -> "stagnation";
       case NO_IMPROVEMENT -> "no improvement";
       case TIMED_OUT -> "timeout";

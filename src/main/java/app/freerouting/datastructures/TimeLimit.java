@@ -17,15 +17,41 @@ public class TimeLimit {
   private static final long STEPS_PER_MILLISECOND = 250_000;
 
   private final long maxSteps;
+  private final Meter meter;
   private long steps;
 
   /** Creates a new instance with a budget of milliSeconds nominal milliseconds. */
   public TimeLimit(int milliSeconds) {
+    this(milliSeconds, null);
+  }
+
+  /**
+   * Creates a new instance with a budget of milliSeconds nominal milliseconds whose steps are also
+   * counted by {@code meter}, if not null.
+   */
+  public TimeLimit(int milliSeconds, Meter meter) {
     this.maxSteps = milliSeconds * STEPS_PER_MILLISECOND;
+    this.meter = meter;
   }
 
   /** Counts one step and returns true, if the budget provided in the constructor is exceeded. */
   public boolean limitExceeded() {
+    if (this.meter != null) {
+      this.meter.steps++;
+    }
     return ++steps > maxSteps;
+  }
+
+  /**
+   * Sums the steps of every limit created with it: a deterministic measure of search work across
+   * many searches. Not thread-safe; one meter belongs to one single-threaded pass loop.
+   */
+  public static final class Meter {
+    private long steps;
+
+    /** The steps counted so far. */
+    public long steps() {
+      return this.steps;
+    }
   }
 }
