@@ -195,6 +195,11 @@ public final class BatchAutorouter extends NamedAlgorithm {
   public enum StopReason {
     COMPLETED,
     MAX_PASSES,
+    /**
+     * The job's work budget (autorouter.max_work) was spent: the job ends, no fallback attempt
+     * starts.
+     */
+    WORK_BUDGET,
     /** The pass loop used up its search step budget ({@link #setSearchStepLimit}). */
     SEARCH_BUDGET,
     STAGNATION,

@@ -303,6 +303,16 @@ final class AutorouteBatchLoop {
 
     int currentPass = 1;
     int passesCompleted = 0;
+    // autorouter.max_work is the job's budget: this loop starts with what the job's earlier pass
+    // loops (the default configuration's, earlier fallback attempts') spent. Its search steps are
+    // the router's search step meter, the count the fallback search budget reads.
+    final long workBase = job.workSpent;
+    final long stepsStart = router.searchSteps.steps();
+    final double passWeight = workWeight(router.settings.autorouter.workPassWeight);
+    final double unroutedWeight = workWeight(router.settings.autorouter.workUnroutedWeight);
+    final int boardPins =
+        (passWeight > 0 || unroutedWeight > 0) ? router.board.getPins().size() : 0;
+    double passWork = 0; // the weighted per-pass terms of the passes started
     int consecutiveNoImprovementPasses = 0;
     boolean fanoutRecoveryApplied = false;
     int lastMileAttempts = 0;
@@ -336,6 +346,20 @@ final class AutorouteBatchLoop {
       // }
       // alreadyRoutedBoardHashes.add(currentBoardHash);
 
+      Long maxWork = router.settings.autorouter.maxWork;
+      long workDone = workBase + (router.searchSteps.steps() - stepsStart) + (long) passWork;
+      if (maxWork != null && maxWork > 0 && workDone >= maxWork) {
+        job.logInfo(
+            String.format(
+                java.util.Locale.US,
+                "Stopping the auto-router before pass #%d: its work budget is spent (%d of %d "
+                    + "work units).",
+                currentPass,
+                workDone,
+                maxWork));
+        stopFor(BatchAutorouter.StopReason.WORK_BUDGET);
+        break;
+      }
       if (router.settings.autorouter.maxPasses != null
           && router.settings.autorouter.maxPasses > 0
           && currentPass > router.settings.autorouter.maxPasses) {
@@ -353,6 +377,15 @@ final class AutorouteBatchLoop {
                 + ").");
         stopFor(BatchAutorouter.StopReason.SEARCH_BUDGET);
         break;
+      }
+
+      // the pass starts: its per-pass work terms count
+      if (passWeight > 0 || unroutedWeight > 0) {
+        passWork +=
+            passWeight * boardPins
+                + (unroutedWeight > 0
+                    ? unroutedWeight * calculateIncompleteCount(router.board) * (double) boardPins
+                    : 0.0);
       }
 
       job.setCurrentPass(currentPass);
@@ -390,6 +423,15 @@ final class AutorouteBatchLoop {
         break;
       }
       passesCompleted = currentPass;
+      long passSteps = router.searchSteps.steps() - stepsStart;
+      job.workSpent = workBase + passSteps + (long) passWork;
+      job.logInfo(
+          String.format(
+              java.util.Locale.US,
+              "Auto-routing pass #%d: %d search steps and %d work units so far in the job.",
+              currentPass,
+              passSteps,
+              job.workSpent));
 
       BoardStatistics boardStatisticsAfter = router.board.getStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
@@ -607,6 +649,9 @@ final class AutorouteBatchLoop {
         currentPass++;
       }
     }
+    // The job's work includes all this loop spent: also steps after its last pass's line and the
+    // terms of a pass that started but did not complete.
+    job.workSpent = workBase + (router.searchSteps.steps() - stepsStart) + (long) passWork;
 
     // Ensure we finish with the best board ever seen during this routing session.
     // When stagnation or the max-pass limit fires, the loop exits with the board from the last
@@ -648,7 +693,8 @@ final class AutorouteBatchLoop {
 
     boolean endedOnItsOwn =
         switch (router.lastStopReason) {
-          case COMPLETED, MAX_PASSES, SEARCH_BUDGET, STAGNATION, NO_IMPROVEMENT -> true;
+          case COMPLETED, MAX_PASSES, WORK_BUDGET, SEARCH_BUDGET, STAGNATION, NO_IMPROVEMENT ->
+              true;
           default -> false;
         };
     if (isRouterEnabled && endedOnItsOwn) {
@@ -753,6 +799,11 @@ final class AutorouteBatchLoop {
 
   private String buildUnroutedConnectionsReport() {
     return router.buildUnroutedConnectionsReport();
+  }
+
+  /** A work weight's value; unset, zero, negative or NaN count as 0. */
+  private static double workWeight(Double w) {
+    return w == null || !(w > 0) ? 0.0 : w;
   }
 
   /**

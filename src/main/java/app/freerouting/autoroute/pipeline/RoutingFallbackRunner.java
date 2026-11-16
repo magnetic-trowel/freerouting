@@ -16,7 +16,9 @@ import java.util.Map;
  * The alternatives run first; then a residual board (a few open connections) is continued from the
  * best result. A fanout-only strategy whose fanout leaves a board an earlier pass loop already
  * started on stops after that fanout. All attempts share one search budget counted in maze search
- * steps, so which attempts run does not depend on the machine's speed or load.
+ * steps, so which attempts run does not depend on the machine's speed or load. The job's work
+ * budget (autorouter.max_work), when set, bounds them too: it counts the default configuration's
+ * pass loop and every attempt's together, and once it is spent no attempt starts.
  *
  * <p>Ported from freerouting.net (Erik Gavriluk, Experimental Television Center).
  */
@@ -60,6 +62,17 @@ final class RoutingFallbackRunner {
           "Routing fallback skipped: the pass loop stopped at its "
               + RoutingFallback.describe(reason)
               + " with "
+              + best
+              + ".");
+      return defaultRouter;
+    }
+    if (workBudgetSpent(job)) {
+      job.logInfo(
+          "Routing fallback skipped: the job's work budget is spent ("
+              + job.workSpent
+              + " of "
+              + job.routerSettings.autorouter.maxWork
+              + " work units) with "
               + best
               + ".");
       return defaultRouter;
@@ -125,6 +138,9 @@ final class RoutingFallbackRunner {
         break;
       }
       if (budgetUsedUp(job, alternatives.subList(i, alternatives.size()))) {
+        break;
+      }
+      if (workBudgetSpent(job, alternatives.subList(i, alternatives.size()))) {
         break;
       }
       Attempt attempt = runAttempt(job, input, strategy, false, inputBaseline);
@@ -234,7 +250,8 @@ final class RoutingFallbackRunner {
     int round = 0;
     while (!bestAttempt.outcome.isCompleteAndClean()
         && !supervisor.explorationExhausted(jobSettings)
-        && !stopped(job)) {
+        && !stopped(job)
+        && !workBudgetSpent(job, List.of())) {
       round++;
       RoutingSupervisor.Attempt planned =
           supervisor.nextAttempt(round, jobSettings, bestAttempt.board);
@@ -293,6 +310,9 @@ final class RoutingFallbackRunner {
         break;
       }
       if (budgetUsedUp(job, continuations.subList(i, continuations.size()))) {
+        break;
+      }
+      if (workBudgetSpent(job, continuations.subList(i, continuations.size()))) {
         break;
       }
       RouterSettings settings = job.routerSettings.clone();
@@ -422,6 +442,7 @@ final class RoutingFallbackRunner {
   private static boolean stopAlternatives(
       RoutingFallback.Outcome best, BatchAutorouter.StopReason reason) {
     return best.isCompleteAndClean()
+        || reason == BatchAutorouter.StopReason.WORK_BUDGET
         || reason == BatchAutorouter.StopReason.TIMED_OUT
         || reason == BatchAutorouter.StopReason.CANCELLED;
   }
@@ -443,6 +464,41 @@ final class RoutingFallbackRunner {
     }
     job.logInfo("Routing fallback: the search budget is used up; not running " + names + ".");
     return true;
+  }
+
+  /**
+   * Whether the job's work budget (autorouter.max_work) is spent; if so, logs the attempts that
+   * will not run. The budget is the job's, so once it is spent no attempt starts: a pass loop would
+   * stop before its first pass, but its fanout and setup would still run outside the budget.
+   */
+  private static boolean workBudgetSpent(RoutingJob job, List<RoutingFallback.Strategy> notRun) {
+    if (!workBudgetSpent(job)) {
+      return false;
+    }
+    StringBuilder names = new StringBuilder();
+    for (RoutingFallback.Strategy strategy : notRun) {
+      if (!names.isEmpty()) {
+        names.append(", ");
+      }
+      names.append("'").append(strategy.name).append("'");
+    }
+    job.logInfo(
+        "Routing fallback: the job's work budget is spent ("
+            + job.workSpent
+            + " of "
+            + job.routerSettings.autorouter.maxWork
+            + " work units)"
+            + (names.isEmpty() ? "; no further attempt starts." : "; not running " + names + "."));
+    return true;
+  }
+
+  /** Whether the job's work budget (autorouter.max_work) is set and spent. */
+  static boolean workBudgetSpent(RoutingJob job) {
+    Long maxWork =
+        job.routerSettings != null && job.routerSettings.autorouter != null
+            ? job.routerSettings.autorouter.maxWork
+            : null;
+    return maxWork != null && maxWork > 0 && job.workSpent >= maxWork;
   }
 
   /** The fallback search budget never goes below this many steps. */
