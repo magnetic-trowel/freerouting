@@ -27,6 +27,29 @@ public class AutorouterSettings implements Serializable, Cloneable {
   @Schema(description = "Maximum autorouter passes (0 means unlimited)")
   public Integer maxPasses;
 
+  /**
+   * Work budget of the pass loop: the router stops before a pass once the passes so far have used
+   * it ({@code StopReason.WORK_BUDGET}, a clean stop like the pass limit). Work is counted, not
+   * timed, so the stop is the same on any machine and under any load: the search steps (polls of the
+   * searches' step limits, {@link app.freerouting.datastructures.TimeLimit#threadSteps()}) plus, per
+   * pass started, {@link #workPassWeight} x the board's pins and {@link #workUnroutedWeight} x its
+   * incomplete connections x its pins (the per-pass work no step limit polls: board statistics,
+   * item insertion). Unset or {@code 0}: no budget.
+   */
+  @SerializedName("max_work")
+  @Schema(description = "Work budget of the pass loop in work units (0 or unset: none)")
+  public Long maxWork;
+
+  /** Work units per pass started, per board pin (see {@link #maxWork}). */
+  @SerializedName("work_pass_weight")
+  @Schema(description = "Work units per pass started and board pin")
+  public Double workPassWeight;
+
+  /** Work units per pass started, per incomplete connection and board pin (see {@link #maxWork}). */
+  @SerializedName("work_unrouted_weight")
+  @Schema(description = "Work units per pass started, incomplete connection and board pin")
+  public Double workUnroutedWeight;
+
   /** Maximum items attempted in the autorouter stage. */
   @SerializedName("max_items")
   @Schema(description = "Maximum items attempted in the autorouter stage")
