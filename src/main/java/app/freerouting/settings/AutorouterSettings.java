@@ -31,13 +31,13 @@ public class AutorouterSettings implements Serializable, Cloneable {
    * Work budget of the whole routing job: a pass loop stops before a pass once the job's pass loops
    * (the default configuration's and every routing fallback attempt's) have used it together
    * ({@code StopReason.WORK_BUDGET}, a clean stop like the pass limit), and no further fallback or
-   * exploration attempt starts. Work is counted, not timed, so the stop is the same on any machine
-   * and under any load: the maze search steps of the pass loops (the router's search step meter,
-   * the steps fallback_search_budget_percent also counts) plus, per pass started, {@link
-   * #workPassWeight} x the board's pins and {@link #workUnroutedWeight} x its incomplete
-   * connections x its pins (the per-pass work no search step counts: board statistics, item
-   * insertion). The fallback search budget still limits the fallback attempts' share within it.
-   * Unset or {@code 0}: no budget.
+   * exploration attempt starts, nor the optimizer. Work is counted, not timed, so the stop is the
+   * same on any machine and under any load: the maze search steps of the pass loops (the router's
+   * search step meter, the steps fallback_search_budget_percent also counts) plus, per pass
+   * started, {@link #workPassWeight} x the board's pins and {@link #workUnroutedWeight} x its
+   * incomplete connections x its pins (the per-pass work no search step counts: board statistics,
+   * item insertion). The fallback search budget still limits the fallback attempts' share within
+   * it. Unset or {@code 0}: no budget.
    */
   @SerializedName("max_work")
   @Schema(description = "Work budget of the routing job in work units (0 or unset: none)")

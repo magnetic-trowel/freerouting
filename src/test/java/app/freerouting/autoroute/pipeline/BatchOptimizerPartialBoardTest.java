@@ -67,6 +67,25 @@ class BatchOptimizerPartialBoardTest {
         "the detour must become a straight trace, the trace of WALLED must stay");
   }
 
+  @Test
+  void aSpentWorkBudgetStartsNoOptimizerPass() {
+    RoutingJob job = jobFor(loadBoard());
+    job.routerSettings.autorouter.maxWork = 100L;
+    job.workSpent = 100L;
+    BatchOptimizer optimizer = new BatchOptimizer(job);
+    optimizer.runBatchLoop();
+
+    assertEquals(BatchOptimizer.StopReason.SKIPPED, optimizer.lastStopReason);
+    assertEquals(62.0f, job.board.getStatistics().traces.totalLengthMm, 0.01f);
+
+    // budget left: the optimizer runs as without one
+    RoutingJob left = jobFor(loadBoard());
+    left.routerSettings.autorouter.maxWork = 100L;
+    left.workSpent = 99L;
+    new BatchOptimizer(left).runBatchLoop();
+    assertEquals(44.0f, left.board.getStatistics().traces.totalLengthMm, 0.5f);
+  }
+
   /**
    * A candidate of WALLED rips the W0-W1 trace. Once it is back, only the W2 connection the routing
    * stage could not route is open: with the count from before the rip the candidate stops after
