@@ -184,4 +184,22 @@ class RoutingFallbackTest {
     settings.fanout.maxItems = 3;
     assertEquals(3, DirectPinRouting.fanoutItemLimit(settings));
   }
+
+  @Test
+  void aSpentWorkBudgetNeverStartsTheLadder() {
+    assertFalse(RoutingFallback.isRetryable(BatchAutorouter.StopReason.WORK_BUDGET));
+    assertFalse(RoutingFallback.isRetryable(BatchAutorouter.StopReason.TIMED_OUT));
+    // fallback_only marks its input board as stopped by stagnation, which the ladder may retry
+    assertTrue(RoutingFallback.isRetryable(BatchAutorouter.StopReason.STAGNATION));
+  }
+
+  @Test
+  void fallbackOnlyIsOffByDefault() {
+    RouterSettings defaults = new DefaultSettings().getSettings();
+    assertFalse(Boolean.TRUE.equals(defaults.autorouter.fallbackOnly));
+    RouterSettings copy = defaults.clone();
+    copy.autorouter.fallbackOnly = true;
+    assertTrue(copy.autorouter.fallbackOnly);
+    assertFalse(Boolean.TRUE.equals(defaults.autorouter.fallbackOnly));
+  }
 }

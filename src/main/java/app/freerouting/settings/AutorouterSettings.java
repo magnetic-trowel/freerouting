@@ -97,6 +97,17 @@ public class AutorouterSettings implements Serializable, Cloneable {
       description = "Fallback strategies when fanout does not run and no fallback_strategies apply")
   public String noFanoutFallbackStrategies;
 
+  /**
+   * Fallback only: the input board is taken as the default attempt's result (no pass loop of its
+   * own), and the fallback ladder runs on it at once. For a caller that has already routed and
+   * repaired the board and wants the ladder's alternatives last, inside its own time box. The
+   * board then counts as stopped by stagnation, so the ladder may start. Unset or {@code false}:
+   * the pass loop runs first.
+   */
+  @SerializedName("fallback_only")
+  @Schema(description = "Skip the pass loop and run the fallback ladder on the input board")
+  public Boolean fallbackOnly;
+
   /** Erik Gavriluk (freerouting.net): fallback alternatives an exploration round runs. */
   @SerializedName("explore_fallback_strategies")
   @Schema(description = "Fallback alternatives an exploration round runs")

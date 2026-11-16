@@ -404,8 +404,11 @@ final class RoutingFallbackRunner {
 
   private static boolean stopAlternatives(
       RoutingFallback.Outcome best, BatchAutorouter.StopReason reason) {
+    // a spent job work budget (autorouter.max_work) ends the ladder like a timeout: every later
+    // attempt would stop before its first pass. It is never retryable (RoutingFallback.isRetryable).
     return best.isCompleteAndClean()
         || reason == BatchAutorouter.StopReason.TIMED_OUT
+        || reason == BatchAutorouter.StopReason.WORK_BUDGET
         || reason == BatchAutorouter.StopReason.CANCELLED;
   }
 

@@ -164,7 +164,14 @@ public final class RoutingPipeline {
               "Routing fallback disabled; the input board could not be saved: " + e.getMessage());
         }
       }
-      this.autorouter.runBatchLoop();
+      if (input != null && Boolean.TRUE.equals(this.job.routerSettings.autorouter.fallbackOnly)) {
+        // the caller routed and repaired the board already: it is the default attempt's result,
+        // and the ladder starts from it (autorouter.fallback_only)
+        this.job.logInfo("Fallback only: the input board is the default attempt; no pass loop.");
+        this.autorouter.lastStopReason = BatchAutorouter.StopReason.STAGNATION;
+      } else {
+        this.autorouter.runBatchLoop();
+      }
       RoutingFallbackRunner fallback = new RoutingFallbackRunner(this.autorouter);
       if (input != null) {
         this.autorouter = fallback.run(this.job, this.autorouter, strategies, input);
