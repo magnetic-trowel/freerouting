@@ -59,6 +59,15 @@ public class AutorouterSettings implements Serializable, Cloneable {
   public Double workUnroutedWeight;
 
   /**
+   * Work units per search step of the optimizer (see {@link #maxWork}); unset: 1, as a step of a
+   * routing pass. An optimizer candidate routes on a fresh copy of the board, so its steps cost
+   * more time than a pass loop's.
+   */
+  @SerializedName("work_optimizer_step_weight")
+  @Schema(description = "Work units per optimizer search step (unset: 1)")
+  public Double workOptimizerStepWeight;
+
+  /**
    * Work units per unit of pour fill work (see {@link #maxWork}): per fill computed and per
    * clearance shape cut out of it ({@code FillWorkMeter}), by the pass loops and the optimizer.
    */

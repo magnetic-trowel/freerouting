@@ -60,8 +60,8 @@ class AutorouteBatchLoopStopTest {
       """;
 
   /**
-   * Net P has a pour on the bottom layer between its two through-hole pins, which its traces end on;
-   * net Q's connection crosses the pour.
+   * Net P has a pour on the bottom layer between its two through-hole pins, which its traces end
+   * on; net Q's connection crosses the pour.
    */
   private static final String DSN_POUR =
       """

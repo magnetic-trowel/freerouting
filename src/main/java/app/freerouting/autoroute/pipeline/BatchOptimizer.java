@@ -162,6 +162,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
     return weight == null || !(weight > 0) ? 0 : Math.round(weight * board.getPins().size());
   }
 
+  /**
+   * The work units of {@code steps} optimizer search steps: autorouter.work_optimizer_step_weight
+   * each (unset: 1, as a routing pass's step).
+   */
+  static long stepWork(RoutingJob job, long steps) {
+    Double weight = job.routerSettings.autorouter.workOptimizerStepWeight;
+    return weight == null || !(weight > 0) ? steps : Math.round(weight * steps);
+  }
+
   /** The work units of {@code fill} units of pour fill work (autorouter.work_fill_weight). */
   private long fillWork(long fill) {
     Double weight = job.routerSettings.autorouter.workFillWeight;
@@ -997,7 +1006,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
             if (res != null) {
               // Only the candidates the pass uses count: they are the same on any machine, unlike
               // those still running ahead when the pass stops.
-              job.workSpent += res.steps + fillWork(res.fill);
+              job.workSpent += res.stepWork + fillWork(res.fill);
+              job.optimizerSearchSteps += res.steps;
               this.passCandidates++;
               this.passSteps += res.steps;
               this.passFill += res.fill;
@@ -1618,9 +1628,13 @@ public final class BatchOptimizer extends NamedAlgorithm {
     final long cpuUsedNanos;
     final long allocUsedBytes;
 
-    /** The candidate's search steps and pour fill work (autorouter.max_work). */
+    /**
+     * The candidate's search steps, their work units (autorouter.work_optimizer_step_weight) and
+     * its pour fill work.
+     */
     final long steps;
 
+    final long stepWork;
     final long fill;
 
     CandidateResult(
@@ -1632,6 +1646,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         long cpuUsedNanos,
         long allocUsedBytes,
         long steps,
+        long stepWork,
         long fill) {
       this.result = result;
       this.board = board;
@@ -1641,6 +1656,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.cpuUsedNanos = cpuUsedNanos;
       this.allocUsedBytes = allocUsedBytes;
       this.steps = steps;
+      this.stepWork = stepWork;
       this.fill = fill;
     }
 
@@ -1748,7 +1764,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     public CandidateResult call() {
       if ((thread != null && thread.isStopRequested())
           || (deadlineMs != null && System.currentTimeMillis() >= deadlineMs)) {
-        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0, 0);
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0, 0, 0);
       }
 
       // the candidate runs on this thread: its pour fill work is the meter's growth here
@@ -1766,7 +1782,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       RoutingBoard workerBoard = image == null ? null : image.copy();
       Item item = workerBoard == null ? null : workerBoard.getItem(itemId);
       if (item == null) {
-        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0, 0);
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0, 0, 0);
       }
       workerBoard.generateSnapshot();
 
@@ -1791,7 +1807,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
               thread,
               deadlineMs,
               baselineMetrics);
-      long steps = candidateJob.workSpent;
+      long steps = candidateJob.optimizerSearchSteps;
+      long stepWork = candidateJob.workSpent;
 
       long cpuUsed = 0;
       long allocUsed = 0;
@@ -1835,6 +1852,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
             cpuUsed,
             allocUsed,
             steps,
+            stepWork,
             FillWorkMeter.count() - fillStart);
       }
       if (!workerBoard.popSnapshot()) {
@@ -1850,6 +1868,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
           cpuUsed,
           allocUsed,
           steps,
+          stepWork,
           FillWorkMeter.count() - fillStart);
     }
   }

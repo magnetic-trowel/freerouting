@@ -114,6 +114,26 @@ class BatchOptimizerPartialBoardTest {
     assertNotEquals(BatchOptimizer.StopReason.WORK_BUDGET, optimizer.lastStopReason);
   }
 
+  /**
+   * autorouter.work_optimizer_step_weight prices each optimizer search step, and changes nothing
+   * else.
+   */
+  @Test
+  void optimizerStepsCountTheirWeight() {
+    RoutingJob free = jobFor(loadBoard());
+    new BatchOptimizer(free).runBatchLoop();
+    RoutingJob weighted = jobFor(loadBoard());
+    weighted.routerSettings.autorouter.workOptimizerStepWeight = 3.0;
+    new BatchOptimizer(weighted).runBatchLoop();
+
+    assertEquals(free.optimizerSearchSteps, free.workSpent, "unset, a step is one work unit");
+    assertEquals(3 * free.workSpent, weighted.workSpent);
+    assertEquals(
+        free.board.getStatistics().traces.totalLengthMm,
+        weighted.board.getStatistics().traces.totalLengthMm,
+        0.0f);
+  }
+
   /** Each optimizer pass started also counts autorouter.work_pass_weight x the board's pins. */
   @Test
   void optimizerPassesCountTheirPassWeight() {
@@ -132,8 +152,8 @@ class BatchOptimizerPartialBoardTest {
   }
 
   /**
-   * With a pour of DETOUR on the bottom layer under its detour, the candidates compute its fill: their pour fill
-   * work counts autorouter.work_fill_weight each, and changes nothing else.
+   * With a pour of DETOUR on the bottom layer under its detour, the candidates compute its fill:
+   * their pour fill work counts autorouter.work_fill_weight each, and changes nothing else.
    */
   @Test
   void optimizerPourFillWorkCountsItsWeight() {
