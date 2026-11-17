@@ -59,6 +59,25 @@ class AutorouteBatchLoopStopTest {
         (network (net X (pins A-1 B-1)) (net Y (pins A2-1 B2-1))))
       """;
 
+  /**
+   * Net P has a pour on the bottom layer between its two through-hole pins, which its traces end
+   * on; net Q's connection crosses the pour.
+   */
+  private static final String DSN_POUR =
+      """
+      (pcb loopfill (resolution um 1)
+        (structure (layer top (type signal)) (layer bottom (type signal))
+          (boundary (rect pcb 0 0 20000 10000))
+          (plane P (polygon bottom 0 6000 3000 14000 3000 14000 7000 6000 7000))
+          (via V) (rule (width 200) (clearance 200)))
+        (placement (component C (place P1 3000 5000 front 0) (place P2 17000 5000 front 0)
+          (place Q1 10000 1000 front 0) (place Q2 10000 9000 front 0)))
+        (library (image C (pin T 1 0 0))
+          (padstack T (shape (circle top 800)) (shape (circle bottom 800)) (attach off))
+          (padstack V (shape (circle top 600)) (shape (circle bottom 600)) (attach off)))
+        (network (net P (pins P1-1 P2-1)) (net Q (pins Q1-1 Q2-1))))
+      """;
+
   private record Run(RoutingJob job, BatchAutorouter router, List<TaskStateChangedEvent> events) {}
 
   private static Run prepareOpen(Long maxWork) {
@@ -235,6 +254,58 @@ class AutorouteBatchLoopStopTest {
     Run unrouted = prepareOpen(1_000_000_000L, null, 1e9);
     unrouted.router().runBatchLoop();
     assertEquals(1, unrouted.router().phaseMetrics.autorouter.passesCompleted);
+  }
+
+  /**
+   * Pour fill work (FillWorkMeter) counts autorouter.work_fill_weight work units per unit, the same
+   * in every run; without the weight it counts nothing.
+   */
+  @Test
+  void pourFillWorkCountsItsWeight() {
+    long[] fill = new long[2];
+    long[] work = new long[2];
+    long[] steps = new long[2];
+    for (int k = 0; k < 2; k++) {
+      Run run = preparePour();
+      run.job().routerSettings.autorouter.workFillWeight = k == 0 ? null : 1000.0;
+      long before = app.freerouting.datastructures.FillWorkMeter.count();
+      run.router().runBatchLoop();
+      fill[k] = app.freerouting.datastructures.FillWorkMeter.count() - before;
+      work[k] = run.job().workSpent;
+      steps[k] = run.router().searchStepsUsed();
+    }
+    assertTrue(fill[0] > 0, "routing on a pour computes its fill");
+    assertEquals(fill[0], fill[1], "the same run counts the same fill work");
+    assertEquals(steps[0], work[0], "without the weight the fill work counts nothing");
+    // the pass loop's share of the run's fill work, at 1000 work units each
+    long fillWork = work[1] - steps[1];
+    assertTrue(fillWork > 0 && fillWork % 1000L == 0 && fillWork <= 1000L * fill[1], "" + fillWork);
+  }
+
+  private static Run preparePour() {
+    BoardReadResult result =
+        DsnReader.readBoard(
+            new ByteArrayInputStream(DSN_POUR.getBytes(StandardCharsets.UTF_8)),
+            null,
+            null,
+            "loopfill");
+    assertInstanceOf(BoardReadResult.Success.class, result);
+    RoutingBoard board = (RoutingBoard) ((BoardReadResult.Success) result).board();
+    RouterSettings settings = new SettingsMerger(new DefaultSettings()).merge();
+    settings.setLayerCount(board.getLayerCount());
+    settings.applyBoardSpecificOptimizations(board);
+    settings.setFanoutEnabled(false);
+    settings.autorouter.maxPasses = 3;
+    RoutingJob job = new RoutingJob();
+    job.thread =
+        new StoppableThread() {
+          @Override
+          protected void threadAction() {}
+        };
+    job.board = board;
+    job.routerSettings = settings;
+    BatchAutorouter router = BatchAutorouter.createAttempt(job, board, settings, false);
+    return new Run(job, router, new ArrayList<>());
   }
 
   @Test

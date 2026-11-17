@@ -8,6 +8,7 @@ import app.freerouting.board.model.structure.FixedState;
 import app.freerouting.board.model.structure.Unit;
 import app.freerouting.board.searchtree.SearchTreeObject;
 import app.freerouting.board.searchtree.ShapeSearchTree;
+import app.freerouting.datastructures.FillWorkMeter;
 import app.freerouting.datastructures.ShapeTree.TreeEntry;
 import app.freerouting.geometry.planar.Area;
 import app.freerouting.geometry.planar.FloatPoint;
@@ -399,7 +400,9 @@ public class ConductionArea extends ObstacleArea implements Connectable {
       // whole growing fill every time.
       fillArea = fillArea.subtractAll(foreignClearances);
       fillArea = fillArea.subtractAll(sameNetClearances);
+      FillWorkMeter.add(foreignClearances.size() + sameNetClearances.size());
     }
+    FillWorkMeter.add(1);
     return fillArea;
   }
 

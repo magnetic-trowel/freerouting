@@ -20,6 +20,7 @@ import app.freerouting.core.RoutingJob;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
+import app.freerouting.datastructures.FillWorkMeter;
 import app.freerouting.drc.NetRoutingLedger;
 import app.freerouting.geometry.planar.Point;
 import app.freerouting.logger.FRLogger;
@@ -310,6 +311,9 @@ final class AutorouteBatchLoop {
     final long stepsStart = router.searchSteps.steps();
     final double passWeight = workWeight(router.settings.autorouter.workPassWeight);
     final double unroutedWeight = workWeight(router.settings.autorouter.workUnroutedWeight);
+    // pour fill work on this thread, which runs the pass loop (FillWorkMeter)
+    final double fillWeight = workWeight(router.settings.autorouter.workFillWeight);
+    final long fillStart = FillWorkMeter.count();
     final int boardPins =
         (passWeight > 0 || unroutedWeight > 0) ? router.board.getPins().size() : 0;
     double passWork = 0; // the weighted per-pass terms of the passes started
@@ -347,7 +351,11 @@ final class AutorouteBatchLoop {
       // alreadyRoutedBoardHashes.add(currentBoardHash);
 
       Long maxWork = router.settings.autorouter.maxWork;
-      long workDone = workBase + (router.searchSteps.steps() - stepsStart) + (long) passWork;
+      long workDone =
+          workBase
+              + (router.searchSteps.steps() - stepsStart)
+              + (long) passWork
+              + fillWork(fillWeight, FillWorkMeter.count() - fillStart);
       if (maxWork != null && maxWork > 0 && workDone >= maxWork) {
         job.logInfo(
             String.format(
@@ -424,14 +432,17 @@ final class AutorouteBatchLoop {
       }
       passesCompleted = currentPass;
       long passSteps = router.searchSteps.steps() - stepsStart;
-      job.workSpent = workBase + passSteps + (long) passWork;
+      long passFill = FillWorkMeter.count() - fillStart;
+      job.workSpent = workBase + passSteps + (long) passWork + fillWork(fillWeight, passFill);
       job.logInfo(
           String.format(
               java.util.Locale.US,
-              "Auto-routing pass #%d: %d search steps and %d work units so far in the job.",
+              "Auto-routing pass #%d: %d search steps and %d work units so far in the job, %d pour"
+                  + " fill work in the pass loop.",
               currentPass,
               passSteps,
-              job.workSpent));
+              job.workSpent,
+              passFill));
 
       BoardStatistics boardStatisticsAfter = router.board.getStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);
@@ -651,7 +662,11 @@ final class AutorouteBatchLoop {
     }
     // The job's work includes all this loop spent: also steps after its last pass's line and the
     // terms of a pass that started but did not complete.
-    job.workSpent = workBase + (router.searchSteps.steps() - stepsStart) + (long) passWork;
+    job.workSpent =
+        workBase
+            + (router.searchSteps.steps() - stepsStart)
+            + (long) passWork
+            + fillWork(fillWeight, FillWorkMeter.count() - fillStart);
 
     // Ensure we finish with the best board ever seen during this routing session.
     // When stagnation or the max-pass limit fires, the loop exits with the board from the last
@@ -804,6 +819,11 @@ final class AutorouteBatchLoop {
   /** A work weight's value; unset, zero, negative or NaN count as 0. */
   private static double workWeight(Double w) {
     return w == null || !(w > 0) ? 0.0 : w;
+  }
+
+  /** The work units of {@code fill} units of pour fill work (FillWorkMeter) at {@code weight}. */
+  static long fillWork(double weight, long fill) {
+    return weight > 0 ? Math.round(weight * fill) : 0;
   }
 
   /**

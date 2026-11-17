@@ -31,13 +31,16 @@ public class AutorouterSettings implements Serializable, Cloneable {
    * Work budget of the whole routing job: a pass loop stops before a pass once the job's pass loops
    * (the default configuration's and every routing fallback attempt's) have used it together
    * ({@code StopReason.WORK_BUDGET}, a clean stop like the pass limit), and no further fallback or
-   * exploration attempt starts, nor the optimizer. Work is counted, not timed, so the stop is the
-   * same on any machine and under any load: the maze search steps of the pass loops (the router's
-   * search step meter, the steps fallback_search_budget_percent also counts) plus, per pass
-   * started, {@link #workPassWeight} x the board's pins and {@link #workUnroutedWeight} x its
-   * incomplete connections x its pins (the per-pass work no search step counts: board statistics,
-   * item insertion). The fallback search budget still limits the fallback attempts' share within
-   * it. Unset or {@code 0}: no budget.
+   * exploration attempt starts. The optimizer draws on the same budget: it starts a pass only while
+   * some is left, and a pass takes no further candidate once it is spent. Work is counted, not
+   * timed, so the stop is the same on any machine and under any load: the maze search steps of the
+   * pass loops (the router's search step meter, the steps fallback_search_budget_percent also
+   * counts) plus, per pass started, {@link #workPassWeight} x the board's pins and {@link
+   * #workUnroutedWeight} x its incomplete connections x its pins (the per-pass work no search step
+   * counts: board statistics, item insertion); and the optimizer's search steps (of the candidates
+   * a pass uses and of its commits) plus {@link #workPassWeight} x the board's pins per optimizer
+   * pass. The fallback search budget still limits the fallback attempts' share within it. Unset or
+   * {@code 0}: no budget.
    */
   @SerializedName("max_work")
   @Schema(description = "Work budget of the routing job in work units (0 or unset: none)")
@@ -54,6 +57,23 @@ public class AutorouterSettings implements Serializable, Cloneable {
   @SerializedName("work_unrouted_weight")
   @Schema(description = "Work units per pass started, incomplete connection and board pin")
   public Double workUnroutedWeight;
+
+  /**
+   * Work units per search step of the optimizer (see {@link #maxWork}); unset: 1, as a step of a
+   * routing pass. An optimizer candidate routes on a fresh copy of the board, so its steps cost
+   * more time than a pass loop's.
+   */
+  @SerializedName("work_optimizer_step_weight")
+  @Schema(description = "Work units per optimizer search step (unset: 1)")
+  public Double workOptimizerStepWeight;
+
+  /**
+   * Work units per unit of pour fill work (see {@link #maxWork}): per fill computed and per
+   * clearance shape cut out of it ({@code FillWorkMeter}), by the pass loops and the optimizer.
+   */
+  @SerializedName("work_fill_weight")
+  @Schema(description = "Work units per pour fill computed and per clearance shape cut out of it")
+  public Double workFillWeight;
 
   /**
    * Number of consecutive passes without score improvement before the autorouter stops. {@code 0}

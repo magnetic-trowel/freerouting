@@ -143,6 +143,9 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   /** Work units (autorouter.max_work) spent by this job's pass loops so far. */
   public transient long workSpent = 0;
 
+  /** Search steps of the optimizer candidates this job used and of its commits so far. */
+  public transient long optimizerSearchSteps = 0;
+
   @SerializedName("drc_settings")
   @Schema(name = "drc_settings", description = "DRC configuration settings")
   public DesignRulesCheckerSettings drcSettings = new DesignRulesCheckerSettings();
