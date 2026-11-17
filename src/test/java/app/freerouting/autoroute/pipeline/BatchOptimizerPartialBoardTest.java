@@ -132,6 +132,31 @@ class BatchOptimizerPartialBoardTest {
   }
 
   /**
+   * With a pour of DETOUR on the bottom layer under its detour, the candidates compute its fill: their pour fill
+   * work counts autorouter.work_fill_weight each, and changes nothing else.
+   */
+  @Test
+  void optimizerPourFillWorkCountsItsWeight() {
+    String withPour =
+        DSN.replace(
+            "(via V)",
+            "(plane DETOUR (polygon bottom 0 10000 1000 30000 1000 30000 14000 10000 14000))"
+                + " (via V)");
+    RoutingJob free = jobFor(loadBoard(withPour));
+    new BatchOptimizer(free).runBatchLoop();
+    RoutingJob weighted = jobFor(loadBoard(withPour));
+    weighted.routerSettings.autorouter.workFillWeight = 1000.0;
+    new BatchOptimizer(weighted).runBatchLoop();
+
+    long fillWork = weighted.workSpent - free.workSpent;
+    assertTrue(fillWork > 0 && fillWork % 1000L == 0, "" + fillWork);
+    assertEquals(
+        free.board.getStatistics().traces.totalLengthMm,
+        weighted.board.getStatistics().traces.totalLengthMm,
+        0.0f);
+  }
+
+  /**
    * A budget spent during a pass stops it after the candidate that spent it: the pass commits what
    * it found, and no further pass starts (stop reason work_budget).
    */
@@ -189,9 +214,13 @@ class BatchOptimizerPartialBoardTest {
   }
 
   private static RoutingBoard loadBoard() {
+    return loadBoard(DSN);
+  }
+
+  private static RoutingBoard loadBoard(String dsn) {
     BoardReadResult result =
         DsnReader.readBoard(
-            new ByteArrayInputStream(DSN.getBytes(StandardCharsets.UTF_8)), null, null, "partial");
+            new ByteArrayInputStream(dsn.getBytes(StandardCharsets.UTF_8)), null, null, "partial");
     assertInstanceOf(BoardReadResult.Success.class, result);
     return (RoutingBoard) ((BoardReadResult.Success) result).board();
   }

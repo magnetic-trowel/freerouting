@@ -17,6 +17,7 @@ import app.freerouting.core.RoutingJob;
 import app.freerouting.core.StoppableThread;
 import app.freerouting.core.results.RoutingResultManifest;
 import app.freerouting.core.scoring.BoardStatistics;
+import app.freerouting.datastructures.FillWorkMeter;
 import app.freerouting.datastructures.UndoableObjects;
 import app.freerouting.drc.ClearanceBaseline;
 import app.freerouting.drc.ClearanceViolation;
@@ -84,6 +85,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
   /** The commits after the best one in the last pass, in the order they were made. */
   private final List<ChangeSet> passCommits = new ArrayList<>();
 
+  /** The optimizer thread's pour fill work (FillWorkMeter) charged to the job up to here. */
+  private long fillMark;
+
+  /** The candidates the current pass used, and their search steps and pour fill work. */
+  private int passCandidates;
+
+  private long passSteps;
+  private long passFill;
+
   /**
    * Creates a new instance of BatchOptimizer, which is used to optimize the board.
    *
@@ -150,6 +160,28 @@ public final class BatchOptimizer extends NamedAlgorithm {
   static long passWork(RoutingJob job, RoutingBoard board) {
     Double weight = job.routerSettings.autorouter.workPassWeight;
     return weight == null || !(weight > 0) ? 0 : Math.round(weight * board.getPins().size());
+  }
+
+  /** The work units of {@code fill} units of pour fill work (autorouter.work_fill_weight). */
+  private long fillWork(long fill) {
+    Double weight = job.routerSettings.autorouter.workFillWeight;
+    return AutorouteBatchLoop.fillWork(weight == null ? 0.0 : weight, fill);
+  }
+
+  /**
+   * Charges the pour fill work this thread did since the last charge (the passes' own work: board
+   * statistics, commits) to the job.
+   */
+  private void chargeOwnFillWork() {
+    long now = FillWorkMeter.count();
+    job.workSpent += fillWork(now - this.fillMark);
+    this.fillMark = now;
+  }
+
+  /** Whether the job's work budget (autorouter.max_work) is spent, with this thread's work. */
+  private boolean workBudgetSpent() {
+    chargeOwnFillWork();
+    return RoutingFallbackRunner.workBudgetSpent(job);
   }
 
   /** Returns true if timed out. */
@@ -266,6 +298,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
             + Math.round(board.cumulativeTraceLength()));
 
     useIncreasedRipupCosts = true;
+    this.fillMark = FillWorkMeter.count();
 
     // Capture initial board state for baseline and session summary
     BoardStatistics initialStats = board.getStatistics();
@@ -391,7 +424,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
         break;
       }
       // autorouter.max_work is the whole job's budget: a pass starts only while some of it is left.
-      if (RoutingFallbackRunner.workBudgetSpent(job)) {
+      if (workBudgetSpent()) {
         this.lastStopReason = StopReason.WORK_BUDGET;
         job.logInfo(
             String.format(
@@ -406,6 +439,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
       ++currentPass;
       // The pass starts: its per-pass work term counts, as a routing pass's does.
       job.workSpent += passWork(job, this.board);
+      this.passCandidates = 0;
+      this.passSteps = 0;
+      this.passFill = 0;
 
       float scoreBeforePass = board.getStatistics().getOptimizerRank(job.routerSettings);
 
@@ -435,12 +471,17 @@ public final class BatchOptimizer extends NamedAlgorithm {
         break;
       }
       peakHeapMb = Math.max(peakHeapMb, sampleHeapUsageMb());
+      chargeOwnFillWork();
       job.logInfo(
           String.format(
               Locale.US,
-              "Optimizer work after pass #%d: %d work units so far in the job.",
+              "Optimizer work after pass #%d: %d work units so far in the job; the pass used %d"
+                  + " candidates with %d search steps and %d pour fill work.",
               currentPass,
-              job.workSpent));
+              job.workSpent,
+              this.passCandidates,
+              this.passSteps,
+              this.passFill));
 
       if (this.isTimedOut) {
         this.lastStopReason = StopReason.TIMED_OUT;
@@ -956,7 +997,10 @@ public final class BatchOptimizer extends NamedAlgorithm {
             if (res != null) {
               // Only the candidates the pass uses count: they are the same on any machine, unlike
               // those still running ahead when the pass stops.
-              job.workSpent += res.work;
+              job.workSpent += res.steps + fillWork(res.fill);
+              this.passCandidates++;
+              this.passSteps += res.steps;
+              this.passFill += res.fill;
               this.workerCpuNanos.addAndGet(res.cpuUsedNanos);
               this.workerAllocBytes.addAndGet(res.allocUsedBytes);
               this.resultMap.put(res.result.itemId(), res.result);
@@ -988,7 +1032,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
             }
             // The job's work budget (autorouter.max_work) is spent: the pass takes no further
             // candidate and commits what the candidates so far found, as after an early stop.
-            if (RoutingFallbackRunner.workBudgetSpent(job)) {
+            if (workBudgetSpent()) {
               job.logInfo(
                   String.format(
                       Locale.US,
@@ -1121,7 +1165,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     int committed = 0;
     for (RankedCandidate candidate : improvedResults) {
       if (committed + 1 >= maxCommits
-          || RoutingFallbackRunner.workBudgetSpent(job)
+          || workBudgetSpent()
           || (this.thread != null && this.thread.isStopRequested())
           || (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs)) {
         break;
@@ -1574,8 +1618,10 @@ public final class BatchOptimizer extends NamedAlgorithm {
     final long cpuUsedNanos;
     final long allocUsedBytes;
 
-    /** The candidate's work units (autorouter.max_work): its search steps. */
-    final long work;
+    /** The candidate's search steps and pour fill work (autorouter.max_work). */
+    final long steps;
+
+    final long fill;
 
     CandidateResult(
         ItemRouteResult result,
@@ -1585,7 +1631,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
         FloatPoint itemPosition,
         long cpuUsedNanos,
         long allocUsedBytes,
-        long work) {
+        long steps,
+        long fill) {
       this.result = result;
       this.board = board;
       this.changes = changes;
@@ -1593,7 +1640,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.itemPosition = itemPosition;
       this.cpuUsedNanos = cpuUsedNanos;
       this.allocUsedBytes = allocUsedBytes;
-      this.work = work;
+      this.steps = steps;
+      this.fill = fill;
     }
 
     /** True if this candidate is a better pick than the other under the commit selection. */
@@ -1700,9 +1748,11 @@ public final class BatchOptimizer extends NamedAlgorithm {
     public CandidateResult call() {
       if ((thread != null && thread.isStopRequested())
           || (deadlineMs != null && System.currentTimeMillis() >= deadlineMs)) {
-        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0);
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0, 0);
       }
 
+      // the candidate runs on this thread: its pour fill work is the meter's growth here
+      long fillStart = FillWorkMeter.count();
       long cpuStart = -1;
       long allocStart = -1;
       ThreadMXBean mxBean = null;
@@ -1716,7 +1766,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       RoutingBoard workerBoard = image == null ? null : image.copy();
       Item item = workerBoard == null ? null : workerBoard.getItem(itemId);
       if (item == null) {
-        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0);
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0, 0);
       }
       workerBoard.generateSnapshot();
 
@@ -1741,7 +1791,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
               thread,
               deadlineMs,
               baselineMetrics);
-      long work = candidateJob.workSpent;
+      long steps = candidateJob.workSpent;
 
       long cpuUsed = 0;
       long allocUsed = 0;
@@ -1776,14 +1826,31 @@ public final class BatchOptimizer extends NamedAlgorithm {
         result.updateImproved(!changes.addsClearanceViolation(workerBoard, startViolations));
       }
       if (!result.improved()) {
-        return new CandidateResult(result, null, null, 0, position, cpuUsed, allocUsed, work);
+        return new CandidateResult(
+            result,
+            null,
+            null,
+            0,
+            position,
+            cpuUsed,
+            allocUsed,
+            steps,
+            FillWorkMeter.count() - fillStart);
       }
       if (!workerBoard.popSnapshot()) {
         FRLogger.warn("BatchOptimizer: failed to remove the candidate-board snapshot");
       }
       workerBoard.clearTransientAutorouteState();
       return new CandidateResult(
-          result, workerBoard, changes, scoreGain, position, cpuUsed, allocUsed, work);
+          result,
+          workerBoard,
+          changes,
+          scoreGain,
+          position,
+          cpuUsed,
+          allocUsed,
+          steps,
+          FillWorkMeter.count() - fillStart);
     }
   }
 

@@ -59,6 +59,14 @@ public class AutorouterSettings implements Serializable, Cloneable {
   public Double workUnroutedWeight;
 
   /**
+   * Work units per unit of pour fill work (see {@link #maxWork}): per fill computed and per
+   * clearance shape cut out of it ({@code FillWorkMeter}), by the pass loops and the optimizer.
+   */
+  @SerializedName("work_fill_weight")
+  @Schema(description = "Work units per pour fill computed and per clearance shape cut out of it")
+  public Double workFillWeight;
+
+  /**
    * Number of consecutive passes without score improvement before the autorouter stops. {@code 0}
    * or negative disables stagnation detection and allows routing to proceed up to {@code
    * max_passes}.
