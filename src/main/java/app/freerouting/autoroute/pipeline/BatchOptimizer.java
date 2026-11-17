@@ -265,7 +265,15 @@ public final class BatchOptimizer extends NamedAlgorithm {
     int initialIncomplete = initialStats.connections.incompleteCount;
     int initialViolations = initialStats.clearanceViolations.totalCount;
 
-    String bypassReason = evaluatePreFlightGuards(initialStats);
+    // A spent work budget (autorouter.max_work) ends the job: no optimizer pass starts after it.
+    String bypassReason =
+        RoutingFallbackRunner.workBudgetSpent(job)
+            ? "the job's work budget is spent ("
+                + job.workSpent
+                + " of "
+                + job.routerSettings.autorouter.maxWork
+                + " work units)"
+            : evaluatePreFlightGuards(initialStats);
     if (bypassReason != null) {
       job.logInfo("Skipping optimization stage: " + bypassReason + ".");
       this.lastStopReason = StopReason.SKIPPED;

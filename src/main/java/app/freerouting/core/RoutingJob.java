@@ -140,6 +140,9 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   @Schema(name = "router_settings", description = "Router configuration settings")
   public RouterSettings routerSettings = new RouterSettings();
 
+  /** Work units (autorouter.max_work) spent by this job's pass loops so far. */
+  public transient long workSpent = 0;
+
   @SerializedName("drc_settings")
   @Schema(name = "drc_settings", description = "DRC configuration settings")
   public DesignRulesCheckerSettings drcSettings = new DesignRulesCheckerSettings();
