@@ -495,6 +495,9 @@ public final class BatchAutorouter extends NamedAlgorithm {
       ++currentPassNo;
     }
     routerInstance.removeTails(Item.StopConnectionOption.NONE);
+    // The job's work (autorouter.max_work) counts the item's search steps; the optimizer charges a
+    // candidate's to the routing job when it uses the candidate's result.
+    job.workSpent += routerInstance.searchStepsUsed();
     if (!stillUnroutedItems) {
       --currentPassNo;
     }

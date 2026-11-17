@@ -135,7 +135,21 @@ public final class BatchOptimizer extends NamedAlgorithm {
     TIMED_OUT,
     CANCELLED,
     /** A pass ran out of memory; the best accepted board was kept. */
-    ERROR
+    ERROR,
+    /**
+     * The job's work budget (autorouter.max_work) was spent: no further pass started, or the pass
+     * stopped taking candidates and committed what its candidates so far found.
+     */
+    WORK_BUDGET
+  }
+
+  /**
+   * The work units (autorouter.max_work) an optimizer pass costs besides its candidates' search
+   * steps: autorouter.work_pass_weight x the board's pins, as for a routing pass.
+   */
+  static long passWork(RoutingJob job, RoutingBoard board) {
+    Double weight = job.routerSettings.autorouter.workPassWeight;
+    return weight == null || !(weight > 0) ? 0 : Math.round(weight * board.getPins().size());
   }
 
   /** Returns true if timed out. */
@@ -376,7 +390,22 @@ public final class BatchOptimizer extends NamedAlgorithm {
         job.logInfo("Optimizer stage timed out before starting pass #" + (currentPass + 1));
         break;
       }
+      // autorouter.max_work is the whole job's budget: a pass starts only while some of it is left.
+      if (RoutingFallbackRunner.workBudgetSpent(job)) {
+        this.lastStopReason = StopReason.WORK_BUDGET;
+        job.logInfo(
+            String.format(
+                Locale.US,
+                "Stopping the optimizer before pass #%d: the job's work budget is spent (%d of %d"
+                    + " work units).",
+                currentPass + 1,
+                job.workSpent,
+                job.routerSettings.autorouter.maxWork));
+        break;
+      }
       ++currentPass;
+      // The pass starts: its per-pass work term counts, as a routing pass's does.
+      job.workSpent += passWork(job, this.board);
 
       float scoreBeforePass = board.getStatistics().getOptimizerRank(job.routerSettings);
 
@@ -406,6 +435,12 @@ public final class BatchOptimizer extends NamedAlgorithm {
         break;
       }
       peakHeapMb = Math.max(peakHeapMb, sampleHeapUsageMb());
+      job.logInfo(
+          String.format(
+              Locale.US,
+              "Optimizer work after pass #%d: %d work units so far in the job.",
+              currentPass,
+              job.workSpent));
 
       if (this.isTimedOut) {
         this.lastStopReason = StopReason.TIMED_OUT;
@@ -860,6 +895,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     int chunkSize = Math.max(threadPoolSize * 4, 8);
     boolean stoppedOrTimedOut = false;
     boolean earlyStopDueToFailures = false;
+    boolean workBudgetStop = false;
     int consecutiveFailures = 0;
     int maxConsecutiveFailures =
         passNo == 1
@@ -918,6 +954,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
             CandidateResult res = futureByIndex.remove(k).get();
             this.totalItemsOptimized++;
             if (res != null) {
+              // Only the candidates the pass uses count: they are the same on any machine, unlike
+              // those still running ahead when the pass stops.
+              job.workSpent += res.work;
               this.workerCpuNanos.addAndGet(res.cpuUsedNanos);
               this.workerAllocBytes.addAndGet(res.allocUsedBytes);
               this.resultMap.put(res.result.itemId(), res.result);
@@ -947,6 +986,22 @@ public final class BatchOptimizer extends NamedAlgorithm {
                 }
               }
             }
+            // The job's work budget (autorouter.max_work) is spent: the pass takes no further
+            // candidate and commits what the candidates so far found, as after an early stop.
+            if (RoutingFallbackRunner.workBudgetSpent(job)) {
+              job.logInfo(
+                  String.format(
+                      Locale.US,
+                      "Stopping optimization pass #%d after %d of %d candidates: the job's work"
+                          + " budget is spent (%d of %d work units).",
+                      passNo,
+                      k + 1,
+                      candidateItemIds.size(),
+                      job.workSpent,
+                      job.routerSettings.autorouter.maxWork));
+              workBudgetStop = true;
+              break;
+            }
           } catch (InterruptedException e) {
             stoppedOrTimedOut = true;
             Thread.currentThread().interrupt();
@@ -959,7 +1014,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
           }
         }
 
-        if (stoppedOrTimedOut || earlyStopDueToFailures) {
+        if (stoppedOrTimedOut || earlyStopDueToFailures || workBudgetStop) {
           break;
         }
       }
@@ -1066,6 +1121,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     int committed = 0;
     for (RankedCandidate candidate : improvedResults) {
       if (committed + 1 >= maxCommits
+          || RoutingFallbackRunner.workBudgetSpent(job)
           || (this.thread != null && this.thread.isStopRequested())
           || (this.deadlineMs != null && System.currentTimeMillis() >= this.deadlineMs)) {
         break;
@@ -1518,6 +1574,9 @@ public final class BatchOptimizer extends NamedAlgorithm {
     final long cpuUsedNanos;
     final long allocUsedBytes;
 
+    /** The candidate's work units (autorouter.max_work): its search steps. */
+    final long work;
+
     CandidateResult(
         ItemRouteResult result,
         RoutingBoard board,
@@ -1525,7 +1584,8 @@ public final class BatchOptimizer extends NamedAlgorithm {
         double scoreGain,
         FloatPoint itemPosition,
         long cpuUsedNanos,
-        long allocUsedBytes) {
+        long allocUsedBytes,
+        long work) {
       this.result = result;
       this.board = board;
       this.changes = changes;
@@ -1533,6 +1593,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       this.itemPosition = itemPosition;
       this.cpuUsedNanos = cpuUsedNanos;
       this.allocUsedBytes = allocUsedBytes;
+      this.work = work;
     }
 
     /** True if this candidate is a better pick than the other under the commit selection. */
@@ -1639,7 +1700,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
     public CandidateResult call() {
       if ((thread != null && thread.isStopRequested())
           || (deadlineMs != null && System.currentTimeMillis() >= deadlineMs)) {
-        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0);
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0);
       }
 
       long cpuStart = -1;
@@ -1655,7 +1716,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
       RoutingBoard workerBoard = image == null ? null : image.copy();
       Item item = workerBoard == null ? null : workerBoard.getItem(itemId);
       if (item == null) {
-        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0);
+        return new CandidateResult(new ItemRouteResult(itemId), null, null, 0, null, 0, 0, 0);
       }
       workerBoard.generateSnapshot();
 
@@ -1680,6 +1741,7 @@ public final class BatchOptimizer extends NamedAlgorithm {
               thread,
               deadlineMs,
               baselineMetrics);
+      long work = candidateJob.workSpent;
 
       long cpuUsed = 0;
       long allocUsed = 0;
@@ -1714,14 +1776,14 @@ public final class BatchOptimizer extends NamedAlgorithm {
         result.updateImproved(!changes.addsClearanceViolation(workerBoard, startViolations));
       }
       if (!result.improved()) {
-        return new CandidateResult(result, null, null, 0, position, cpuUsed, allocUsed);
+        return new CandidateResult(result, null, null, 0, position, cpuUsed, allocUsed, work);
       }
       if (!workerBoard.popSnapshot()) {
         FRLogger.warn("BatchOptimizer: failed to remove the candidate-board snapshot");
       }
       workerBoard.clearTransientAutorouteState();
       return new CandidateResult(
-          result, workerBoard, changes, scoreGain, position, cpuUsed, allocUsed);
+          result, workerBoard, changes, scoreGain, position, cpuUsed, allocUsed, work);
     }
   }
 

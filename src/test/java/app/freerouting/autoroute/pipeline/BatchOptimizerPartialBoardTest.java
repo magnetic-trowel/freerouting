@@ -2,6 +2,8 @@ package app.freerouting.autoroute.pipeline;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import app.freerouting.board.facade.RoutingBoard;
 import app.freerouting.board.model.items.Trace;
@@ -80,10 +82,73 @@ class BatchOptimizerPartialBoardTest {
 
     // budget left: the optimizer runs as without one
     RoutingJob left = jobFor(loadBoard());
-    left.routerSettings.autorouter.maxWork = 100L;
+    left.routerSettings.autorouter.maxWork = 1_000_000_000L;
     left.workSpent = 99L;
     new BatchOptimizer(left).runBatchLoop();
     assertEquals(44.0f, left.board.getStatistics().traces.totalLengthMm, 0.5f);
+  }
+
+  /**
+   * The optimizer's search steps count towards the job's work, the same in every run, and a work
+   * budget that is never reached changes nothing: the same board and the same work as without it.
+   */
+  @Test
+  void optimizerSearchStepsCountTowardsTheJobsWork() {
+    RoutingJob free = jobFor(loadBoard());
+    new BatchOptimizer(free).runBatchLoop();
+    assertTrue(free.workSpent > 0, "the candidates' search steps must count");
+
+    RoutingJob again = jobFor(loadBoard());
+    new BatchOptimizer(again).runBatchLoop();
+    assertEquals(free.workSpent, again.workSpent, "the same run must count the same work");
+
+    RoutingJob unspent = jobFor(loadBoard());
+    unspent.routerSettings.autorouter.maxWork = Long.MAX_VALUE;
+    BatchOptimizer optimizer = new BatchOptimizer(unspent);
+    optimizer.runBatchLoop();
+    assertEquals(free.workSpent, unspent.workSpent);
+    assertEquals(
+        free.board.getStatistics().traces.totalLengthMm,
+        unspent.board.getStatistics().traces.totalLengthMm,
+        0.0f);
+    assertNotEquals(BatchOptimizer.StopReason.WORK_BUDGET, optimizer.lastStopReason);
+  }
+
+  /** Each optimizer pass started also counts autorouter.work_pass_weight x the board's pins. */
+  @Test
+  void optimizerPassesCountTheirPassWeight() {
+    RoutingJob free = jobFor(loadBoard());
+    BatchOptimizer plain = new BatchOptimizer(free);
+    plain.runBatchLoop();
+
+    RoutingJob weighted = jobFor(loadBoard());
+    weighted.routerSettings.autorouter.workPassWeight = 1000.0;
+    BatchOptimizer optimizer = new BatchOptimizer(weighted);
+    optimizer.runBatchLoop();
+    int pins = weighted.board.getPins().size();
+    int passes = weighted.resultPhaseMetrics.optimizer.passesCompleted;
+    assertTrue(passes > 0);
+    assertEquals(free.workSpent + passes * 1000L * pins, weighted.workSpent);
+  }
+
+  /**
+   * A budget spent during a pass stops it after the candidate that spent it: the pass commits what
+   * it found, and no further pass starts (stop reason work_budget).
+   */
+  @Test
+  void aWorkBudgetSpentInAPassStopsTheOptimizer() {
+    RoutingJob job = jobFor(loadBoard());
+    job.routerSettings.autorouter.maxWork = 1L;
+    BatchOptimizer optimizer = new BatchOptimizer(job);
+    optimizer.runBatchLoop();
+
+    assertEquals(BatchOptimizer.StopReason.WORK_BUDGET, optimizer.lastStopReason);
+    assertEquals(1, job.resultPhaseMetrics.optimizer.passesCompleted, "passes started");
+    assertTrue(job.workSpent >= 1L);
+    RoutingJob free = jobFor(loadBoard());
+    new BatchOptimizer(free).runBatchLoop();
+    assertTrue(job.workSpent < free.workSpent, "the stopped run must do less work");
+    assertEquals(1, job.board.getStatistics().connections.incompleteCount);
   }
 
   /**
