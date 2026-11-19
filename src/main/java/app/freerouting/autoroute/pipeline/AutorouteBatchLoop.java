@@ -350,7 +350,7 @@ final class AutorouteBatchLoop {
       // }
       // alreadyRoutedBoardHashes.add(currentBoardHash);
 
-      Long maxWork = router.settings.autorouter.maxWork;
+      final Long maxWork = router.settings.autorouter.maxWork;
       long workDone =
           workBase
               + (router.searchSteps.steps() - stepsStart)
@@ -410,7 +410,21 @@ final class AutorouteBatchLoop {
               + currentBoardHash
               + "'");
 
+      // the same count, checked by the pass before each item (the per-pass terms of this pass are
+      // already in passWork)
+      final double passWorkNow = passWork;
+      router.workBudgetSpent =
+          (maxWork != null && maxWork > 0)
+              ? () ->
+                  workBase
+                          + (router.searchSteps.steps() - stepsStart)
+                          + (long) passWorkNow
+                          + fillWork(fillWeight, FillWorkMeter.count() - fillStart)
+                      >= maxWork
+              : null;
       continueAutorouting = autoroutePass(currentPass);
+      router.workBudgetSpent = null;
+      final boolean stoppedByWork = router.passStoppedByWork;
 
       if (router.lastPassFailure != null) {
         // The pass stopped part way, possibly inside an insertion: continue from the board it
@@ -443,6 +457,20 @@ final class AutorouteBatchLoop {
               passSteps,
               job.workSpent,
               passFill));
+      if (stoppedByWork) {
+        // the pass stopped part way on the work budget: the loop ends here, and the best board
+        // seen (below) is the result
+        job.logInfo(
+            "Stopping the auto-router in pass #"
+                + currentPass
+                + ": its work budget is spent ("
+                + job.workSpent
+                + " of "
+                + maxWork
+                + " work units).");
+        stopFor(BatchAutorouter.StopReason.WORK_BUDGET);
+        break;
+      }
 
       BoardStatistics boardStatisticsAfter = router.board.getStatistics();
       float boardScoreAfter = boardStatisticsAfter.getRouterScore(job.routerSettings);

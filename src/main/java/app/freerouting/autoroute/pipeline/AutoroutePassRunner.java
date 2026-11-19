@@ -131,8 +131,21 @@ final class AutoroutePassRunner {
       int routed = 0;
       int skipped = 0;
       Set<Integer> keptAwayNetsAttemptedInPass = new TreeSet<>();
+      router.passStoppedByWork = false;
       for (Item currentItem : autorouteItemList) {
         if (router.thread.isStopAutoRouterRequested()) {
+          break;
+        }
+        // The job's work budget ends the pass between items, not only before the next pass: one
+        // pass on a large board can take many times the whole budget.
+        if (router.workBudgetSpent != null && router.workBudgetSpent.getAsBoolean()) {
+          router.passStoppedByWork = true;
+          router.job.logInfo(
+              "Pass #"
+                  + passNo
+                  + ": the job's work budget is spent; the pass stops with "
+                  + itemsToGoCount
+                  + " item(s) not tried.");
           break;
         }
 

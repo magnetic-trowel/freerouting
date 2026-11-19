@@ -248,6 +248,16 @@ public final class BatchAutorouter extends NamedAlgorithm {
    */
   float stagnationBaselineScore = Float.NEGATIVE_INFINITY;
 
+  /**
+   * The job's work budget (autorouter.max_work) inside a pass: the pass loop sets it before each
+   * pass to tell whether the budget is spent counting the pass's work so far, and the pass checks it
+   * before each item. Null: no budget, and a pass runs to its end.
+   */
+  java.util.function.BooleanSupplier workBudgetSpent;
+
+  /** Whether the last pass stopped part way because {@link #workBudgetSpent} said so. */
+  boolean passStoppedByWork;
+
   /** Sets {@link #searchStepLimit}; 0 or less means no limit. */
   public void setSearchStepLimit(long limit) {
     this.searchStepLimit = Math.max(0, limit);
